@@ -189,6 +189,53 @@ def test_post_matches_filters_respects_all_filters() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    ("include_keywords", "exclude_keywords", "text", "expected"),
+    [
+        ((), (), "何でも", True),
+        (("懸賞",), (), "懸賞に応募しました", True),
+        (("懸賞", "キャンペーン"), (), "ｷｬﾝﾍﾟｰﾝ中", True),
+        (("懸賞",), (), "日常の話", False),
+        (("懸賞",), (), "", False),
+        ((), ("大事",), "これは大事なポスト", False),
+        ((), ("大事",), "消してよいポスト", True),
+        ((), ("大事",), "", True),
+        (("懸賞",), ("当選",), "懸賞に当選しました", False),
+        (("Giveaway",), (), "GIVEAWAY time", True),
+    ],
+)
+def test_post_matches_filters_applies_keywords(
+    include_keywords: tuple[str, ...],
+    exclude_keywords: tuple[str, ...],
+    text: str,
+    expected: bool,
+) -> None:
+    core = XDeleterCore()
+    request = build_request(include_keywords=include_keywords, exclude_keywords=exclude_keywords)
+
+    assert (
+        core._post_matches_filters(
+            request=request,
+            has_media=False,
+            is_reply=False,
+            is_repost=False,
+            likes_count=0,
+            replies_count=0,
+            post_date=date(2026, 4, 15),
+            article_index=1,
+            text_content=text,
+        )
+        is expected
+    )
+
+
+def test_keywords_do_not_change_search_query() -> None:
+    core = XDeleterCore()
+    request = build_request(include_keywords=("懸賞",), exclude_keywords=("大事",))
+
+    assert core._build_search_query("user", request) == "from:user"
+
+
 def test_build_collection_url_uses_profile_path_for_profile_mode() -> None:
     core = XDeleterCore()
     request = build_request(search_mode="profile")

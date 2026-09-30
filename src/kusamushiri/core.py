@@ -20,7 +20,13 @@ from kusamushiri.browser import (
     find_first_visible_locator,
 )
 from kusamushiri.logger import logger
-from kusamushiri.models import CollectRequest, PostActionResult, PostActionTarget, PostRecord
+from kusamushiri.models import (
+    CollectRequest,
+    PostActionResult,
+    PostActionTarget,
+    PostRecord,
+    text_contains_any_keyword,
+)
 from kusamushiri.parsing import (
     TEXT_PREVIEW_LENGTH,
     USERNAME_PATTERN,
@@ -357,6 +363,7 @@ class XDeleterCore:
         replies_count: int,
         post_date: date | None,
         article_index: int,
+        text_content: str = "",
     ) -> bool:
         if request.media_filter == "with_media" and not has_media:
             logger.debug(
@@ -420,6 +427,12 @@ class XDeleterCore:
                 request.since_date.isoformat() if request.since_date is not None else "none",
                 request.until_date.isoformat() if request.until_date is not None else "none",
             )
+            return False
+        if request.include_keywords and not text_contains_any_keyword(text_content, request.include_keywords):
+            logger.debug("Article %s: Skipped (no include keyword matched)", article_index)
+            return False
+        if request.exclude_keywords and text_contains_any_keyword(text_content, request.exclude_keywords):
+            logger.debug("Article %s: Skipped (exclude keyword matched)", article_index)
             return False
         return True
 
@@ -541,6 +554,7 @@ class XDeleterCore:
             replies_count=replies_count,
             post_date=post_date,
             article_index=article_index,
+            text_content=text_content,
         ):
             return None
 
