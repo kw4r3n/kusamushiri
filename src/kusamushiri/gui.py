@@ -1,4 +1,5 @@
 from datetime import date, datetime
+from pathlib import Path
 
 from PySide6.QtCore import QDate, Qt, QTimer, Signal
 from PySide6.QtGui import QCloseEvent, QKeySequence, QShortcut
@@ -8,6 +9,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDateEdit,
     QDoubleSpinBox,
+    QFileDialog,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
@@ -29,6 +31,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from kusamushiri.follows import ExportFollowingRequest
 from kusamushiri.gui_table import URL_COLUMN_WIDTH, PostTableManager
 from kusamushiri.logger import logger
 from kusamushiri.models import (
@@ -39,6 +42,7 @@ from kusamushiri.models import (
     PostActionTarget,
     PostRecord,
 )
+from kusamushiri.parsing import USERNAME_PATTERN
 from kusamushiri.paths import DEFAULT_ACCOUNT_NAME, get_account_profile_dir, normalize_account_name
 from kusamushiri.settings import AccountSettings, AccountSettingsManager
 
@@ -157,6 +161,7 @@ class XDeleterWindow(QMainWindow):
     check_login_requested = Signal()
     collect_requested = Signal(object)
     delete_requested = Signal(object)
+    export_following_requested = Signal(object)
 
     def __init__(self) -> None:
         super().__init__()
@@ -334,6 +339,12 @@ class XDeleterWindow(QMainWindow):
         self.delete_profile_button = QPushButton("プロファイル削除")
         self.delete_profile_button.clicked.connect(self._delete_profile)
         self.login_account_label = QLabel("ログイン未確認")
+        self.export_following_button = QPushButton("フォローリストをエクスポート")
+        self.export_following_button.setObjectName("secondaryButton")
+        self.export_following_button.setToolTip(
+            "X アカウントIDのフォロー一覧を CSV（または JSON）で保存します。"
+        )
+        self.export_following_button.clicked.connect(self._handle_export_following)
 
         layout.addWidget(QLabel("プロファイル選択"), 0, 0, 1, 2)
         layout.addWidget(self.account_combo, 1, 0, 1, 2)
@@ -356,6 +367,7 @@ class XDeleterWindow(QMainWindow):
         layout.addWidget(self.auto_save_interval_input, 8, 1)
         layout.addWidget(self.login_account_label, 9, 0, 1, 2)
         layout.addWidget(self.start_button, 10, 0, 1, 2)
+        layout.addWidget(self.export_following_button, 11, 0, 1, 2)
         layout.setContentsMargins(0, 12, 0, 0)
         layout.setColumnStretch(0, 1)
         layout.setColumnStretch(1, 1)
@@ -592,6 +604,7 @@ class XDeleterWindow(QMainWindow):
         )
         self.start_button.setEnabled(enabled)
         self.collect_button.setEnabled(enabled and self._login_verified)
+        self.export_following_button.setEnabled(enabled and self._login_verified)
         self.delete_button.setEnabled(enabled and self._login_verified and self.table.rowCount() > 0)
         self.delete_interval_input.setEnabled(enabled)
         self.table.setEnabled(enabled)
@@ -1053,6 +1066,53 @@ class XDeleterWindow(QMainWindow):
     def on_collection_progress(self, scanned: int, current: int, total: int) -> None:
         self.update_status(f"対象を収集中: {scanned} 件走査済み ({current}/{total})")
         self.show_progress(current, total)
+
+    def _handle_export_following(self) -> None:
+        if self._busy:
+            return
+        self._commit_typed_account(load_settings=False)
+        if not self._login_verified:
+            QMessageBox.information(self, "ログイン確認が必要", "先にブラウザを起動してログインを確認してください。")
+            return
+
+        username = self._normalized_username_input()
+        if not USERNAME_PATTERN.fullmatch(username):
+            QMessageBox.warning(self, "入力エラー", "X アカウントIDを入力してください（英数字とアンダースコア、15文字まで）。")
+            return
+        default_path = Path.home() / f"following-{username}-{date.today():%Y%m%d}.csv"
+        path_text, _selected_filter = QFileDialog.getSaveFileName(
+            self,
+            "フォローリストの保存先",
+            str(default_path),
+            "CSV (*.csv);;JSON (*.json)",
+        )
+        if not path_text:
+            return
+        output_path = Path(path_text)
+        if output_path.suffix.lower() not in {".csv", ".json"}:
+            output_path = output_path.with_name(f"{output_path.name}.csv")
+
+        request = ExportFollowingRequest(username=username, output_path=output_path)
+        try:
+            request.validate()
+        except ValueError as error:
+            QMessageBox.warning(self, "入力エラー", str(error))
+            return
+
+        self.set_busy(True)
+        self.show_progress(0, 0)
+        self.update_status(f"@{username} のフォローリストを取得しています...")
+        self.export_following_requested.emit(request)
+
+    def on_following_progress(self, count: int) -> None:
+        self.update_status(f"フォローリストを取得中: {count} 件")
+
+    def on_following_export_finished(self, path: str, count: int) -> None:
+        self.set_busy(False)
+        if not path:
+            return
+        self.update_status(f"フォローリスト {count} 件を保存しました: {path}")
+        QMessageBox.information(self, "エクスポート完了", f"{count} 件のフォローを保存しました。\n{path}")
 
     def _clear_posts(self) -> None:
         self.table_manager.clear()

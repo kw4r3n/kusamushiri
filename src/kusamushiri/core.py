@@ -19,6 +19,7 @@ from kusamushiri.browser import (
     BrowserManager,
     find_first_visible_locator,
 )
+from kusamushiri.follows import FollowCollectionResult, collect_following
 from kusamushiri.logger import logger
 from kusamushiri.models import CollectRequest, PostActionResult, PostActionTarget, PostRecord
 from kusamushiri.parsing import (
@@ -711,6 +712,14 @@ class XDeleterCore:
         else:
             logger.info("Finished collection. Total posts gathered: %s", len(collected_posts))
         return collected_posts
+
+    def collect_following(
+        self,
+        username: str,
+        on_progress: Callable[[int], None] | None = None,
+    ) -> FollowCollectionResult:
+        page = self._require_page()
+        return collect_following(page, self._normalize_username(username), self._cancel_event, on_progress)
 
     def execute_post_action(self, target: PostActionTarget) -> PostActionResult:
         page = self._browser._require_page()

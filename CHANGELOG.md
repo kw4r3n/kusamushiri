@@ -5,6 +5,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- Export an account's following list to CSV (UTF-8 with BOM for Excel) or JSON.
+
 ## [0.3.0] - 2026-10-01
 
 First public release.

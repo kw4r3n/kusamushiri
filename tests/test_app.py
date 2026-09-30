@@ -7,6 +7,7 @@ from collections.abc import Callable
 import pytest
 
 from kusamushiri.app import DeletePostsCommand, XDeleterWorker
+from kusamushiri.follows import ExportFollowingRequest, FollowCollectionResult, FollowRecord
 from kusamushiri.models import CollectRequest, ExecuteActionsRequest, PostActionResult, PostActionTarget, PostRecord
 
 
@@ -41,6 +42,7 @@ class FakeCore:
         self.collection_limit_reached = False
         self.executed_targets: list[PostActionTarget] = []
         self.fail_on: str | None = None
+        self.cancel_hook: Callable[[], None] = lambda: None
 
     def request_cancel(self) -> None:
         self.cancel_requested = True
@@ -77,6 +79,15 @@ class FakeCore:
         if on_progress is not None:
             on_progress(1, 1, 100)
         return self.collected_posts
+
+    def collect_following(self, username: str, on_progress=None) -> FollowCollectionResult:
+        self._raise_if_configured("collect_following")
+        self.calls.append(f"collect_following:{username}")
+        if on_progress is not None:
+            on_progress(1)
+        if self.fail_on == "cancel_during_following":
+            self.cancel_hook()
+        return FollowCollectionResult(records=[FollowRecord("alice", "Alice", "https://x.com/alice", True)])
 
     def execute_post_action(self, target: PostActionTarget) -> PostActionResult:
         self._raise_if_configured("execute_post_action")
@@ -167,6 +178,40 @@ def test_worker_dispatches_delete_posts_when_enqueued(qtbot: object) -> None:
     wait_until(qtbot, lambda: completed_events == [[core.action_result]])
     assert core.calls == ["execute_post_action:https://x.com/tester/status/1"]
     assert core.executed_targets == [PostActionTarget(url="https://x.com/tester/status/1", is_repost=False)]
+    worker.shutdown()
+
+
+def test_worker_exports_following_to_file(qtbot: object, tmp_path) -> None:
+    core = FakeCore()
+    worker = XDeleterWorker(core=core)
+    finished: list[tuple[str, int]] = []
+    progress: list[int] = []
+    worker.events.following_progress.connect(progress.append)
+    worker.events.following_export_finished.connect(lambda path, count: finished.append((path, count)))
+    output_path = tmp_path / "following.csv"
+
+    worker.enqueue_export_following(ExportFollowingRequest(username="tester", output_path=output_path))
+
+    wait_until(qtbot, lambda: finished == [(str(output_path), 1)])
+    assert core.calls == ["collect_following:tester"]
+    assert progress == [1]
+    assert "alice" in output_path.read_text(encoding="utf-8-sig")
+    worker.shutdown()
+
+
+def test_worker_does_not_write_following_file_when_cancelled(qtbot: object, tmp_path) -> None:
+    core = FakeCore()
+    worker = XDeleterWorker(core=core)
+    core.fail_on = "cancel_during_following"
+    core.cancel_hook = worker.cancel_current_operation
+    finished: list[tuple[str, int]] = []
+    worker.events.following_export_finished.connect(lambda path, count: finished.append((path, count)))
+    output_path = tmp_path / "following.csv"
+
+    worker.enqueue_export_following(ExportFollowingRequest(username="tester", output_path=output_path))
+
+    wait_until(qtbot, lambda: finished == [("", 1)])
+    assert not output_path.exists()
     worker.shutdown()
 
 

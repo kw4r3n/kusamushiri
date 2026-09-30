@@ -8,6 +8,7 @@ from PySide6.QtGui import QColor, QPalette
 from PySide6.QtWidgets import QApplication
 
 from kusamushiri.core import XDeleterCore
+from kusamushiri.follows import ExportFollowingRequest, write_follow_list
 from kusamushiri.gui import XDeleterWindow
 from kusamushiri.logger import logger
 from kusamushiri.models import CollectRequest, ExecuteActionsRequest, PostActionResult
@@ -69,7 +70,20 @@ class DeletePostsCommand:
     action: str = "delete_posts"
 
 
-WorkerCommand = StartBrowserCommand | StopBrowserCommand | CheckLoginCommand | CollectPostsCommand | DeletePostsCommand
+@dataclass(frozen=True, slots=True)
+class ExportFollowingCommand:
+    request: ExportFollowingRequest
+    action: str = "export_following"
+
+
+WorkerCommand = (
+    StartBrowserCommand
+    | StopBrowserCommand
+    | CheckLoginCommand
+    | CollectPostsCommand
+    | DeletePostsCommand
+    | ExportFollowingCommand
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,6 +101,8 @@ class XDeleterWorkerEvents(QObject):
     collection_progress = Signal(int, int, int)
     delete_progress = Signal(str, str, int, int)
     delete_completed = Signal(list)
+    following_progress = Signal(int)
+    following_export_finished = Signal(str, int)  # empty path: nothing was written
     error_occurred = Signal(str)
 
 
@@ -133,6 +149,9 @@ class XDeleterWorker:
 
     def enqueue_delete_posts(self, request: ExecuteActionsRequest) -> None:
         self._enqueue(DeletePostsCommand(request=request))
+
+    def enqueue_export_following(self, request: ExportFollowingRequest) -> None:
+        self._enqueue(ExportFollowingCommand(request=request))
 
     def _discard_pending_commands(self) -> None:
         while True:
@@ -261,6 +280,26 @@ class XDeleterWorker:
                         self.events.status_changed.emit("削除/解除処理を中断しました。")
                     continue
 
+                if isinstance(command, ExportFollowingCommand):
+                    command.request.validate()
+                    result = self._require_running_core(core).collect_following(
+                        command.request.username,
+                        on_progress=self.events.following_progress.emit,
+                    )
+                    if self._cancel_event.is_set():
+                        self.events.following_export_finished.emit("", len(result.records))
+                        self.events.status_changed.emit("フォローリストの取得を中断しました。ファイルは保存していません。")
+                        continue
+                    write_follow_list(command.request.output_path, result.records)
+                    self.events.following_export_finished.emit(
+                        str(command.request.output_path), len(result.records)
+                    )
+                    if result.limit_reached:
+                        self.events.status_changed.emit(
+                            "取得の安全上限に到達したため、途中までのフォローリストを保存しました。"
+                        )
+                    continue
+
                 logger.warning("Unknown worker command received: %s", command)
             except Exception as error:
                 self._handle_error(getattr(command, "action", "worker command"), error)
@@ -298,6 +337,7 @@ def main() -> int:
     window.check_login_requested.connect(worker.enqueue_check_login)
     window.collect_requested.connect(worker.enqueue_collect_posts)
     window.delete_requested.connect(worker.enqueue_delete_posts)
+    window.export_following_requested.connect(worker.enqueue_export_following)
 
     worker.events.status_changed.connect(window.update_status)
     worker.events.browser_ready.connect(window.show_login_wait_dialog)
@@ -307,6 +347,8 @@ def main() -> int:
     worker.events.collection_progress.connect(window.on_collection_progress)
     worker.events.delete_progress.connect(window.on_delete_progress)
     worker.events.delete_completed.connect(window.on_delete_done)
+    worker.events.following_progress.connect(window.on_following_progress)
+    worker.events.following_export_finished.connect(window.on_following_export_finished)
     worker.events.error_occurred.connect(window.show_error)
 
     window.show()
