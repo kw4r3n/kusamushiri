@@ -813,3 +813,28 @@ def test_export_following_cancelled_dialog_emits_nothing(window, qtbot, monkeypa
 
     assert emitted == []
     assert window.export_following_button.isEnabled()
+
+
+def test_collect_request_carries_keywords_and_they_persist(window: XDeleterWindow, qtbot) -> None:
+    emitted_requests: list[object] = []
+    window._commit_typed_account(load_settings=False)
+    window.username_input.setText("test_user")
+    window.on_login_checked(True, "test_user")
+    window.collect_requested.connect(emitted_requests.append)
+    window.include_keywords_input.setText("懸賞、キャンペーン")
+    window.exclude_keywords_input.setText(" 大事 ")
+
+    window._handle_collect()
+
+    assert len(emitted_requests) == 1
+    request = emitted_requests[0]
+    assert request.include_keywords == ("懸賞", "キャンペーン")
+    assert request.exclude_keywords == ("大事",)
+    assert "含む: 懸賞, キャンペーン" in window.filter_summary.text()
+    assert "除外: 大事" in window.filter_summary.text()
+
+    window.include_keywords_input.clear()
+    window.exclude_keywords_input.clear()
+    window._load_account_settings(window._current_account)
+    assert window.include_keywords_input.text() == "懸賞、キャンペーン"
+    assert window.exclude_keywords_input.text() == "大事"

@@ -41,6 +41,7 @@ from kusamushiri.models import (
     PostActionResult,
     PostActionTarget,
     PostRecord,
+    parse_keywords,
 )
 from kusamushiri.parsing import USERNAME_PATTERN
 from kusamushiri.paths import DEFAULT_ACCOUNT_NAME, get_account_profile_dir, normalize_account_name
@@ -415,6 +416,18 @@ class XDeleterWindow(QMainWindow):
         self.until_date_input.setEnabled(False)
         self.until_date_input.setToolTip("指定した日付を含む、それ以前のポストを対象にします。")
 
+        self.include_keywords_input = QLineEdit()
+        self.include_keywords_input.setPlaceholderText("例: 懸賞, キャンペーン")
+        self.include_keywords_input.setToolTip(
+            "いずれかのキーワードを本文に含むポストだけを対象にします。カンマ区切りで複数指定できます。"
+        )
+
+        self.exclude_keywords_input = QLineEdit()
+        self.exclude_keywords_input.setPlaceholderText("例: 固定, 大事")
+        self.exclude_keywords_input.setToolTip(
+            "いずれかのキーワードを本文に含むポストを対象から外します。カンマ区切りで複数指定できます。"
+        )
+
         self.collect_button = QPushButton("ポストを収集＆プレビュー")
         self.collect_button.clicked.connect(self._handle_collect)
 
@@ -431,7 +444,11 @@ class XDeleterWindow(QMainWindow):
         layout.addWidget(self.since_date_input, 7, 1)
         layout.addWidget(self.until_date_checkbox, 8, 0)
         layout.addWidget(self.until_date_input, 8, 1)
-        layout.addWidget(self.collect_button, 9, 0, 1, 2)
+        layout.addWidget(QLabel("含むキーワード"), 9, 0, 1, 2)
+        layout.addWidget(self.include_keywords_input, 10, 0, 1, 2)
+        layout.addWidget(QLabel("除外キーワード"), 11, 0, 1, 2)
+        layout.addWidget(self.exclude_keywords_input, 12, 0, 1, 2)
+        layout.addWidget(self.collect_button, 13, 0, 1, 2)
         layout.setContentsMargins(0, 12, 0, 0)
         layout.setColumnStretch(0, 1)
         layout.setColumnStretch(1, 1)
@@ -662,6 +679,10 @@ class XDeleterWindow(QMainWindow):
             parts.append(f"{request.since_date}〜")
         if request.until_date:
             parts.append(f"〜{request.until_date}")
+        if request.include_keywords:
+            parts.append(f"含む: {', '.join(request.include_keywords)}")
+        if request.exclude_keywords:
+            parts.append(f"除外: {', '.join(request.exclude_keywords)}")
         self.filter_summary.setText(" | ".join(parts))
         self.filter_summary.show()
 
@@ -874,6 +895,8 @@ class XDeleterWindow(QMainWindow):
         self.min_replies_input.setValue(settings.min_replies)
         self.delete_interval_input.setValue(settings.action_interval_seconds)
         self.auto_save_interval_input.setValue(settings.auto_save_interval_seconds)
+        self.include_keywords_input.setText(settings.include_keywords)
+        self.exclude_keywords_input.setText(settings.exclude_keywords)
 
         today = QDate.currentDate().toString(Qt.DateFormat.ISODate)
         since_date = QDate.fromString(
@@ -916,6 +939,8 @@ class XDeleterWindow(QMainWindow):
                 until_date=self.until_date_input.date().toString(Qt.DateFormat.ISODate),
                 since_date_enabled=self.since_date_checkbox.isChecked(),
                 until_date_enabled=self.until_date_checkbox.isChecked(),
+                include_keywords=self.include_keywords_input.text().strip(),
+                exclude_keywords=self.exclude_keywords_input.text().strip(),
             ),
         )
 
@@ -1028,6 +1053,8 @@ class XDeleterWindow(QMainWindow):
             post_kind_filter=self.post_kind_combo.currentData(),
             since_date=since_date,
             until_date=until_date,
+            include_keywords=parse_keywords(self.include_keywords_input.text()),
+            exclude_keywords=parse_keywords(self.exclude_keywords_input.text()),
         )
 
         try:

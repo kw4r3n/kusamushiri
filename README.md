@@ -22,7 +22,7 @@ Qt (PySide6) list before anything is deleted**.
 
 ## Features
 
-- Filter by date range, minimum likes/replies, media presence, and replies only
+- Filter by date range, minimum likes/replies, media presence, replies only, and keywords to include or exclude
 - Delete regular posts and undo reposts
 - Preview the collected list and post text; run only the rows you check
 - Adjustable interval between actions, stop at any time, retry only failed items
@@ -62,7 +62,10 @@ With pip: `pip install .`, then run `kusamushiri`.
 
 ## Usage
 
-1. Enter the target account ID and filters.
+1. Enter the target account ID and filters. **含むキーワード** (include) keeps only posts containing
+   any of the keywords; **除外キーワード** (exclude) drops posts containing any of them, which is a
+   way to protect posts you want to keep. Separate keywords with commas; case and full-width/half-width
+   differences are ignored. Only the text visible on the timeline is checked, not text folded behind "Show more".
 2. Click **ブラウザ起動＆ログイン** (Start browser & log in) and sign in to X manually in the opened window.
 3. Click **ポストを収集＆プレビュー** (Collect & preview) to list matching posts.
 4. Check the rows to process and click **選択項目を削除/解除** (Delete/undo selected).

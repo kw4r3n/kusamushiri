@@ -2,7 +2,13 @@ from datetime import date
 
 import pytest
 
-from kusamushiri.models import CollectRequest, ExecuteActionsRequest, PostActionTarget
+from kusamushiri.models import (
+    CollectRequest,
+    ExecuteActionsRequest,
+    PostActionTarget,
+    parse_keywords,
+    text_contains_any_keyword,
+)
 
 
 def build_request(**overrides: object) -> CollectRequest:
@@ -49,3 +55,20 @@ def test_execute_actions_request_rejects_negative_interval() -> None:
 
     with pytest.raises(ValueError, match="削除/解除間隔は0秒以上で指定してください。"):
         request.validate()
+
+
+def test_parse_keywords_splits_on_ascii_and_japanese_commas_and_drops_blanks() -> None:
+    assert parse_keywords(" 懸賞, キャンペーン、応募，,\n懸賞 ") == ("懸賞", "キャンペーン", "応募")
+    assert parse_keywords("   ") == ()
+
+
+def test_text_contains_any_keyword_ignores_case_and_width() -> None:
+    assert text_contains_any_keyword("New ＰＯＳＴ here", ("post",))
+    assert text_contains_any_keyword("ｷｬﾝﾍﾟｰﾝ実施中", ("キャンペーン",))
+    assert not text_contains_any_keyword("日常の話", ("懸賞", "キャンペーン"))
+    assert not text_contains_any_keyword("", ("懸賞",))
+
+
+def test_collect_request_rejects_blank_keyword() -> None:
+    with pytest.raises(ValueError, match="空のキーワードは指定できません。"):
+        build_request(exclude_keywords=(" ",)).validate()

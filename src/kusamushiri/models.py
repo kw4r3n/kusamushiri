@@ -1,11 +1,34 @@
+import re
+import unicodedata
 from dataclasses import dataclass
 from datetime import date
-from typing import Literal
+from typing import Final, Literal
 
 MediaFilter = Literal["all", "with_media", "without_media"]
 SearchMode = Literal["profile", "search"]
 PostKindFilter = Literal["posts", "reposts", "all"]
 DEFAULT_ACTION_INTERVAL_SECONDS = 1.0
+KEYWORD_SEPARATOR_PATTERN: Final = re.compile(r"[,、，\n]")
+
+
+def normalize_keyword_text(text: str) -> str:
+    """全角/半角と大文字/小文字の違いを無視して比較できる形にする。"""
+    return unicodedata.normalize("NFKC", text).casefold()
+
+
+def parse_keywords(text: str) -> tuple[str, ...]:
+    """カンマ区切りのキーワード入力を、空要素と重複を除いたタプルにする。"""
+    keywords: list[str] = []
+    for part in KEYWORD_SEPARATOR_PATTERN.split(text):
+        keyword = part.strip()
+        if keyword and keyword not in keywords:
+            keywords.append(keyword)
+    return tuple(keywords)
+
+
+def text_contains_any_keyword(text: str, keywords: tuple[str, ...]) -> bool:
+    normalized_text = normalize_keyword_text(text)
+    return any(normalize_keyword_text(keyword) in normalized_text for keyword in keywords)
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,6 +83,8 @@ class CollectRequest:
     post_kind_filter: PostKindFilter = "posts"
     since_date: date | None = None
     until_date: date | None = None
+    include_keywords: tuple[str, ...] = ()
+    exclude_keywords: tuple[str, ...] = ()
 
     def validate(self) -> None:
         if not self.username.strip():
@@ -80,3 +105,5 @@ class CollectRequest:
             raise ValueError("終了日は YYYY-MM-DD 形式の日付で指定してください。")
         if self.since_date is not None and self.until_date is not None and self.since_date > self.until_date:
             raise ValueError("開始日は終了日以前で指定してください。")
+        if any(not keyword.strip() for keyword in (*self.include_keywords, *self.exclude_keywords)):
+            raise ValueError("空のキーワードは指定できません。")
