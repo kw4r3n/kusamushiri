@@ -1,0 +1,104 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kusamushiri"
+version = "0.3.0"
+description = "Tidy up your X (Twitter) account: bulk-delete posts and undo reposts with a Qt desktop UI."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "kw4r3n" }]
+requires-python = ">=3.11"
+keywords = ["x", "twitter", "delete", "tweets", "playwright", "pyside6"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: X11 Applications :: Qt",
+    "Intended Audience :: End Users/Desktop",
+    "Natural Language :: Japanese",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Internet",
+]
+dependencies = [
+    "platformdirs>=4.3.8",
+    "playwright>=1.58.0",
+    "PySide6-Essentials>=6.8.1",
+]
+
+[project.urls]
+Homepage = "https://github.com/kw4r3n/kusamushiri"
+Issues = "https://github.com/kw4r3n/kusamushiri/issues"
+Changelog = "https://github.com/kw4r3n/kusamushiri/blob/main/CHANGELOG.md"
+
+[project.gui-scripts]
+kusamushiri = "kusamushiri.app:main"
+
+[dependency-groups]
+dev = [
+    "pyright>=1.1.407",
+    "pytest>=8.3",
+    "pytest-qt>=4.4",
+    "ruff>=0.14.8,<0.15",
+]
+build = ["pyinstaller>=6.10"]
+
+[tool.uv]
+default-groups = ["dev"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+
+[tool.ruff.lint]
+select = [
+    "F",   # pyflakes — errors
+    "E",   # pycodestyle — style
+    "W",   # pycodestyle — warnings
+    "I",   # isort — import ordering
+    "N",   # pep8-naming — naming conventions
+    "UP",  # pyupgrade — modern Python syntax
+    "B",   # flake8-bugbear — bug detection
+    "SIM", # flake8-simplify — simplification
+]
+ignore = [
+    "E501",  # line too long (ruff format handles it)
+    "N802",  # function name should be lowercase (existing patterns)
+    "N803",  # argument name should be lowercase
+    "N806",  # variable in function should be lowercase
+    "N815",  # mixedCase class attribute
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "auto"
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["N802", "N803", "N806", "N815"]  # test naming conventions
+
+[tool.pyright]
+typeCheckingMode = "basic"
+include = ["src"]
+extraPaths = ["src"]
+exclude = ["tests", ".venv"]
+venvPath = "."
+venv = ".venv"
+pythonVersion = "3.11"
+pythonPlatform = "Linux"
+reportMissingTypeStubs = false
+reportUnknownMemberType = false
+reportUnknownVariableType = false
+reportUnknownParameterType = false
+reportUnknownArgumentType = false
+reportGeneralTypeIssues = true
+reportOptionalMemberAccess = true
+reportPrivateUsage = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

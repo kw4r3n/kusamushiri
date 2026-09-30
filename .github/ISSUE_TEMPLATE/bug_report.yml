@@ -1,0 +1,41 @@
+name: Bug report / 不具合報告
+description: Something does not work / 動作しない・おかしい
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ログやスクリーンショットに個人のポスト内容・アカウント情報が含まれていないか確認してください。
+        Please remove personal post content and account details from logs and screenshots.
+  - type: input
+    id: version
+    attributes:
+      label: Version / バージョン
+      placeholder: v0.3.0
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: OS
+      options: [Windows, macOS, Linux]
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: Install method / 導入方法
+      options: [Prebuilt app / ビルド済みアプリ, Source (uv/pip) / ソース]
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened / 何が起きたか
+      description: Steps, expected vs actual / 手順・期待した動作・実際の動作
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Log excerpt / ログ抜粋
+      description: kusamushiri.log (Linux ~/.local/state/kusamushiri/log, Windows %LOCALAPPDATA%\kusamushiri\Logs)
+      render: text

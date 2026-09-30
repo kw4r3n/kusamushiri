@@ -1,0 +1,3 @@
+- Use Conventional Commits.
+- Setup, checks and build commands are in `CONTRIBUTING.md`; run checks with isolated XDG directories.
+- Keep checks within the assignment; report unsupported checks separately from passes.

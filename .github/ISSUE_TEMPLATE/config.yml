@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security issue / 脆弱性の報告
+    url: https://github.com/kw4r3n/kusamushiri/security/advisories/new
+    about: Report privately / 非公開で報告してください
