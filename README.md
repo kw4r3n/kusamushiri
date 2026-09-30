@@ -27,6 +27,7 @@ Qt (PySide6) list before anything is deleted**.
 - Preview the collected list and post text; run only the rows you check
 - Adjustable interval between actions, stop at any time, retry only failed items
 - Multiple accounts via separate browser profiles
+- Export an account's following list to CSV (Excel-ready) or JSON
 
 ## Install
 

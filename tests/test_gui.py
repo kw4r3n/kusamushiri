@@ -778,6 +778,43 @@ def test_compact_desktop_keeps_actions_and_settings_accessible(window, qtbot) ->
     assert viewport.rect().contains(window.collect_button.mapTo(viewport, window.collect_button.rect().center()))
 
 
+def test_export_following_requires_login_and_emits_request(window, qtbot, monkeypatch, tmp_path) -> None:
+    assert not window.export_following_button.isEnabled()
+    window.on_login_checked(True, "alice")
+    assert window.export_following_button.isEnabled()
+
+    emitted: list[object] = []
+    window.export_following_requested.connect(emitted.append)
+    chosen = tmp_path / "list"
+    monkeypatch.setattr(
+        "kusamushiri.gui.QFileDialog.getSaveFileName",
+        lambda *args: (str(chosen), "CSV (*.csv)"),
+    )
+    window.export_following_button.click()
+
+    assert len(emitted) == 1
+    assert emitted[0].username == "alice"
+    assert emitted[0].output_path == tmp_path / "list.csv"
+    assert not window.export_following_button.isEnabled()
+
+    monkeypatch.setattr("kusamushiri.gui.QMessageBox.information", lambda *args: None)
+    window.on_following_export_finished(str(tmp_path / "list.csv"), 3)
+    assert window.export_following_button.isEnabled()
+    assert "3 件" in window.status_label.text()
+
+
+def test_export_following_cancelled_dialog_emits_nothing(window, qtbot, monkeypatch) -> None:
+    window.on_login_checked(True, "alice")
+    emitted: list[object] = []
+    window.export_following_requested.connect(emitted.append)
+    monkeypatch.setattr("kusamushiri.gui.QFileDialog.getSaveFileName", lambda *args: ("", ""))
+
+    window.export_following_button.click()
+
+    assert emitted == []
+    assert window.export_following_button.isEnabled()
+
+
 def test_collect_request_carries_keywords_and_they_persist(window: XDeleterWindow, qtbot) -> None:
     emitted_requests: list[object] = []
     window._commit_typed_account(load_settings=False)
