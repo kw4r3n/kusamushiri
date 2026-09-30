@@ -5,6 +5,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- Include and exclude keyword filters. Posts are matched against their visible text, ignoring
+  case and full-width/half-width differences; keywords are saved per profile.
+
 ## [0.3.0] - 2026-10-01
 
 First public release.

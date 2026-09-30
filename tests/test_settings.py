@@ -36,6 +36,8 @@ def test_save_account_settings_writes_prefixed_values_and_current_account(qsetti
         until_date="2026-02-03",
         since_date_enabled=True,
         until_date_enabled=True,
+        include_keywords="懸賞, キャンペーン",
+        exclude_keywords="大事",
     )
 
     manager.save_account_settings(" @alice/main ", account_settings)
@@ -47,6 +49,8 @@ def test_save_account_settings_writes_prefixed_values_and_current_account(qsetti
     assert qsettings.value("account_alice_main_reply_only", type=bool) is True
     assert qsettings.value("account_alice_main_action_interval_seconds", type=float) == 2.5
     assert qsettings.value("account_alice_main_since_date", type=str) == "2026-01-02"
+    assert qsettings.value("account_alice_main_include_keywords", type=str) == "懸賞, キャンペーン"
+    assert manager.load_account_settings("alice_main") == account_settings
 
 
 def test_load_account_settings_reads_prefixed_values(qsettings: QSettings) -> None:
