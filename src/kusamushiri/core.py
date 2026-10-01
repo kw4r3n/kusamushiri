@@ -20,6 +20,7 @@ from kusamushiri.browser import (
     find_first_visible_locator,
 )
 from kusamushiri.follows import FollowCollectionResult, collect_following
+from kusamushiri.i18n import tr
 from kusamushiri.logger import logger
 from kusamushiri.models import (
     CollectRequest,
@@ -136,7 +137,7 @@ class XDeleterCore:
     def _normalize_username(self, username: str) -> str:
         normalized = username.strip().removeprefix("@")
         if not normalized or not USERNAME_PATTERN.fullmatch(normalized):
-            raise ValueError("ユーザー名は1〜15文字の英数字またはアンダースコアで指定してください。")
+            raise ValueError(tr("ユーザー名は1〜15文字の英数字またはアンダースコアで指定してください。"))
         return normalized
 
     def _get_scroll_height(self, page: Page) -> int:
@@ -222,11 +223,11 @@ class XDeleterCore:
     def _validate_collect_filters(self, request: CollectRequest) -> None:
         request.validate()
         if request.media_filter not in VALID_MEDIA_FILTERS:
-            raise ValueError("media_filter は all / with_media / without_media のいずれかで指定してください。")
+            raise ValueError(tr("media_filter は all / with_media / without_media のいずれかで指定してください。"))
         if request.search_mode not in VALID_SEARCH_MODES:
-            raise ValueError("search_mode は profile / search のいずれかで指定してください。")
+            raise ValueError(tr("search_mode は profile / search のいずれかで指定してください。"))
         if request.post_kind_filter not in VALID_POST_KIND_FILTERS:
-            raise ValueError("post_kind_filter は posts / reposts / all のいずれかで指定してください。")
+            raise ValueError(tr("post_kind_filter は posts / reposts / all のいずれかで指定してください。"))
 
     def _build_collection_url(self, normalized_username: str, request: CollectRequest) -> str:
         if request.search_mode == "search":

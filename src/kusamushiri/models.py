@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Final, Literal
 
+from kusamushiri.i18n import tr
+
 MediaFilter = Literal["all", "with_media", "without_media"]
 SearchMode = Literal["profile", "search"]
 PostKindFilter = Literal["posts", "reposts", "all"]
@@ -66,9 +68,9 @@ class ExecuteActionsRequest:
 
     def validate(self) -> None:
         if not self.targets:
-            raise ValueError("実行対象が選択されていません。")
+            raise ValueError(tr("実行対象が選択されていません。"))
         if self.interval_seconds < 0:
-            raise ValueError("削除/解除間隔は0秒以上で指定してください。")
+            raise ValueError(tr("削除/解除間隔は0秒以上で指定してください。"))
 
 
 @dataclass(slots=True, frozen=True)
@@ -88,22 +90,22 @@ class CollectRequest:
 
     def validate(self) -> None:
         if not self.username.strip():
-            raise ValueError("アカウントIDを入力してください。")
+            raise ValueError(tr("アカウントIDを入力してください。"))
         if self.max_posts < 1:
-            raise ValueError("取得上限件数は1以上で指定してください。")
+            raise ValueError(tr("取得上限件数は1以上で指定してください。"))
         if self.min_likes < 0 or self.min_replies < 0:
-            raise ValueError("最低いいね数と最低返信数は0以上で指定してください。")
+            raise ValueError(tr("最低いいね数と最低返信数は0以上で指定してください。"))
         if self.media_filter not in {"all", "with_media", "without_media"}:
-            raise ValueError("不正なメディア条件が指定されました。")
+            raise ValueError(tr("不正なメディア条件が指定されました。"))
         if self.search_mode not in {"profile", "search"}:
-            raise ValueError("収集モードは profile または search を指定してください。")
+            raise ValueError(tr("収集モードは profile または search を指定してください。"))
         if self.post_kind_filter not in {"posts", "reposts", "all"}:
-            raise ValueError("対象種別は posts / reposts / all のいずれかで指定してください。")
+            raise ValueError(tr("対象種別は posts / reposts / all のいずれかで指定してください。"))
         if self.since_date is not None and not isinstance(self.since_date, date):
-            raise ValueError("開始日は YYYY-MM-DD 形式の日付で指定してください。")
+            raise ValueError(tr("開始日は YYYY-MM-DD 形式の日付で指定してください。"))
         if self.until_date is not None and not isinstance(self.until_date, date):
-            raise ValueError("終了日は YYYY-MM-DD 形式の日付で指定してください。")
+            raise ValueError(tr("終了日は YYYY-MM-DD 形式の日付で指定してください。"))
         if self.since_date is not None and self.until_date is not None and self.since_date > self.until_date:
-            raise ValueError("開始日は終了日以前で指定してください。")
+            raise ValueError(tr("開始日は終了日以前で指定してください。"))
         if any(not keyword.strip() for keyword in (*self.include_keywords, *self.exclude_keywords)):
-            raise ValueError("空のキーワードは指定できません。")
+            raise ValueError(tr("空のキーワードは指定できません。"))

@@ -1,0 +1,314 @@
+"""UI text translation.
+
+Japanese source text is the key, so untranslated text falls back to Japanese.
+The language is chosen once at startup; switching it takes effect after a restart.
+"""
+
+from typing import Final
+
+DEFAULT_LANGUAGE: Final = "ja"
+# Display names are shown in their own language so either can be found.
+LANGUAGE_NAMES: Final = {"ja": "日本語", "en": "English"}
+
+ENGLISH: Final[dict[str, str]] = {
+    # Window and footer
+    "待機中...": "Idle...",
+    "ポストを確認して、必要なものだけ整理。": "Review your posts and clean up only what you choose.",
+    "すべて選択/解除": "Select / deselect all",
+    "ショートカットキー一覧 (Ctrl+H)": "Keyboard shortcuts (Ctrl+H)",
+    "ブラウザ停止 / 処理中止": "Stop browser / cancel",
+    "選択項目を削除/解除": "Delete / undo selected",
+    "ショートカットキー一覧": "Keyboard shortcuts",
+    "Ctrl+Enter : 選択項目を削除/解除\nCtrl+R    : 検索/収集を実行\nCtrl+H    : このヘルプを表示": (
+        "Ctrl+Enter : Delete / undo selected\nCtrl+R    : Search / collect\nCtrl+H    : Show this help"
+    ),
+    "言語 / Language": "Language / 言語",
+    "言語を変更しました": "Language changed",
+    "表示言語はアプリケーションの再起動後に切り替わります。": "The new language is applied after you restart the application.",
+    # 1. Basic settings
+    "1. 基本設定": "1. Basic settings",
+    "プロファイル選択": "Profile",
+    "プロファイル追加": "Add profile",
+    "新しいログイン用プロファイルを作成して選択します。": "Create and select a new login profile.",
+    "名前変更": "Rename",
+    "プロファイル削除": "Delete profile",
+    "X アカウントID": "X account ID",
+    "収集モード": "Collection mode",
+    "プロフィール走査": "Scan profile",
+    "高度な検索": "Advanced search",
+    "取得上限件数": "Max posts",
+    "自動保存間隔(秒)": "Auto-save interval (s)",
+    "設定を自動保存する間隔です。": "How often settings are saved automatically.",
+    "ブラウザ起動＆ログイン": "Start browser and log in",
+    "ログイン未確認": "Login not verified",
+    "ログイン中: @{username}": "Logged in: @{username}",
+    "フォローリストをエクスポート": "Export following list",
+    "X アカウントIDのフォロー一覧を CSV（または JSON）で保存します。": (
+        "Save the accounts this X account ID follows as CSV (or JSON)."
+    ),
+    # 2. Filters
+    "2. 絞り込み条件": "2. Filters",
+    "メディア条件": "Media",
+    "すべて": "All",
+    "画像・動画ありのみ": "With images or videos only",
+    "画像・動画なしのみ": "Without images or videos only",
+    "対象種別": "Post type",
+    "通常ポストのみ": "Posts only",
+    "リポストのみ": "Reposts only",
+    "通常ポスト + リポスト": "Posts + reposts",
+    "リプライのみ": "Replies only",
+    "最低いいね数": "Min likes",
+    "最低返信数": "Min replies",
+    "この日以降": "On or after",
+    "指定した日付を含む、それ以降のポストを対象にします。": "Include posts from this date onward.",
+    "この日以前": "On or before",
+    "指定した日付を含む、それ以前のポストを対象にします。": "Include posts up to and including this date.",
+    "含むキーワード": "Include keywords",
+    "例: 懸賞, キャンペーン": "e.g. giveaway, campaign",
+    "いずれかのキーワードを本文に含むポストだけを対象にします。カンマ区切りで複数指定できます。": (
+        "Only include posts whose text contains any of these keywords. Separate multiple keywords with commas."
+    ),
+    "除外キーワード": "Exclude keywords",
+    "例: 固定, 大事": "e.g. pinned, important",
+    "いずれかのキーワードを本文に含むポストを対象から外します。カンマ区切りで複数指定できます。": (
+        "Skip posts whose text contains any of these keywords. Separate multiple keywords with commas."
+    ),
+    "ポストを収集＆プレビュー": "Collect and preview posts",
+    # 3. Preview and actions
+    "3. プレビューと削除/解除実行": "3. Preview and delete / undo",
+    "0 件 / 0 件選択": "0 items / 0 selected",
+    "{count} 件 / {selected} 件選択": "{count} items / {selected} selected",
+    "削除/解除間隔": "Interval",
+    " 秒": " s",
+    "各項目の削除/解除の間に待機する秒数です。": "Seconds to wait between deleting or undoing each item.",
+    "0 秒で連続実行": "0 s runs back to back",
+    "削除": "Delete",
+    "本文": "Text",
+    "日時": "Date",
+    "種別": "Type",
+    "いいね": "Likes",
+    "返信": "Replies",
+    "メディア": "Media",
+    "リプライ": "Reply",
+    "リポスト": "Repost",
+    "ポスト": "Post",
+    "あり": "Yes",
+    "はい": "Yes",
+    "まだポストがありません": "No posts yet",
+    "ログイン後、条件を指定してポストを収集してください。": "After logging in, set your filters and collect posts.",
+    "行を選択すると本文とURLが表示されます。": "Select a row to see its text and URL.",
+    "ログ": "Log",
+    "ステータスメッセージがここに記録されます。": "Status messages are recorded here.",
+    # Filter summary
+    "画像/動画あり": "With media",
+    "画像/動画なし": "Without media",
+    "ポストのみ": "Posts only",
+    "メディア: {value}": "Media: {value}",
+    "種別: {value}": "Type: {value}",
+    "最大: {count}件": "Max: {count}",
+    "いいね≥{count}": "Likes ≥ {count}",
+    "返信≥{count}": "Replies ≥ {count}",
+    "{date}〜": "From {date}",
+    "〜{date}": "Until {date}",
+    "含む: {keywords}": "Include: {keywords}",
+    "除外: {keywords}": "Exclude: {keywords}",
+    # Dialogs
+    "エラー": "Error",
+    "情報": "Information",
+    "確認": "Confirm",
+    "完了": "Done",
+    "終了": "Quit",
+    "入力エラー": "Input error",
+    "ログイン待ち": "Waiting for login",
+    "ブラウザが開きました。\nX に手動でログインし、ホーム画面が表示されたら OK を押してください。": (
+        "The browser is open.\nLog in to X manually, then press OK once your home timeline appears."
+    ),
+    "ブラウザを停止": "Stop browser",
+    "ブラウザを停止しますか？\n進行中の操作は安全な区切りで中断されます。": (
+        "Stop the browser?\nAny operation in progress stops at the next safe point."
+    ),
+    "新しいプロファイル名:": "New profile name:",
+    "'{name}' のログイン情報と設定を完全に削除しますか？\nXのアカウントやポストは削除されません。": (
+        "Permanently delete the login data and settings for '{name}'?\nYour X account and posts are not deleted."
+    ),
+    "プロファイルを作成できませんでした: {error}": "Could not create the profile: {error}",
+    "アカウント不一致": "Account mismatch",
+    "現在ログイン中のアカウントと入力された対象アカウントが一致していません。\n"
+    "ログイン中: @{logged_in}\n入力値: @{entered}\n\n"
+    "このまま実行すると削除/解除に失敗する可能性があります。続行しますか？": (
+        "The logged-in account does not match the target account you entered.\n"
+        "Logged in: @{logged_in}\nEntered: @{entered}\n\n"
+        "Deleting or undoing may fail if you continue. Continue anyway?"
+    ),
+    "現在ログイン中のアカウントと入力された対象アカウントが一致していません。\n"
+    "ログイン中: @{logged_in}\n入力値: @{entered}\n\n"
+    "必要に応じて対象アカウントを修正してください。": (
+        "The logged-in account does not match the target account you entered.\n"
+        "Logged in: @{logged_in}\nEntered: @{entered}\n\n"
+        "Correct the target account if needed."
+    ),
+    "ログイン確認が必要": "Login required",
+    "先にブラウザを起動してログインを確認してください。": "Start the browser and verify your login first.",
+    "現在のアカウントでログインを確認してください。": "Verify your login with the current account.",
+    "日付範囲エラー": "Invalid date range",
+    "開始日が終了日より後の日付になっています。\n正しい範囲を指定してください。": (
+        "The start date is after the end date.\nPlease choose a valid range."
+    ),
+    "条件に一致するポストはありませんでした": "No posts matched your filters",
+    "期間やフィルタを広げて、もう一度収集してください。": "Widen the date range or filters and collect again.",
+    "選択した項目をすべて処理しました": "All selected items were processed",
+    "続けて整理する場合は、条件を指定してもう一度収集してください。": (
+        "To keep cleaning up, set your filters and collect again."
+    ),
+    "フォローリストの保存先": "Save following list as",
+    "X アカウントIDを入力してください（英数字とアンダースコア、15文字まで）。": (
+        "Enter an X account ID (letters, numbers and underscores, up to 15 characters)."
+    ),
+    "エクスポート完了": "Export complete",
+    "{count} 件のフォローを保存しました。\n{path}": "Saved {count} followed accounts.\n{path}",
+    "選択された {count} 件の項目に対して、{summary} を実行しますか？\n（この操作は元に戻せません）": (
+        "Apply to the {count} selected items: {summary}?\n(This cannot be undone.)"
+    ),
+    "ポスト削除 {count} 件": "delete {count} posts",
+    "リポスト解除 {count} 件": "undo {count} reposts",
+    "一部失敗": "Some items failed",
+    "失敗した項目の詳細を確認し、失敗分だけ再試行できます。": (
+        "Check the details of the failed items; you can retry just those."
+    ),
+    "失敗分だけ再試行": "Retry failed items",
+    "アプリケーションを終了しますか？": "Quit the application?",
+    "処理中ですがアプリケーションを終了しますか？": "An operation is in progress. Quit the application anyway?",
+    # Status messages
+    "ブラウザを起動しています...": "Starting the browser...",
+    "処理を中断してブラウザを停止しています...": "Cancelling and stopping the browser...",
+    "アカウント '{name}' を選択しました。": "Selected account '{name}'.",
+    "プロファイル名を '{name}' に変更しました。": "Renamed the profile to '{name}'.",
+    "プロファイル '{name}' を削除しました。": "Deleted profile '{name}'.",
+    "プロファイル '{name}' を追加しました。ブラウザを起動してログインしてください。": (
+        "Added profile '{name}'. Start the browser and log in."
+    ),
+    "ログイン確認済み: @{username}": "Login verified: @{username}",
+    "対象を収集しています...": "Collecting posts...",
+    "対象を収集中: {scanned} 件走査済み ({current}/{total})": (
+        "Collecting posts: {scanned} scanned ({current}/{total})"
+    ),
+    "収集完了: {count} 件の対象を取得しました。": "Collection complete: found {count} items.",
+    "@{username} のフォローリストを取得しています...": "Fetching the following list of @{username}...",
+    "フォローリストを取得中: {count} 件": "Fetching following list: {count}",
+    "フォローリスト {count} 件を保存しました: {path}": "Saved a following list of {count} accounts: {path}",
+    "削除/解除処理を実行しています...": "Deleting / undoing...",
+    "失敗分を再試行しています...": "Retrying failed items...",
+    "{action}中 ({current}/{total}): {url}": "{action} ({current}/{total}): {url}",
+    "削除/解除処理を中止": "Delete / undo cancelled",
+    "削除/解除処理完了": "Delete / undo finished",
+    "{heading}: {success} / {requested} 件成功": "{heading}: {success} / {requested} succeeded",
+    "{count} 件失敗": "{count} failed",
+    "{count} 件未処理": "{count} not processed",
+    "（{notes}）": " ({notes})",
+    "、": ", ",
+    "詳細不明": "No details",
+    # Worker
+    "{action} に失敗しました。": "{action} failed.",
+    "エラーが発生しました: {message}": "An error occurred: {message}",
+    "先にブラウザを起動してログインしてください。": "Start the browser and log in first.",
+    "ブラウザを起動しています…（初回は Chromium のダウンロードに数分かかることがあります）": (
+        "Starting the browser… (the first run may take a few minutes to download Chromium)"
+    ),
+    "ブラウザを起動しました。ログイン後に確認を実行します。": (
+        "The browser has started. Your login is checked once you log in."
+    ),
+    "ブラウザを停止しました。": "The browser has stopped.",
+    "ログインが確認されました。現在のログイン: @{username}": "Login verified. Logged in as @{username}",
+    "ログインが確認されました。ポストを収集できます。": "Login verified. You can now collect posts.",
+    "ログインを確認できませんでした。X のホーム画面が開いた状態で再度確認してください。": (
+        "Could not verify your login. Open your X home timeline and check again."
+    ),
+    "収集処理を中断しました。": "Collection cancelled.",
+    "収集の安全上限に到達したため走査を終了しました。": "Stopped scanning at the collection safety limit.",
+    "削除/解除処理を中断しました。": "Delete / undo cancelled.",
+    "フォローリストの取得を中断しました。ファイルは保存していません。": (
+        "Fetching the following list was cancelled. No file was saved."
+    ),
+    "取得の安全上限に到達したため、途中までのフォローリストを保存しました。": (
+        "Reached the fetch safety limit; saved the following list collected so far."
+    ),
+    # Post actions
+    "リポスト解除": "Undo repost",
+    "ポスト削除": "Delete post",
+    "応答なし": "no response",
+    "{mutation} の通信に失敗しました: {detail}": "{mutation} request failed: {detail}",
+    "{mutation} がエラーを返しました (HTTP {status})。": "{mutation} returned an error (HTTP {status}).",
+    "{mutation} がエラーを返しました: {detail}": "{mutation} returned an error: {detail}",
+    "操作対象のポストIDをURLから確認できませんでした。": "Could not read the target post ID from the URL.",
+    "リポスト解除ボタンが見つかりませんでした。": "Could not find the undo repost button.",
+    "リポスト解除の確認ボタンが見つかりませんでした。": "Could not find the undo repost confirmation button.",
+    "対象ポストの読み込み": "Loading the target post",
+    "「…」メニューボタンの表示待ち": "Waiting for the \"…\" menu button",
+    "削除メニューが見つかりませんでした。": "Could not find the delete menu.",
+    "削除メニュー項目の表示待ち": "Waiting for the delete menu item",
+    "削除メニュー項目が見つかりませんでした。自分のポストではない可能性があります。": (
+        "Could not find the delete menu item. The post may not be yours."
+    ),
+    "削除確認画面の表示": "Opening the delete confirmation",
+    "削除確定後の完了確認（結果不明。再試行前にXで確認してください）": (
+        "Confirming the deletion (result unknown; check on X before retrying)"
+    ),
+    "削除確認ボタンが見つかりませんでした。": "Could not find the delete confirmation button.",
+    # Validation
+    "実行対象が選択されていません。": "Nothing is selected.",
+    "削除/解除間隔は0秒以上で指定してください。": "The interval must be 0 seconds or more.",
+    "アカウントIDを入力してください。": "Enter an account ID.",
+    "取得上限件数は1以上で指定してください。": "Max posts must be 1 or more.",
+    "最低いいね数と最低返信数は0以上で指定してください。": "Min likes and min replies must be 0 or more.",
+    "不正なメディア条件が指定されました。": "Invalid media filter.",
+    "収集モードは profile または search を指定してください。": "Collection mode must be profile or search.",
+    "対象種別は posts / reposts / all のいずれかで指定してください。": "Post type must be posts, reposts or all.",
+    "開始日は YYYY-MM-DD 形式の日付で指定してください。": "The start date must be a YYYY-MM-DD date.",
+    "終了日は YYYY-MM-DD 形式の日付で指定してください。": "The end date must be a YYYY-MM-DD date.",
+    "開始日は終了日以前で指定してください。": "The start date must be on or before the end date.",
+    "空のキーワードは指定できません。": "Keywords cannot be empty.",
+    "ユーザー名は1〜15文字の英数字またはアンダースコアで指定してください。": (
+        "Usernames must be 1 to 15 letters, numbers or underscores."
+    ),
+    "media_filter は all / with_media / without_media のいずれかで指定してください。": (
+        "media_filter must be all, with_media or without_media."
+    ),
+    "search_mode は profile / search のいずれかで指定してください。": "search_mode must be profile or search.",
+    "post_kind_filter は posts / reposts / all のいずれかで指定してください。": (
+        "post_kind_filter must be posts, reposts or all."
+    ),
+    "保存先の拡張子は .csv または .json を指定してください。": "The file extension must be .csv or .json.",
+    # Profiles
+    "プロファイル名を入力してください。": "Enter a profile name.",
+    "default プロファイルの名前は変更できません。": "The default profile cannot be renamed.",
+    "同じ名前のプロファイルが既にあります。": "A profile with that name already exists.",
+    "default プロファイルは削除できません。": "The default profile cannot be deleted.",
+    "設定を保存できませんでした: {status}": "Could not save settings: {status}",
+}
+
+TRANSLATIONS: Final[dict[str, dict[str, str]]] = {"en": ENGLISH}
+
+_language = DEFAULT_LANGUAGE
+
+
+def normalize_language(language: str | None) -> str:
+    return language if language in LANGUAGE_NAMES else DEFAULT_LANGUAGE
+
+
+def set_language(language: str | None) -> None:
+    global _language
+    _language = normalize_language(language)
+
+
+def get_language() -> str:
+    return _language
+
+
+def translate(text: str, language: str, **values: object) -> str:
+    translated = TRANSLATIONS.get(language, {}).get(text, text)
+    return translated.format(**values) if values else translated
+
+
+def tr(text: str, **values: object) -> str:
+    """Return the Japanese source text in the current UI language, formatted with values."""
+    return translate(text, _language, **values)

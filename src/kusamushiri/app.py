@@ -10,10 +10,11 @@ from PySide6.QtWidgets import QApplication
 from kusamushiri.core import XDeleterCore
 from kusamushiri.follows import ExportFollowingRequest, write_follow_list
 from kusamushiri.gui import XDeleterWindow
+from kusamushiri.i18n import set_language, tr
 from kusamushiri.logger import logger
 from kusamushiri.models import CollectRequest, ExecuteActionsRequest, PostActionResult
 from kusamushiri.paths import configure_frozen_browser_path, migrate_legacy_app_data
-from kusamushiri.settings import migrate_legacy_settings
+from kusamushiri.settings import AccountSettingsManager, migrate_legacy_settings
 
 
 def apply_dark_palette(app: QApplication) -> None:
@@ -124,8 +125,8 @@ class XDeleterWorker:
 
     def _handle_error(self, action: str, error: Exception) -> None:
         logger.exception("%s failed.", action)
-        message = str(error) or f"{action} に失敗しました。"
-        self.events.status_changed.emit(f"エラーが発生しました: {message}")
+        message = str(error) or tr("{action} に失敗しました。", action=action)
+        self.events.status_changed.emit(tr("エラーが発生しました: {message}", message=message))
         self.events.error_occurred.emit(message)
 
     def _enqueue(self, command: WorkerCommand) -> None:
@@ -180,7 +181,7 @@ class XDeleterWorker:
 
     def _require_running_core(self, core: XDeleterCore) -> XDeleterCore:
         if core.page is None:
-            raise RuntimeError("先にブラウザを起動してログインしてください。")
+            raise RuntimeError(tr("先にブラウザを起動してログインしてください。"))
         return core
 
     def _run(self) -> None:
@@ -202,19 +203,19 @@ class XDeleterWorker:
 
                 if isinstance(command, StartBrowserCommand):
                     self.events.status_changed.emit(
-                        "ブラウザを起動しています…（初回は Chromium のダウンロードに数分かかることがあります）"
+                        tr("ブラウザを起動しています…（初回は Chromium のダウンロードに数分かかることがあります）")
                     )
                     core.start_browser(account_name=command.account_name)
                     core.go_to_home()
                     self.events.status_changed.emit(
-                        "ブラウザを起動しました。ログイン後に確認を実行します。"
+                        tr("ブラウザを起動しました。ログイン後に確認を実行します。")
                     )
                     self.events.browser_ready.emit()
                     continue
 
                 if isinstance(command, StopBrowserCommand):
                     core.stop_browser()
-                    self.events.status_changed.emit("ブラウザを停止しました。")
+                    self.events.status_changed.emit(tr("ブラウザを停止しました。"))
                     self.events.browser_stopped.emit()
                     continue
 
@@ -226,15 +227,15 @@ class XDeleterWorker:
                     if is_logged_in:
                         if current_username:
                             self.events.status_changed.emit(
-                                f"ログインが確認されました。現在のログイン: @{current_username}"
+                                tr("ログインが確認されました。現在のログイン: @{username}", username=current_username)
                             )
                         else:
                             self.events.status_changed.emit(
-                                "ログインが確認されました。ポストを収集できます。"
+                                tr("ログインが確認されました。ポストを収集できます。")
                             )
                     else:
                         self.events.status_changed.emit(
-                            "ログインを確認できませんでした。X のホーム画面が開いた状態で再度確認してください。"
+                            tr("ログインを確認できませんでした。X のホーム画面が開いた状態で再度確認してください。")
                         )
                     continue
 
@@ -247,9 +248,9 @@ class XDeleterWorker:
                     )
                     self.events.posts_collected.emit(posts)
                     if self._cancel_event.is_set():
-                        self.events.status_changed.emit("収集処理を中断しました。")
+                        self.events.status_changed.emit(tr("収集処理を中断しました。"))
                     elif core.collection_limit_reached:
-                        self.events.status_changed.emit("収集の安全上限に到達したため走査を終了しました。")
+                        self.events.status_changed.emit(tr("収集の安全上限に到達したため走査を終了しました。"))
                     continue
 
                 if isinstance(command, DeletePostsCommand):
@@ -266,7 +267,7 @@ class XDeleterWorker:
                     for index, target in enumerate(command.request.targets, start=1):
                         if self._cancel_event.is_set():
                             break
-                        action_label = "リポスト解除" if target.is_repost else "ポスト削除"
+                        action_label = tr("リポスト解除") if target.is_repost else tr("ポスト削除")
                         self.events.delete_progress.emit(action_label, target.url, index, total)
                         result = active_core.execute_post_action(target)
                         results.append(result)
@@ -277,7 +278,7 @@ class XDeleterWorker:
                     logger.info("Finished delete batch: %s/%s succeeded", success_count, total)
                     self.events.delete_completed.emit(results)
                     if self._cancel_event.is_set():
-                        self.events.status_changed.emit("削除/解除処理を中断しました。")
+                        self.events.status_changed.emit(tr("削除/解除処理を中断しました。"))
                     continue
 
                 if isinstance(command, ExportFollowingCommand):
@@ -288,7 +289,7 @@ class XDeleterWorker:
                     )
                     if self._cancel_event.is_set():
                         self.events.following_export_finished.emit("", len(result.records))
-                        self.events.status_changed.emit("フォローリストの取得を中断しました。ファイルは保存していません。")
+                        self.events.status_changed.emit(tr("フォローリストの取得を中断しました。ファイルは保存していません。"))
                         continue
                     write_follow_list(command.request.output_path, result.records)
                     self.events.following_export_finished.emit(
@@ -296,7 +297,7 @@ class XDeleterWorker:
                     )
                     if result.limit_reached:
                         self.events.status_changed.emit(
-                            "取得の安全上限に到達したため、途中までのフォローリストを保存しました。"
+                            tr("取得の安全上限に到達したため、途中までのフォローリストを保存しました。")
                         )
                     continue
 
@@ -326,6 +327,7 @@ def main() -> int:
     app.setApplicationName("kusamushiri")
     if migrate_legacy_settings():
         logger.info("Copied settings from the previous xposdeleter configuration.")
+    set_language(AccountSettingsManager().get_language())
     app.setApplicationDisplayName("Kusamushiri")
     apply_dark_palette(app)
 

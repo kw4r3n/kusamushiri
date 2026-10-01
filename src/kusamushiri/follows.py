@@ -11,6 +11,7 @@ from urllib.parse import urljoin, urlparse
 from playwright.sync_api import Page
 
 from kusamushiri.browser import BASE_X_URL, NAVIGATION_TIMEOUT_MS
+from kusamushiri.i18n import tr
 from kusamushiri.logger import logger
 from kusamushiri.parsing import USERNAME_PATTERN
 
@@ -65,9 +66,9 @@ class ExportFollowingRequest:
 
     def validate(self) -> None:
         if not USERNAME_PATTERN.fullmatch(self.username.strip().removeprefix("@")):
-            raise ValueError("ユーザー名は1〜15文字の英数字またはアンダースコアで指定してください。")
+            raise ValueError(tr("ユーザー名は1〜15文字の英数字またはアンダースコアで指定してください。"))
         if self.output_path.suffix.lower() not in {".csv", ".json"}:
-            raise ValueError("保存先の拡張子は .csv または .json を指定してください。")
+            raise ValueError(tr("保存先の拡張子は .csv または .json を指定してください。"))
 
 
 @dataclass(slots=True)

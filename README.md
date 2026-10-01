@@ -18,7 +18,8 @@ Qt (PySide6) list before anything is deleted**.
 >   the session is stored only on your computer.
 
 > [!NOTE]
-> The user interface is currently in Japanese only.
+> The user interface is available in Japanese (default) and English. Switch it from the language
+> menu at the bottom of the window and restart the app.
 
 ## Features
 
