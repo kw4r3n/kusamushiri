@@ -5,6 +5,7 @@ from typing import TypeVar, overload
 
 from PySide6.QtCore import QSettings
 
+from kusamushiri.i18n import DEFAULT_LANGUAGE, normalize_language, tr
 from kusamushiri.models import DEFAULT_ACTION_INTERVAL_SECONDS
 from kusamushiri.paths import (
     ACCOUNT_PROFILE_PREFIX,
@@ -114,9 +115,9 @@ class AccountSettingsManager:
     def rename_account(self, old_name: str, new_name: str) -> None:
         old_name = normalize_account_name(old_name)
         if not new_name.strip().removeprefix("@").strip():
-            raise ValueError("プロファイル名を入力してください。")
+            raise ValueError(tr("プロファイル名を入力してください。"))
         if old_name == DEFAULT_ACCOUNT_NAME:
-            raise ValueError("default プロファイルの名前は変更できません。")
+            raise ValueError(tr("default プロファイルの名前は変更できません。"))
         new_name = normalize_account_name(new_name)
         if new_name == old_name:
             return
@@ -124,12 +125,12 @@ class AccountSettingsManager:
         if folded_new_name == DEFAULT_ACCOUNT_NAME.casefold() or any(
             account.casefold() == folded_new_name and account != old_name for account in self.list_accounts()
         ):
-            raise ValueError("同じ名前のプロファイルが既にあります。")
+            raise ValueError(tr("同じ名前のプロファイルが既にあります。"))
         source = get_app_data_dir() / f"{ACCOUNT_PROFILE_PREFIX}{old_name}"
         target = source.parent / f"{ACCOUNT_PROFILE_PREFIX}{new_name}"
         # On case-insensitive filesystems "Foo" -> "foo" resolves to the same directory.
         if target.exists() and not (source.exists() and target.samefile(source)):
-            raise ValueError("同じ名前のプロファイルが既にあります。")
+            raise ValueError(tr("同じ名前のプロファイルが既にあります。"))
         settings = self.load_account_settings(old_name)
         source.rename(target)
         try:
@@ -148,7 +149,7 @@ class AccountSettingsManager:
     def delete_account(self, account_name: str) -> None:
         account_name = normalize_account_name(account_name)
         if account_name == DEFAULT_ACCOUNT_NAME:
-            raise ValueError("default プロファイルは削除できません。")
+            raise ValueError(tr("default プロファイルは削除できません。"))
         profile_dir = get_app_data_dir() / f"{ACCOUNT_PROFILE_PREFIX}{account_name}"
         # Drop settings first: a failed rmtree then leaves a still-listed profile
         # that can be deleted again, never stale settings for a half-deleted one.
@@ -162,7 +163,7 @@ class AccountSettingsManager:
     def _raise_on_settings_error(self) -> None:
         status = self._settings.status()
         if status != QSettings.Status.NoError:
-            raise OSError(f"設定を保存できませんでした: {status.name}")
+            raise OSError(tr("設定を保存できませんでした: {status}", status=status.name))
 
     def _remove_account_settings(self, account_name: str) -> None:
         prefix = self._account_prefix(account_name)
@@ -175,6 +176,14 @@ class AccountSettingsManager:
         return normalize_account_name(
             current_account if isinstance(current_account, str) else DEFAULT_ACCOUNT_NAME
         )
+
+    def get_language(self) -> str:
+        language = self._settings.value("language", DEFAULT_LANGUAGE, type=str)
+        return normalize_language(language if isinstance(language, str) else None)
+
+    def save_language(self, language: str) -> None:
+        self._settings.setValue("language", normalize_language(language))
+        self._settings.sync()
 
     @overload
     def _account_setting_value(

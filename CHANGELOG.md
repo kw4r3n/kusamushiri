@@ -9,6 +9,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Export an account's following list to CSV (UTF-8 with BOM for Excel) or JSON.
 - Include and exclude keyword filters. Posts are matched against their visible text, ignoring
   case and full-width/half-width differences; keywords are saved per profile.
+- English user interface. Choose 日本語 or English from the language menu at the bottom of the
+  window; the choice is saved and applied after a restart. Japanese remains the default.
 
 ## [0.3.0] - 2026-10-01
 

@@ -33,6 +33,7 @@ from PySide6.QtWidgets import (
 
 from kusamushiri.follows import ExportFollowingRequest
 from kusamushiri.gui_table import URL_COLUMN_WIDTH, PostTableManager
+from kusamushiri.i18n import LANGUAGE_NAMES, get_language, tr, translate
 from kusamushiri.logger import logger
 from kusamushiri.models import (
     DEFAULT_ACTION_INTERVAL_SECONDS,
@@ -130,7 +131,7 @@ QSplitter::handle { background: #303a49; height: 3px; }
 def format_action_failures(failures: list[PostActionResult]) -> str:
     lines: list[str] = []
     for result in failures:
-        error_message = result.error_message or "詳細不明"
+        error_message = result.error_message or tr("詳細不明")
         lines.append(f"[{result.action_label}] {result.target.url}")
         lines.append(f"  {error_message}")
     return "\n".join(lines)
@@ -181,7 +182,7 @@ class XDeleterWindow(QMainWindow):
         self._restore_settings()
         self.setStyleSheet(APP_STYLE_SHEET)
         self.set_busy(False)
-        self.update_status("待機中...")
+        self.update_status(tr("待機中..."))
 
     def _setup_shortcuts(self) -> None:
         self._shortcut_delete = QShortcut(QKeySequence("Ctrl+Return"), self)
@@ -222,7 +223,7 @@ class XDeleterWindow(QMainWindow):
         title = QLabel("Kusamushiri")
         title.setObjectName("appTitle")
         root_layout.addWidget(title)
-        subtitle = QLabel("ポストを確認して、必要なものだけ整理。")
+        subtitle = QLabel(tr("ポストを確認して、必要なものだけ整理。"))
         subtitle.setObjectName("subtitle")
         root_layout.addWidget(subtitle)
 
@@ -261,11 +262,11 @@ class XDeleterWindow(QMainWindow):
         footer_layout = QHBoxLayout()
         footer_layout.setSpacing(10)
 
-        self.select_all_button = QPushButton("すべて選択/解除")
+        self.select_all_button = QPushButton(tr("すべて選択/解除"))
         self.select_all_button.setObjectName("secondaryButton")
         self.select_all_button.clicked.connect(self._handle_toggle_all)
 
-        self.status_label = QLabel("待機中...")
+        self.status_label = QLabel(tr("待機中..."))
         self.status_label.setObjectName("statusLabel")
         self.status_label.setWordWrap(True)
         self.status_label.setMinimumWidth(0)
@@ -274,19 +275,27 @@ class XDeleterWindow(QMainWindow):
         self.help_button = QPushButton("?")
         self.help_button.setObjectName("secondaryButton")
         self.help_button.setFixedWidth(38)
-        self.help_button.setToolTip("ショートカットキー一覧 (Ctrl+H)")
+        self.help_button.setToolTip(tr("ショートカットキー一覧 (Ctrl+H)"))
         self.help_button.clicked.connect(self._show_shortcut_help)
 
-        self.stop_button = QPushButton("ブラウザ停止 / 処理中止")
+        self.language_combo = QComboBox()
+        self.language_combo.setToolTip(tr("言語 / Language"))
+        for code, display_name in LANGUAGE_NAMES.items():
+            self.language_combo.addItem(display_name, userData=code)
+        self.language_combo.setCurrentIndex(self.language_combo.findData(get_language()))
+        self.language_combo.currentIndexChanged.connect(self._on_language_changed)
+
+        self.stop_button = QPushButton(tr("ブラウザ停止 / 処理中止"))
         self.stop_button.setObjectName("secondaryButton")
         self.stop_button.clicked.connect(self._on_stop_browser_clicked)
 
-        self.delete_button = QPushButton("選択項目を削除/解除")
+        self.delete_button = QPushButton(tr("選択項目を削除/解除"))
         self.delete_button.setObjectName("dangerButton")
         self.delete_button.clicked.connect(self._handle_delete)
 
         self.preview_toolbar.insertWidget(0, self.select_all_button)
         footer_layout.addWidget(self.status_label, 1)
+        footer_layout.addWidget(self.language_combo)
         footer_layout.addWidget(self.help_button)
         footer_layout.addWidget(self.stop_button)
         footer_layout.addWidget(self.delete_button)
@@ -299,7 +308,7 @@ class XDeleterWindow(QMainWindow):
         )
 
     def _build_account_group(self) -> QGroupBox:
-        group = QGroupBox("1. 基本設定")
+        group = QGroupBox(tr("1. 基本設定"))
         layout = QGridLayout(group)
         layout.setHorizontalSpacing(12)
         layout.setVerticalSpacing(6)
@@ -312,17 +321,17 @@ class XDeleterWindow(QMainWindow):
         if account_editor is not None:
             account_editor.editingFinished.connect(self._commit_typed_account)
 
-        self.add_profile_button = QPushButton("プロファイル追加")
+        self.add_profile_button = QPushButton(tr("プロファイル追加"))
         self.add_profile_button.setObjectName("secondaryButton")
-        self.add_profile_button.setToolTip("新しいログイン用プロファイルを作成して選択します。")
+        self.add_profile_button.setToolTip(tr("新しいログイン用プロファイルを作成して選択します。"))
         self.add_profile_button.clicked.connect(self._add_profile)
 
         self.username_input = QLineEdit()
         self.username_input.setPlaceholderText("your_account")
 
         self.mode_combo = QComboBox()
-        self.mode_combo.addItem("プロフィール走査", userData="profile")
-        self.mode_combo.addItem("高度な検索", userData="search")
+        self.mode_combo.addItem(tr("プロフィール走査"), userData="profile")
+        self.mode_combo.addItem(tr("高度な検索"), userData="search")
 
         self.max_posts_input = QSpinBox()
         self.max_posts_input.setRange(1, 1000)
@@ -331,23 +340,23 @@ class XDeleterWindow(QMainWindow):
         self.auto_save_interval_input = QSpinBox()
         self.auto_save_interval_input.setRange(10, 3600)
         self.auto_save_interval_input.setValue(60)
-        self.auto_save_interval_input.setToolTip("設定を自動保存する間隔です。")
+        self.auto_save_interval_input.setToolTip(tr("設定を自動保存する間隔です。"))
 
-        self.start_button = QPushButton("ブラウザ起動＆ログイン")
+        self.start_button = QPushButton(tr("ブラウザ起動＆ログイン"))
         self.start_button.clicked.connect(self._handle_start_browser)
-        self.rename_profile_button = QPushButton("名前変更")
+        self.rename_profile_button = QPushButton(tr("名前変更"))
         self.rename_profile_button.clicked.connect(self._rename_profile)
-        self.delete_profile_button = QPushButton("プロファイル削除")
+        self.delete_profile_button = QPushButton(tr("プロファイル削除"))
         self.delete_profile_button.clicked.connect(self._delete_profile)
-        self.login_account_label = QLabel("ログイン未確認")
-        self.export_following_button = QPushButton("フォローリストをエクスポート")
+        self.login_account_label = QLabel(tr("ログイン未確認"))
+        self.export_following_button = QPushButton(tr("フォローリストをエクスポート"))
         self.export_following_button.setObjectName("secondaryButton")
         self.export_following_button.setToolTip(
-            "X アカウントIDのフォロー一覧を CSV（または JSON）で保存します。"
+            tr("X アカウントIDのフォロー一覧を CSV（または JSON）で保存します。")
         )
         self.export_following_button.clicked.connect(self._handle_export_following)
 
-        layout.addWidget(QLabel("プロファイル選択"), 0, 0, 1, 2)
+        layout.addWidget(QLabel(tr("プロファイル選択")), 0, 0, 1, 2)
         layout.addWidget(self.account_combo, 1, 0, 1, 2)
         profile_actions = QHBoxLayout()
         profile_actions.setSpacing(6)
@@ -358,12 +367,12 @@ class XDeleterWindow(QMainWindow):
         # Deleting a login profile is irreversible; keep it visibly apart from add/rename.
         self.delete_profile_button.setObjectName("quietDangerButton")
         layout.addLayout(profile_actions, 2, 0, 1, 2)
-        layout.addWidget(QLabel("X アカウントID"), 3, 0, 1, 2)
+        layout.addWidget(QLabel(tr("X アカウントID")), 3, 0, 1, 2)
         layout.addWidget(self.username_input, 4, 0, 1, 2)
-        layout.addWidget(QLabel("収集モード"), 5, 0, 1, 2)
+        layout.addWidget(QLabel(tr("収集モード")), 5, 0, 1, 2)
         layout.addWidget(self.mode_combo, 6, 0, 1, 2)
-        layout.addWidget(QLabel("取得上限件数"), 7, 0)
-        layout.addWidget(QLabel("自動保存間隔(秒)"), 7, 1)
+        layout.addWidget(QLabel(tr("取得上限件数")), 7, 0)
+        layout.addWidget(QLabel(tr("自動保存間隔(秒)")), 7, 1)
         layout.addWidget(self.max_posts_input, 8, 0)
         layout.addWidget(self.auto_save_interval_input, 8, 1)
         layout.addWidget(self.login_account_label, 9, 0, 1, 2)
@@ -375,22 +384,22 @@ class XDeleterWindow(QMainWindow):
         return group
 
     def _build_filter_group(self) -> QGroupBox:
-        group = QGroupBox("2. 絞り込み条件")
+        group = QGroupBox(tr("2. 絞り込み条件"))
         layout = QGridLayout(group)
         layout.setHorizontalSpacing(12)
         layout.setVerticalSpacing(6)
 
         self.media_filter_combo = QComboBox()
-        self.media_filter_combo.addItem("すべて", userData="all")
-        self.media_filter_combo.addItem("画像・動画ありのみ", userData="with_media")
-        self.media_filter_combo.addItem("画像・動画なしのみ", userData="without_media")
+        self.media_filter_combo.addItem(tr("すべて"), userData="all")
+        self.media_filter_combo.addItem(tr("画像・動画ありのみ"), userData="with_media")
+        self.media_filter_combo.addItem(tr("画像・動画なしのみ"), userData="without_media")
 
         self.post_kind_combo = QComboBox()
-        self.post_kind_combo.addItem("通常ポストのみ", userData="posts")
-        self.post_kind_combo.addItem("リポストのみ", userData="reposts")
-        self.post_kind_combo.addItem("通常ポスト + リポスト", userData="all")
+        self.post_kind_combo.addItem(tr("通常ポストのみ"), userData="posts")
+        self.post_kind_combo.addItem(tr("リポストのみ"), userData="reposts")
+        self.post_kind_combo.addItem(tr("通常ポスト + リポスト"), userData="all")
 
-        self.reply_only_checkbox = QCheckBox("リプライのみ")
+        self.reply_only_checkbox = QCheckBox(tr("リプライのみ"))
 
         self.min_likes_input = QSpinBox()
         self.min_likes_input.setRange(0, 1_000_000)
@@ -398,55 +407,55 @@ class XDeleterWindow(QMainWindow):
         self.min_replies_input = QSpinBox()
         self.min_replies_input.setRange(0, 1_000_000)
 
-        self.since_date_checkbox = QCheckBox("この日以降")
+        self.since_date_checkbox = QCheckBox(tr("この日以降"))
         self.since_date_checkbox.toggled.connect(self._toggle_since_date)
 
         self.since_date_input = QDateEdit(QDate.currentDate())
         self.since_date_input.setCalendarPopup(True)
         self.since_date_input.setDisplayFormat("yyyy-MM-dd")
         self.since_date_input.setEnabled(False)
-        self.since_date_input.setToolTip("指定した日付を含む、それ以降のポストを対象にします。")
+        self.since_date_input.setToolTip(tr("指定した日付を含む、それ以降のポストを対象にします。"))
 
-        self.until_date_checkbox = QCheckBox("この日以前")
+        self.until_date_checkbox = QCheckBox(tr("この日以前"))
         self.until_date_checkbox.toggled.connect(self._toggle_until_date)
 
         self.until_date_input = QDateEdit(QDate.currentDate())
         self.until_date_input.setCalendarPopup(True)
         self.until_date_input.setDisplayFormat("yyyy-MM-dd")
         self.until_date_input.setEnabled(False)
-        self.until_date_input.setToolTip("指定した日付を含む、それ以前のポストを対象にします。")
+        self.until_date_input.setToolTip(tr("指定した日付を含む、それ以前のポストを対象にします。"))
 
         self.include_keywords_input = QLineEdit()
-        self.include_keywords_input.setPlaceholderText("例: 懸賞, キャンペーン")
+        self.include_keywords_input.setPlaceholderText(tr("例: 懸賞, キャンペーン"))
         self.include_keywords_input.setToolTip(
-            "いずれかのキーワードを本文に含むポストだけを対象にします。カンマ区切りで複数指定できます。"
+            tr("いずれかのキーワードを本文に含むポストだけを対象にします。カンマ区切りで複数指定できます。")
         )
 
         self.exclude_keywords_input = QLineEdit()
-        self.exclude_keywords_input.setPlaceholderText("例: 固定, 大事")
+        self.exclude_keywords_input.setPlaceholderText(tr("例: 固定, 大事"))
         self.exclude_keywords_input.setToolTip(
-            "いずれかのキーワードを本文に含むポストを対象から外します。カンマ区切りで複数指定できます。"
+            tr("いずれかのキーワードを本文に含むポストを対象から外します。カンマ区切りで複数指定できます。")
         )
 
-        self.collect_button = QPushButton("ポストを収集＆プレビュー")
+        self.collect_button = QPushButton(tr("ポストを収集＆プレビュー"))
         self.collect_button.clicked.connect(self._handle_collect)
 
-        layout.addWidget(QLabel("メディア条件"), 0, 0, 1, 2)
+        layout.addWidget(QLabel(tr("メディア条件")), 0, 0, 1, 2)
         layout.addWidget(self.media_filter_combo, 1, 0, 1, 2)
-        layout.addWidget(QLabel("対象種別"), 2, 0, 1, 2)
+        layout.addWidget(QLabel(tr("対象種別")), 2, 0, 1, 2)
         layout.addWidget(self.post_kind_combo, 3, 0, 1, 2)
         layout.addWidget(self.reply_only_checkbox, 4, 0, 1, 2)
-        layout.addWidget(QLabel("最低いいね数"), 5, 0)
-        layout.addWidget(QLabel("最低返信数"), 5, 1)
+        layout.addWidget(QLabel(tr("最低いいね数")), 5, 0)
+        layout.addWidget(QLabel(tr("最低返信数")), 5, 1)
         layout.addWidget(self.min_likes_input, 6, 0)
         layout.addWidget(self.min_replies_input, 6, 1)
         layout.addWidget(self.since_date_checkbox, 7, 0)
         layout.addWidget(self.since_date_input, 7, 1)
         layout.addWidget(self.until_date_checkbox, 8, 0)
         layout.addWidget(self.until_date_input, 8, 1)
-        layout.addWidget(QLabel("含むキーワード"), 9, 0, 1, 2)
+        layout.addWidget(QLabel(tr("含むキーワード")), 9, 0, 1, 2)
         layout.addWidget(self.include_keywords_input, 10, 0, 1, 2)
-        layout.addWidget(QLabel("除外キーワード"), 11, 0, 1, 2)
+        layout.addWidget(QLabel(tr("除外キーワード")), 11, 0, 1, 2)
         layout.addWidget(self.exclude_keywords_input, 12, 0, 1, 2)
         layout.addWidget(self.collect_button, 13, 0, 1, 2)
         layout.setContentsMargins(0, 12, 0, 0)
@@ -455,42 +464,42 @@ class XDeleterWindow(QMainWindow):
         return group
 
     def _build_preview_group(self) -> QGroupBox:
-        group = QGroupBox("3. プレビューと削除/解除実行")
+        group = QGroupBox(tr("3. プレビューと削除/解除実行"))
         layout = QVBoxLayout(group)
 
         layout.setContentsMargins(0, 12, 0, 0)
-        self.selection_count = QLabel("0 件 / 0 件選択")
+        self.selection_count = QLabel(tr("0 件 / 0 件選択"))
         self.selection_count.setObjectName("selectionCount")
         layout.addWidget(self.selection_count)
         action_options_layout = QHBoxLayout()
         self.preview_toolbar = action_options_layout
-        action_options_layout.addWidget(QLabel("削除/解除間隔"))
+        action_options_layout.addWidget(QLabel(tr("削除/解除間隔")))
 
         self.delete_interval_input = QDoubleSpinBox()
         self.delete_interval_input.setRange(0.0, 60.0)
         self.delete_interval_input.setDecimals(1)
         self.delete_interval_input.setSingleStep(0.5)
         self.delete_interval_input.setValue(DEFAULT_ACTION_INTERVAL_SECONDS)
-        self.delete_interval_input.setSuffix(" 秒")
-        self.delete_interval_input.setToolTip("各項目の削除/解除の間に待機する秒数です。")
+        self.delete_interval_input.setSuffix(tr(" 秒"))
+        self.delete_interval_input.setToolTip(tr("各項目の削除/解除の間に待機する秒数です。"))
         action_options_layout.addWidget(self.delete_interval_input)
 
-        interval_note = QLabel("0 秒で連続実行")
+        interval_note = QLabel(tr("0 秒で連続実行"))
         action_options_layout.addWidget(interval_note)
         action_options_layout.addStretch(1)
         layout.addLayout(action_options_layout)
 
         self.table = QTableWidget(0, 9)
         self.table.setHorizontalHeaderLabels([
-            "削除",
-            "本文",
+            tr("削除"),
+            tr("本文"),
             "URL",
-            "日時",
-            "種別",
-            "いいね",
-            "返信",
-            "メディア",
-            "リプライ",
+            tr("日時"),
+            tr("種別"),
+            tr("いいね"),
+            tr("返信"),
+            tr("メディア"),
+            tr("リプライ"),
         ])
         self.table.verticalHeader().setVisible(False)
         self.table.setAlternatingRowColors(True)
@@ -521,10 +530,10 @@ class XDeleterWindow(QMainWindow):
         empty_layout = QVBoxLayout(self.empty_state)
         empty_layout.setContentsMargins(16, 56, 16, 16)
         empty_layout.addStretch()
-        self.empty_title = QLabel("まだポストがありません")
+        self.empty_title = QLabel(tr("まだポストがありません"))
         self.empty_title.setObjectName("emptyTitle")
         self.empty_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.empty_hint = QLabel("ログイン後、条件を指定してポストを収集してください。")
+        self.empty_hint = QLabel(tr("ログイン後、条件を指定してポストを収集してください。"))
         self.empty_hint.setObjectName("emptyHint")
         self.empty_hint.setWordWrap(True)
         self.empty_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -546,14 +555,14 @@ class XDeleterWindow(QMainWindow):
         self.preview_text = QTextEdit()
         self.preview_text.setReadOnly(True)
         self.preview_text.setFixedHeight(100)
-        self.preview_text.setPlaceholderText("行を選択すると本文とURLが表示されます。")
+        self.preview_text.setPlaceholderText(tr("行を選択すると本文とURLが表示されます。"))
         layout.addWidget(self.preview_text)
         self.table.itemSelectionChanged.connect(self._on_post_selected)
 
         return group
 
     def _build_log_group(self) -> QGroupBox:
-        group = QGroupBox("ログ")
+        group = QGroupBox(tr("ログ"))
         group.setCheckable(True)
         group.setChecked(False)
         layout = QVBoxLayout(group)
@@ -561,7 +570,7 @@ class XDeleterWindow(QMainWindow):
         self.log_text.setReadOnly(True)
         self.log_text.setFixedHeight(120)
         self.log_text.hide()
-        self.log_text.setPlaceholderText("ステータスメッセージがここに記録されます。")
+        self.log_text.setPlaceholderText(tr("ステータスメッセージがここに記録されます。"))
         layout.addWidget(self.log_text)
         group.toggled.connect(self._toggle_log_visibility)
         return group
@@ -576,7 +585,7 @@ class XDeleterWindow(QMainWindow):
             if (item := self.table.item(row, 0)) is not None
             and item.checkState() == Qt.CheckState.Checked
         )
-        self.selection_count.setText(f"{count} 件 / {selected} 件選択")
+        self.selection_count.setText(tr("{count} 件 / {selected} 件選択", count=count, selected=selected))
         self.empty_state.setVisible(count == 0)
 
     def _set_empty_copy(self, title: str, hint: str) -> None:
@@ -616,8 +625,8 @@ class XDeleterWindow(QMainWindow):
         self.rename_profile_button.setEnabled(can_manage)
         self.delete_profile_button.setEnabled(can_manage)
         self.login_account_label.setText(
-            f"ログイン中: @{self._last_logged_in_username}"
-            if self._login_verified and self._last_logged_in_username else "ログイン未確認"
+            tr("ログイン中: @{username}", username=self._last_logged_in_username)
+            if self._login_verified and self._last_logged_in_username else tr("ログイン未確認")
         )
         self.start_button.setEnabled(enabled)
         self.collect_button.setEnabled(enabled and self._login_verified)
@@ -638,10 +647,24 @@ class XDeleterWindow(QMainWindow):
     def _show_shortcut_help(self) -> None:
         QMessageBox.information(
             self,
-            "ショートカットキー一覧",
-            "Ctrl+Enter : 選択項目を削除/解除\n"
-            "Ctrl+R    : 検索/収集を実行\n"
-            "Ctrl+H    : このヘルプを表示",
+            tr("ショートカットキー一覧"),
+            tr(
+                "Ctrl+Enter : 選択項目を削除/解除\n"
+                "Ctrl+R    : 検索/収集を実行\n"
+                "Ctrl+H    : このヘルプを表示"
+            ),
+        )
+
+    def _on_language_changed(self, _index: int) -> None:
+        language = self.language_combo.currentData()
+        if not isinstance(language, str):
+            return
+        self._settings_manager.save_language(language)
+        # Widgets keep the current language until restart, so this notice uses the chosen one.
+        QMessageBox.information(
+            self,
+            translate("言語を変更しました", language),
+            translate("表示言語はアプリケーションの再起動後に切り替わります。", language),
         )
 
     def _on_post_selected(self) -> None:
@@ -666,23 +689,23 @@ class XDeleterWindow(QMainWindow):
             self.filter_summary.hide()
             return
         parts: list[str] = []
-        media_map = {"all": "すべて", "with_media": "画像/動画あり", "without_media": "画像/動画なし"}
-        kind_map = {"posts": "ポストのみ", "reposts": "リポストのみ", "all": "すべて"}
-        parts.append(f"メディア: {media_map.get(request.media_filter, request.media_filter)}")
-        parts.append(f"種別: {kind_map.get(request.post_kind_filter, request.post_kind_filter)}")
-        parts.append(f"最大: {request.max_posts}件")
+        media_map = {"all": tr("すべて"), "with_media": tr("画像/動画あり"), "without_media": tr("画像/動画なし")}
+        kind_map = {"posts": tr("ポストのみ"), "reposts": tr("リポストのみ"), "all": tr("すべて")}
+        parts.append(tr("メディア: {value}", value=media_map.get(request.media_filter, request.media_filter)))
+        parts.append(tr("種別: {value}", value=kind_map.get(request.post_kind_filter, request.post_kind_filter)))
+        parts.append(tr("最大: {count}件", count=request.max_posts))
         if request.min_likes > 0:
-            parts.append(f"いいね≥{request.min_likes}")
+            parts.append(tr("いいね≥{count}", count=request.min_likes))
         if request.min_replies > 0:
-            parts.append(f"返信≥{request.min_replies}")
+            parts.append(tr("返信≥{count}", count=request.min_replies))
         if request.since_date:
-            parts.append(f"{request.since_date}〜")
+            parts.append(tr("{date}〜", date=request.since_date))
         if request.until_date:
-            parts.append(f"〜{request.until_date}")
+            parts.append(tr("〜{date}", date=request.until_date))
         if request.include_keywords:
-            parts.append(f"含む: {', '.join(request.include_keywords)}")
+            parts.append(tr("含む: {keywords}", keywords=", ".join(request.include_keywords)))
         if request.exclude_keywords:
-            parts.append(f"除外: {', '.join(request.exclude_keywords)}")
+            parts.append(tr("除外: {keywords}", keywords=", ".join(request.exclude_keywords)))
         self.filter_summary.setText(" | ".join(parts))
         self.filter_summary.show()
 
@@ -691,16 +714,18 @@ class XDeleterWindow(QMainWindow):
         self.set_busy(False)
         QMessageBox.information(
             self,
-            "ログイン待ち",
-            "ブラウザが開きました。\n"
-            "X に手動でログインし、ホーム画面が表示されたら OK を押してください。",
+            tr("ログイン待ち"),
+            tr(
+                "ブラウザが開きました。\n"
+                "X に手動でログインし、ホーム画面が表示されたら OK を押してください。"
+            ),
         )
         self.check_login_requested.emit()
 
     def show_error(self, message: str) -> None:
         self._stop_pending = False
         self.set_busy(False)
-        QMessageBox.critical(self, "エラー", message)
+        QMessageBox.critical(self, tr("エラー"), message)
 
     def _handle_start_browser(self) -> None:
         if self._busy:
@@ -712,13 +737,13 @@ class XDeleterWindow(QMainWindow):
         self._browser_running = True  # Keep profile management locked even if startup partially fails.
         self._login_verified = False
         self.set_busy(True)
-        self.update_status("ブラウザを起動しています...")
+        self.update_status(tr("ブラウザを起動しています..."))
         self.start_browser_requested.emit(account_name)
 
     def _stop_browser(self) -> None:
         self._stop_pending = True
         self.set_busy(True)
-        self.update_status("処理を中断してブラウザを停止しています...")
+        self.update_status(tr("処理を中断してブラウザを停止しています..."))
         self.stop_browser_requested.emit()
 
     def on_browser_stopped(self) -> None:
@@ -731,8 +756,8 @@ class XDeleterWindow(QMainWindow):
     def _on_stop_browser_clicked(self) -> None:
         reply = QMessageBox.question(
             self,
-            "ブラウザを停止",
-            "ブラウザを停止しますか？\n進行中の操作は安全な区切りで中断されます。",
+            tr("ブラウザを停止"),
+            tr("ブラウザを停止しますか？\n進行中の操作は安全な区切りで中断されます。"),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
@@ -776,37 +801,37 @@ class XDeleterWindow(QMainWindow):
             self._stop_browser()
         else:
             self.set_busy(False)
-        self.update_status(f"アカウント '{normalized_account_name}' を選択しました。")
+        self.update_status(tr("アカウント '{name}' を選択しました。", name=normalized_account_name))
         logger.info("Switched to account: %s", normalized_account_name)
         return normalized_account_name
 
     def _rename_profile(self) -> None:
         if self._busy or self._browser_running or self._current_account in (None, DEFAULT_ACCOUNT_NAME):
             return
-        name, accepted = QInputDialog.getText(self, "名前変更", "新しいプロファイル名:")
+        name, accepted = QInputDialog.getText(self, tr("名前変更"), tr("新しいプロファイル名:"))
         if not accepted or not name.strip().removeprefix("@").strip():
             return
         new_name = normalize_account_name(name)
         if self.account_combo.findText(new_name) >= 0:
-            QMessageBox.warning(self, "名前変更", "同じ名前のプロファイルが既にあります。")
+            QMessageBox.warning(self, tr("名前変更"), tr("同じ名前のプロファイルが既にあります。"))
             return
         try:
             self._save_settings()
             self._settings_manager.rename_account(self._current_account, new_name)
         except (OSError, ValueError) as error:
-            QMessageBox.warning(self, "名前変更", str(error))
+            QMessageBox.warning(self, tr("名前変更"), str(error))
             return
         index = self.account_combo.findText(self._current_account)
         self.account_combo.setItemText(index, new_name)
         self._current_account = new_name
-        self.update_status(f"プロファイル名を '{new_name}' に変更しました。")
+        self.update_status(tr("プロファイル名を '{name}' に変更しました。", name=new_name))
 
     def _delete_profile(self) -> None:
         if self._busy or self._browser_running or self._current_account in (None, DEFAULT_ACCOUNT_NAME):
             return
         name = self._current_account
         reply = QMessageBox.question(
-            self, "プロファイル削除", f"'{name}' のログイン情報と設定を完全に削除しますか？\nXのアカウントやポストは削除されません。",
+            self, tr("プロファイル削除"), tr("'{name}' のログイン情報と設定を完全に削除しますか？\nXのアカウントやポストは削除されません。", name=name),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No,
         )
         if reply != QMessageBox.StandardButton.Yes:
@@ -814,33 +839,33 @@ class XDeleterWindow(QMainWindow):
         try:
             self._settings_manager.delete_account(name)
         except (OSError, ValueError) as error:
-            QMessageBox.warning(self, "プロファイル削除", str(error))
+            QMessageBox.warning(self, tr("プロファイル削除"), str(error))
             return
         self.account_combo.removeItem(self.account_combo.findText(name))
         self._current_account = None  # Do not save the deleted account during switching.
         self._change_current_account(DEFAULT_ACCOUNT_NAME, load_settings=True)
         self._save_settings()
-        self.update_status(f"プロファイル '{name}' を削除しました。")
+        self.update_status(tr("プロファイル '{name}' を削除しました。", name=name))
 
     def _add_profile(self) -> None:
         if self._busy:
             return
-        name, accepted = QInputDialog.getText(self, "プロファイル追加", "新しいプロファイル名:")
+        name, accepted = QInputDialog.getText(self, tr("プロファイル追加"), tr("新しいプロファイル名:"))
         if not accepted or self._busy:
             return
         if not name.strip().removeprefix("@").strip():
-            QMessageBox.warning(self, "プロファイル追加", "プロファイル名を入力してください。")
+            QMessageBox.warning(self, tr("プロファイル追加"), tr("プロファイル名を入力してください。"))
             return
         account_name = normalize_account_name(name)
         if self.account_combo.findText(account_name) >= 0 or account_name in self._settings_manager.list_accounts():
-            QMessageBox.warning(self, "プロファイル追加", "同じ名前のプロファイルが既にあります。")
+            QMessageBox.warning(self, tr("プロファイル追加"), tr("同じ名前のプロファイルが既にあります。"))
             return
 
         try:
             get_account_profile_dir(account_name)
         except OSError as error:
             logger.exception("Failed to create profile for %s", account_name)
-            QMessageBox.warning(self, "プロファイル追加", f"プロファイルを作成できませんでした: {error}")
+            QMessageBox.warning(self, tr("プロファイル追加"), tr("プロファイルを作成できませんでした: {error}", error=error))
             return
 
         # Initialize every setting so legacy unprefixed settings cannot leak into a new profile.
@@ -849,7 +874,7 @@ class XDeleterWindow(QMainWindow):
         )
         self._change_current_account(account_name, load_settings=True)
         self._save_settings()
-        self.update_status(f"プロファイル '{account_name}' を追加しました。ブラウザを起動してログインしてください。")
+        self.update_status(tr("プロファイル '{name}' を追加しました。ブラウザを起動してログインしてください。", name=account_name))
 
     def _on_account_index_activated(self, index: int) -> None:
         self._change_current_account(self.account_combo.itemText(index), load_settings=True)
@@ -959,11 +984,15 @@ class XDeleterWindow(QMainWindow):
 
         result = QMessageBox.question(
             self,
-            "アカウント不一致",
-            "現在ログイン中のアカウントと入力された対象アカウントが一致していません。\n"
-            f"ログイン中: @{self._last_logged_in_username}\n"
-            f"入力値: @{input_username}\n\n"
-            "このまま実行すると削除/解除に失敗する可能性があります。続行しますか？",
+            tr("アカウント不一致"),
+            tr(
+                "現在ログイン中のアカウントと入力された対象アカウントが一致していません。\n"
+                "ログイン中: @{logged_in}\n"
+                "入力値: @{entered}\n\n"
+                "このまま実行すると削除/解除に失敗する可能性があります。続行しますか？",
+                logged_in=self._last_logged_in_username,
+                entered=input_username,
+            ),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
@@ -985,7 +1014,7 @@ class XDeleterWindow(QMainWindow):
         input_username = self._normalized_username_input()
         if not input_username:
             self.username_input.setText(current_username)
-            self.update_status(f"ログイン確認済み: @{current_username}")
+            self.update_status(tr("ログイン確認済み: @{username}", username=current_username))
             return
 
         if input_username.casefold() != current_username.casefold():
@@ -996,11 +1025,15 @@ class XDeleterWindow(QMainWindow):
             )
             QMessageBox.warning(
                 self,
-                "アカウント不一致",
-                "現在ログイン中のアカウントと入力された対象アカウントが一致していません。\n"
-                f"ログイン中: @{current_username}\n"
-                f"入力値: @{input_username}\n\n"
-                "必要に応じて対象アカウントを修正してください。",
+                tr("アカウント不一致"),
+                tr(
+                    "現在ログイン中のアカウントと入力された対象アカウントが一致していません。\n"
+                    "ログイン中: @{logged_in}\n"
+                    "入力値: @{entered}\n\n"
+                    "必要に応じて対象アカウントを修正してください。",
+                    logged_in=current_username,
+                    entered=input_username,
+                ),
             )
 
     def _toggle_since_date(self, checked: bool) -> None:
@@ -1016,7 +1049,7 @@ class XDeleterWindow(QMainWindow):
         self._commit_typed_account(load_settings=False)
 
         if not self._login_verified:
-            QMessageBox.information(self, "ログイン確認が必要", "先にブラウザを起動してログインを確認してください。")
+            QMessageBox.information(self, tr("ログイン確認が必要"), tr("先にブラウザを起動してログインを確認してください。"))
             return
 
         if self.since_date_checkbox.isChecked() and self.until_date_checkbox.isChecked():
@@ -1027,8 +1060,8 @@ class XDeleterWindow(QMainWindow):
             if since > until:
                 QMessageBox.warning(
                     self,
-                    "日付範囲エラー",
-                    "開始日が終了日より後の日付になっています。\n正しい範囲を指定してください。",
+                    tr("日付範囲エラー"),
+                    tr("開始日が終了日より後の日付になっています。\n正しい範囲を指定してください。"),
                 )
                 return
 
@@ -1061,13 +1094,13 @@ class XDeleterWindow(QMainWindow):
             request.validate()
         except ValueError as error:
             logger.warning("Collect request validation failed: %s", error)
-            QMessageBox.warning(self, "入力エラー", str(error))
+            QMessageBox.warning(self, tr("入力エラー"), str(error))
             return
 
         self._clear_posts()
         self.set_busy(True)
         self.show_progress(0, 0)
-        self.update_status("対象を収集しています...")
+        self.update_status(tr("対象を収集しています..."))
         self._last_collect_request = request
         self._update_filter_summary(request)
         self._save_settings()
@@ -1084,14 +1117,14 @@ class XDeleterWindow(QMainWindow):
         self.table_manager.display_posts(posts)
         if not posts:
             self._set_empty_copy(
-                "条件に一致するポストはありませんでした",
-                "期間やフィルタを広げて、もう一度収集してください。",
+                tr("条件に一致するポストはありませんでした"),
+                tr("期間やフィルタを広げて、もう一度収集してください。"),
             )
         self.hide_progress()
         self._update_filter_summary(self._last_collect_request)
 
     def on_collection_progress(self, scanned: int, current: int, total: int) -> None:
-        self.update_status(f"対象を収集中: {scanned} 件走査済み ({current}/{total})")
+        self.update_status(tr("対象を収集中: {scanned} 件走査済み ({current}/{total})", scanned=scanned, current=current, total=total))
         self.show_progress(current, total)
 
     def _handle_export_following(self) -> None:
@@ -1099,17 +1132,17 @@ class XDeleterWindow(QMainWindow):
             return
         self._commit_typed_account(load_settings=False)
         if not self._login_verified:
-            QMessageBox.information(self, "ログイン確認が必要", "先にブラウザを起動してログインを確認してください。")
+            QMessageBox.information(self, tr("ログイン確認が必要"), tr("先にブラウザを起動してログインを確認してください。"))
             return
 
         username = self._normalized_username_input()
         if not USERNAME_PATTERN.fullmatch(username):
-            QMessageBox.warning(self, "入力エラー", "X アカウントIDを入力してください（英数字とアンダースコア、15文字まで）。")
+            QMessageBox.warning(self, tr("入力エラー"), tr("X アカウントIDを入力してください（英数字とアンダースコア、15文字まで）。"))
             return
         default_path = Path.home() / f"following-{username}-{date.today():%Y%m%d}.csv"
         path_text, _selected_filter = QFileDialog.getSaveFileName(
             self,
-            "フォローリストの保存先",
+            tr("フォローリストの保存先"),
             str(default_path),
             "CSV (*.csv);;JSON (*.json)",
         )
@@ -1123,23 +1156,23 @@ class XDeleterWindow(QMainWindow):
         try:
             request.validate()
         except ValueError as error:
-            QMessageBox.warning(self, "入力エラー", str(error))
+            QMessageBox.warning(self, tr("入力エラー"), str(error))
             return
 
         self.set_busy(True)
         self.show_progress(0, 0)
-        self.update_status(f"@{username} のフォローリストを取得しています...")
+        self.update_status(tr("@{username} のフォローリストを取得しています...", username=username))
         self.export_following_requested.emit(request)
 
     def on_following_progress(self, count: int) -> None:
-        self.update_status(f"フォローリストを取得中: {count} 件")
+        self.update_status(tr("フォローリストを取得中: {count} 件", count=count))
 
     def on_following_export_finished(self, path: str, count: int) -> None:
         self.set_busy(False)
         if not path:
             return
-        self.update_status(f"フォローリスト {count} 件を保存しました: {path}")
-        QMessageBox.information(self, "エクスポート完了", f"{count} 件のフォローを保存しました。\n{path}")
+        self.update_status(tr("フォローリスト {count} 件を保存しました: {path}", count=count, path=path))
+        QMessageBox.information(self, tr("エクスポート完了"), tr("{count} 件のフォローを保存しました。\n{path}", count=count, path=path))
 
     def _clear_posts(self) -> None:
         self.table_manager.clear()
@@ -1155,11 +1188,11 @@ class XDeleterWindow(QMainWindow):
         if self._busy:
             return
         if not self._login_verified:
-            QMessageBox.information(self, "ログイン確認が必要", "現在のアカウントでログインを確認してください。")
+            QMessageBox.information(self, tr("ログイン確認が必要"), tr("現在のアカウントでログインを確認してください。"))
             return
         targets = self._selected_targets()
         if not targets:
-            QMessageBox.information(self, "情報", "実行対象が選択されていません。")
+            QMessageBox.information(self, tr("情報"), tr("実行対象が選択されていません。"))
             return
         if not self._confirm_account_match():
             logger.info("GUI: Execution cancelled due to account mismatch warning.")
@@ -1169,16 +1202,20 @@ class XDeleterWindow(QMainWindow):
         unrepost_count = sum(1 for target in targets if target.is_repost)
         operations: list[str] = []
         if delete_count > 0:
-            operations.append(f"ポスト削除 {delete_count} 件")
+            operations.append(tr("ポスト削除 {count} 件", count=delete_count))
         if unrepost_count > 0:
-            operations.append(f"リポスト解除 {unrepost_count} 件")
+            operations.append(tr("リポスト解除 {count} 件", count=unrepost_count))
 
         summary = " / ".join(operations)
 
         result = QMessageBox.question(
             self,
-            "確認",
-            f"選択された {len(targets)} 件の項目に対して、{summary} を実行しますか？\n（この操作は元に戻せません）",
+            tr("確認"),
+            tr(
+                "選択された {count} 件の項目に対して、{summary} を実行しますか？\n（この操作は元に戻せません）",
+                count=len(targets),
+                summary=summary,
+            ),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
@@ -1194,10 +1231,10 @@ class XDeleterWindow(QMainWindow):
             request.validate()
         except ValueError as error:
             logger.warning("Execute request validation failed: %s", error)
-            QMessageBox.warning(self, "入力エラー", str(error))
+            QMessageBox.warning(self, tr("入力エラー"), str(error))
             return
 
-        self._submit_delete(request, "削除/解除処理を実行しています...")
+        self._submit_delete(request, tr("削除/解除処理を実行しています..."))
 
     def _submit_delete(self, request: ExecuteActionsRequest, status: str) -> None:
         self._requested_action_count = len(request.targets)
@@ -1207,7 +1244,7 @@ class XDeleterWindow(QMainWindow):
         self.delete_requested.emit(request)
 
     def on_delete_progress(self, action_label: str, url: str, current: int, total: int) -> None:
-        self.update_status(f"{action_label}中 ({current}/{total}): {url}")
+        self.update_status(tr("{action}中 ({current}/{total}): {url}", action=action_label, current=current, total=total, url=url))
         self.show_progress(current, total)
 
     def on_delete_done(self, results: list[PostActionResult]) -> None:
@@ -1218,33 +1255,33 @@ class XDeleterWindow(QMainWindow):
         remove_successful_rows(self.table, results)
         if self.table.rowCount() == 0 and success_count > 0:
             self._set_empty_copy(
-                "選択した項目をすべて処理しました",
-                "続けて整理する場合は、条件を指定してもう一度収集してください。",
+                tr("選択した項目をすべて処理しました"),
+                tr("続けて整理する場合は、条件を指定してもう一度収集してください。"),
             )
         stopped = self._stop_pending
         self.set_busy(False)
-        heading = "削除/解除処理を中止" if stopped else "削除/解除処理完了"
-        message = f"{heading}: {success_count} / {requested} 件成功"
-        notes = [f"{len(failures)} 件失敗"] if failures else []
+        heading = tr("削除/解除処理を中止") if stopped else tr("削除/解除処理完了")
+        message = tr("{heading}: {success} / {requested} 件成功", heading=heading, success=success_count, requested=requested)
+        notes = [tr("{count} 件失敗", count=len(failures))] if failures else []
         if skipped > 0:
-            notes.append(f"{skipped} 件未処理")
+            notes.append(tr("{count} 件未処理", count=skipped))
         if notes:
-            message += f"（{'、'.join(notes)}）"
+            message += tr("（{notes}）", notes=tr("、").join(notes))
         self.update_status(message)
         if stopped:
             # The stop dialog already had the user's attention; report in the status line.
             return
         if not failures:
-            QMessageBox.information(self, "完了", message)
+            QMessageBox.information(self, tr("完了"), message)
             return
 
         box = QMessageBox(self)
         box.setIcon(QMessageBox.Icon.Warning)
-        box.setWindowTitle("一部失敗")
+        box.setWindowTitle(tr("一部失敗"))
         box.setText(message)
-        box.setInformativeText("失敗した項目の詳細を確認し、失敗分だけ再試行できます。")
+        box.setInformativeText(tr("失敗した項目の詳細を確認し、失敗分だけ再試行できます。"))
         box.setDetailedText(format_action_failures(failures))
-        retry_button = box.addButton("失敗分だけ再試行", QMessageBox.ButtonRole.AcceptRole)
+        retry_button = box.addButton(tr("失敗分だけ再試行"), QMessageBox.ButtonRole.AcceptRole)
         box.addButton(QMessageBox.StandardButton.Close)
         box.exec()
 
@@ -1255,7 +1292,7 @@ class XDeleterWindow(QMainWindow):
         # Same guards as the delete button: the target field may have changed
         # while the result dialog was open, or the browser may have stopped.
         if self._busy or not self._login_verified:
-            QMessageBox.information(self, "ログイン確認が必要", "現在のアカウントでログインを確認してください。")
+            QMessageBox.information(self, tr("ログイン確認が必要"), tr("現在のアカウントでログインを確認してください。"))
             return
         if not self._confirm_account_match():
             logger.info("GUI: Retry cancelled due to account mismatch warning.")
@@ -1265,16 +1302,16 @@ class XDeleterWindow(QMainWindow):
             targets=[result.target for result in failures],
             interval_seconds=self.delete_interval_input.value(),
         )
-        self._submit_delete(retry_request, "失敗分を再試行しています...")
+        self._submit_delete(retry_request, tr("失敗分を再試行しています..."))
 
     def closeEvent(self, event: QCloseEvent) -> None:
-        question = "アプリケーションを終了しますか？"
+        question = tr("アプリケーションを終了しますか？")
         if self._busy:
-            question = "処理中ですがアプリケーションを終了しますか？"
+            question = tr("処理中ですがアプリケーションを終了しますか？")
 
         result = QMessageBox.question(
             self,
-            "終了",
+            tr("終了"),
             question,
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,

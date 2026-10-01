@@ -6,6 +6,7 @@ from playwright.sync_api import Locator, Page, Request
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
 from kusamushiri.browser import NAVIGATION_TIMEOUT_MS, find_first_visible_locator
+from kusamushiri.i18n import tr
 from kusamushiri.logger import logger
 from kusamushiri.models import PostActionResult, PostActionTarget
 from kusamushiri.parsing import extract_post_id
@@ -74,9 +75,9 @@ def _mutation_error(requests: list[Request], mutation_name: str) -> str | None:
     for request in requests:
         response = request.response()
         if response is None:
-            return f"{mutation_name} の通信に失敗しました: {request.failure or '応答なし'}"
+            return tr("{mutation} の通信に失敗しました: {detail}", mutation=mutation_name, detail=request.failure or tr("応答なし"))
         if response.status >= 400:
-            return f"{mutation_name} がエラーを返しました (HTTP {response.status})。"
+            return tr("{mutation} がエラーを返しました (HTTP {status})。", mutation=mutation_name, status=response.status)
         try:
             body = response.json()
         except Exception as error:
@@ -86,7 +87,7 @@ def _mutation_error(requests: list[Request], mutation_name: str) -> str | None:
         if errors:
             first = errors[0] if isinstance(errors, list) else errors
             detail = first.get("message") if isinstance(first, dict) else first
-            return f"{mutation_name} がエラーを返しました: {detail}"
+            return tr("{mutation} がエラーを返しました: {detail}", mutation=mutation_name, detail=detail)
     return None
 
 
@@ -118,7 +119,7 @@ def _target_article(page: Page, post_url: str) -> Locator:
         or not re.fullmatch(r"[0-9]+", post_id)
         or not re.fullmatch(r"/[A-Za-z0-9_]+/status/[0-9]+(?:/[^?#]*)?", parsed.path)
     ):
-        raise ValueError("操作対象のポストIDをURLから確認できませんでした。")
+        raise ValueError(tr("操作対象のポストIDをURLから確認できませんでした。"))
 
     href_path = "@href"
     for delimiter in ("?", "#"):
@@ -151,7 +152,7 @@ def execute_post_action(
     target: PostActionTarget,
     find_locator: LocatorFinder = find_first_visible_locator,
 ) -> PostActionResult:
-    action_label = "リポスト解除" if target.is_repost else "ポスト削除"
+    action_label = tr("リポスト解除") if target.is_repost else tr("ポスト削除")
     if target.is_repost:
         success, error_message = undo_repost(page, target.url, find_locator)
     else:
@@ -189,7 +190,7 @@ def undo_repost(
             (_own_control('unretweet'),),
         )
         if unrepost_button is None:
-            message = "リポスト解除ボタンが見つかりませんでした。"
+            message = tr("リポスト解除ボタンが見つかりませんでした。")
             logger.warning("%s URL=%s", message, post_url)
             return False, message
 
@@ -203,7 +204,7 @@ def undo_repost(
 
         confirm_button = find_locator(page, UNREPOST_CONFIRM_SELECTORS)
         if confirm_button is None:
-            message = "リポスト解除の確認ボタンが見つかりませんでした。"
+            message = tr("リポスト解除の確認ボタンが見つかりませんでした。")
             logger.warning("%s URL=%s", message, post_url)
             return False, message
 
@@ -239,7 +240,7 @@ def delete_post(
 ) -> tuple[bool, str | None]:
     """指定されたポストのURLに直接アクセスし、削除操作を行う"""
     logger.info("Initiating delete for: %s", post_url)
-    stage = "対象ポストの読み込み"
+    stage = tr("対象ポストの読み込み")
     mutation_requests: list[Request] = []
 
     def record_mutation(request: Request) -> None:
@@ -252,7 +253,7 @@ def delete_post(
         page.goto(post_url, timeout=NAVIGATION_TIMEOUT_MS)
 
         main_tweet_article.wait_for(state="visible", timeout=NAVIGATION_TIMEOUT_MS)
-        stage = "「…」メニューボタンの表示待ち"
+        stage = tr("「…」メニューボタンの表示待ち")
         main_tweet_article.locator(_own_control('caret')).wait_for(
             state="visible", timeout=ACTION_STATE_TIMEOUT_MS
         )
@@ -262,13 +263,13 @@ def delete_post(
         )
 
         if menu_btn is None:
-            message = "削除メニューが見つかりませんでした。"
+            message = tr("削除メニューが見つかりませんでした。")
             logger.warning("%s URL=%s", message, post_url)
             return False, message
 
         article_element = main_tweet_article.element_handle()
         menu_btn.click()
-        stage = "削除メニュー項目の表示待ち"
+        stage = tr("削除メニュー項目の表示待ち")
         # The dropdown container can appear before its menu items are rendered.
         # Wait for a positively identified delete action, never a generic menu item.
         try:
@@ -278,18 +279,18 @@ def delete_post(
                 timeout=ACTION_STATE_TIMEOUT_MS,
             )
         except PlaywrightTimeoutError:
-            message = "削除メニュー項目が見つかりませんでした。自分のポストではない可能性があります。"
+            message = tr("削除メニュー項目が見つかりませんでした。自分のポストではない可能性があります。")
             logger.warning("%s URL=%s", message, post_url)
             return False, message
 
         delete_menu_item = find_locator(page, DELETE_MENU_ITEM_SELECTORS)
 
         if delete_menu_item is None:
-            message = "削除メニュー項目が見つかりませんでした。自分のポストではない可能性があります。"
+            message = tr("削除メニュー項目が見つかりませんでした。自分のポストではない可能性があります。")
             logger.warning("%s URL=%s", message, post_url)
             return False, message
 
-        stage = "削除確認画面の表示"
+        stage = tr("削除確認画面の表示")
         delete_menu_item.click()
         page.wait_for_selector(
             DELETE_CONFIRM_SELECTOR,
@@ -302,7 +303,7 @@ def delete_post(
             (DELETE_CONFIRM_SELECTOR,),
         )
         if confirm_btn is not None:
-            stage = "削除確定後の完了確認（結果不明。再試行前にXで確認してください）"
+            stage = tr("削除確定後の完了確認（結果不明。再試行前にXで確認してください）")
             page.on("request", record_mutation)
             listening = True
             confirm_btn.click()
@@ -321,7 +322,7 @@ def delete_post(
             logger.info("Successfully deleted post: %s", post_url)
             return True, None
 
-        message = "削除確認ボタンが見つかりませんでした。"
+        message = tr("削除確認ボタンが見つかりませんでした。")
         logger.warning("%s URL=%s", message, post_url)
         return False, message
 

@@ -4,6 +4,7 @@ from datetime import datetime
 from PySide6.QtCore import QEvent, QObject, Qt
 from PySide6.QtWidgets import QPushButton, QTableWidget, QTableWidgetItem
 
+from kusamushiri.i18n import tr
 from kusamushiri.models import PostActionTarget, PostRecord
 
 TEXT_COLUMN = 1
@@ -99,7 +100,7 @@ class PostTableManager(QObject):
             date_item = QTableWidgetItem(formatted)
             self.table.setItem(row_index, 3, date_item)
 
-            kind_item = QTableWidgetItem("リポスト" if post.is_repost else "ポスト")
+            kind_item = QTableWidgetItem(tr("リポスト") if post.is_repost else tr("ポスト"))
             kind_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             self.table.setItem(row_index, 4, kind_item)
 
@@ -113,11 +114,11 @@ class PostTableManager(QObject):
             replies_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             self.table.setItem(row_index, 6, replies_item)
 
-            media_item = QTableWidgetItem("あり" if post.has_media else "-")
+            media_item = QTableWidgetItem(tr("あり") if post.has_media else "-")
             media_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             self.table.setItem(row_index, 7, media_item)
 
-            reply_item = QTableWidgetItem("はい" if post.is_reply else "-")
+            reply_item = QTableWidgetItem(tr("はい") if post.is_reply else "-")
             reply_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             self.table.setItem(row_index, 8, reply_item)
 
@@ -127,7 +128,7 @@ class PostTableManager(QObject):
         if self._on_busy:
             self._on_busy(False)
         if self._on_status_update:
-            self._on_status_update(f"収集完了: {len(posts)} 件の対象を取得しました。")
+            self._on_status_update(tr("収集完了: {count} 件の対象を取得しました。", count=len(posts)))
 
     def clear(self) -> None:
         """Clear all rows from the table."""
