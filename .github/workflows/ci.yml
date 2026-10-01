@@ -2,10 +2,16 @@ name: CI
 
 on:
   push:
+    branches: [main]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   quality:
@@ -19,11 +25,25 @@ jobs:
         with:
           enable-cache: true
 
-      - name: Install Qt system libraries
-        run: sudo apt-get update && sudo apt-get install -y libegl1 libgl1 libxkbcommon0 libfontconfig1
-
       - name: Install dependencies
         run: uv sync --locked
+
+      # The runner's apt mirror is slow (~170 kB/s), so keep downloaded .deb files between runs.
+      - name: Restore apt package cache
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/apt-archives
+          key: apt-${{ runner.os }}-${{ hashFiles('.github/workflows/ci.yml', 'uv.lock') }}
+          restore-keys: apt-${{ runner.os }}-
+
+      - name: Install Qt and browser system libraries
+        run: |
+          mkdir -p ~/.cache/apt-archives/partial
+          echo "Dir::Cache::Archives \"$HOME/.cache/apt-archives/\";" | sudo tee /etc/apt/apt.conf.d/99ci-archives
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libgl1 libxkbcommon0 libfontconfig1
+          uv run playwright install-deps chromium
+          sudo chown -R "$USER" ~/.cache/apt-archives
 
       - name: Lint
         run: uv run ruff check
@@ -32,7 +52,7 @@ jobs:
         run: uv run pyright
 
       - name: Install browser for offline DOM regressions
-        run: uv run playwright install --with-deps chromium
+        run: uv run playwright install chromium
 
       - name: Run tests
         run: uv run pytest -q
