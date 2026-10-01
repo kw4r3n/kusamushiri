@@ -42,7 +42,7 @@ jobs:
           echo "Dir::Cache::Archives \"$HOME/.cache/apt-archives/\";" | sudo tee /etc/apt/apt.conf.d/99ci-archives
           sudo apt-get update
           sudo apt-get install -y libegl1 libgl1 libxkbcommon0 libfontconfig1
-          uv run playwright install-deps chromium-headless-shell
+          uv run playwright install-deps chromium
           sudo chown -R "$USER" ~/.cache/apt-archives
 
       - name: Lint
@@ -52,7 +52,7 @@ jobs:
         run: uv run pyright
 
       - name: Install browser for offline DOM regressions
-        run: uv run playwright install --only-shell chromium
+        run: uv run playwright install chromium
 
       - name: Run tests
         run: uv run pytest -q
