@@ -12,6 +12,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - English user interface. Choose 日本語 or English from the language menu at the bottom of the
   window; the choice is saved and applied after a restart. Japanese remains the default.
 - Save the checked posts to CSV or JSON (text, URL, date, counts) as a record before deleting.
+- Load posts from an X data archive (zip or extracted folder) instead of searching, so old posts
+  that search misses can be deleted too. The current filters apply; reposts in the archive are skipped.
 
 ## [0.3.0] - 2026-10-01
 

@@ -27,6 +27,7 @@ Qt (PySide6) list before anything is deleted**.
 - Delete regular posts and undo reposts
 - Preview the collected list and post text; run only the rows you check
 - Save the checked posts to CSV or JSON as a record before deleting them
+- Load posts from your X data archive to reach old posts that search misses
 - Adjustable interval between actions, stop at any time, retry only failed items
 - Multiple accounts via separate browser profiles
 - Export an account's following list to CSV (Excel-ready) or JSON

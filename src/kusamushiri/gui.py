@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import date, datetime
 from pathlib import Path
 
@@ -31,6 +32,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from kusamushiri.archive import ArchiveError, filter_archive_posts, load_archive_posts
 from kusamushiri.exporting import EXPORT_SUFFIXES, write_post_list
 from kusamushiri.follows import ExportFollowingRequest
 from kusamushiri.gui_table import URL_COLUMN_WIDTH, PostTableManager
@@ -440,6 +442,12 @@ class XDeleterWindow(QMainWindow):
 
         self.collect_button = QPushButton(tr("ポストを収集＆プレビュー"))
         self.collect_button.clicked.connect(self._handle_collect)
+        self.import_archive_button = QPushButton(tr("X のアーカイブから読み込み"))
+        self.import_archive_button.setObjectName("secondaryButton")
+        self.import_archive_button.setToolTip(
+            tr("X の「データのアーカイブ」(zip) からポストを読み込み、上の条件で絞り込みます。検索で見つからない古いポストも対象にできます。")
+        )
+        self.import_archive_button.clicked.connect(self._handle_import_archive)
 
         layout.addWidget(QLabel(tr("メディア条件")), 0, 0, 1, 2)
         layout.addWidget(self.media_filter_combo, 1, 0, 1, 2)
@@ -459,6 +467,7 @@ class XDeleterWindow(QMainWindow):
         layout.addWidget(QLabel(tr("除外キーワード")), 11, 0, 1, 2)
         layout.addWidget(self.exclude_keywords_input, 12, 0, 1, 2)
         layout.addWidget(self.collect_button, 13, 0, 1, 2)
+        layout.addWidget(self.import_archive_button, 14, 0, 1, 2)
         layout.setContentsMargins(0, 12, 0, 0)
         layout.setColumnStretch(0, 1)
         layout.setColumnStretch(1, 1)
@@ -636,6 +645,7 @@ class XDeleterWindow(QMainWindow):
         )
         self.start_button.setEnabled(enabled)
         self.collect_button.setEnabled(enabled and self._login_verified)
+        self.import_archive_button.setEnabled(enabled)
         self.export_following_button.setEnabled(enabled and self._login_verified)
         self.delete_button.setEnabled(enabled and self._login_verified and self.table.rowCount() > 0)
         self.delete_interval_input.setEnabled(enabled)
@@ -1059,6 +1069,21 @@ class XDeleterWindow(QMainWindow):
             QMessageBox.information(self, tr("ログイン確認が必要"), tr("先にブラウザを起動してログインを確認してください。"))
             return
 
+        request = self._build_collect_request()
+        if request is None:
+            return
+
+        self._clear_posts()
+        self.set_busy(True)
+        self.show_progress(0, 0)
+        self.update_status(tr("対象を収集しています..."))
+        self._last_collect_request = request
+        self._update_filter_summary(request)
+        self._save_settings()
+        self.collect_requested.emit(request)
+
+    def _build_collect_request(self) -> CollectRequest | None:
+        """Read the filter inputs; show a warning and return None when they are invalid."""
         if self.since_date_checkbox.isChecked() and self.until_date_checkbox.isChecked():
             since_qdate = self.since_date_input.date()
             until_qdate = self.until_date_input.date()
@@ -1070,7 +1095,7 @@ class XDeleterWindow(QMainWindow):
                     tr("日付範囲エラー"),
                     tr("開始日が終了日より後の日付になっています。\n正しい範囲を指定してください。"),
                 )
-                return
+                return None
 
         since_date: date | None = None
         if self.since_date_checkbox.isChecked():
@@ -1102,16 +1127,56 @@ class XDeleterWindow(QMainWindow):
         except ValueError as error:
             logger.warning("Collect request validation failed: %s", error)
             QMessageBox.warning(self, tr("入力エラー"), str(error))
+            return None
+        return request
+
+    def _handle_import_archive(self) -> None:
+        if self._busy:
+            return
+        logger.info("GUI: Import archive button clicked.")
+        self._commit_typed_account(load_settings=False)
+        request = self._build_collect_request()
+        if request is None:
+            return
+        path_text, _selected_filter = QFileDialog.getOpenFileName(
+            self,
+            tr("X のアーカイブを選択"),
+            str(Path.home()),
+            tr("X のアーカイブ (*.zip tweets.js tweets-part*.js tweet.js)"),
+        )
+        if not path_text:
+            return
+        archive_path = Path(path_text)
+        # A picked tweets.js stands for the extracted archive folder around it.
+        if archive_path.suffix.lower() == ".js":
+            archive_path = archive_path.parent
+        try:
+            posts = load_archive_posts(archive_path, fallback_username=request.username)
+        except ArchiveError as error:
+            logger.warning("Archive import failed: %s", error)
+            QMessageBox.warning(
+                self, tr("読み込みエラー"), tr("アーカイブを読み込めませんでした: {error}", error=error)
+            )
             return
 
-        self._clear_posts()
-        self.set_busy(True)
-        self.show_progress(0, 0)
-        self.update_status(tr("対象を収集しています..."))
+        # Archive reposts carry the repost's own ID, not the original post's, so they cannot be undone by URL.
+        # Archives have no reply counts either, so the minimum-replies filter is not applied.
+        reposts = sum(1 for post in posts if post.is_repost)
+        matched = filter_archive_posts(
+            (post for post in posts if not post.is_repost), replace(request, min_replies=0)
+        )[: request.max_posts]
+
         self._last_collect_request = request
-        self._update_filter_summary(request)
         self._save_settings()
-        self.collect_requested.emit(request)
+        self.display_posts(matched)
+        self.update_status(
+            tr(
+                "アーカイブから {count} 件を読み込みました（全 {total} 件、リポスト {reposts} 件は対象外）。",
+                count=len(matched),
+                total=len(posts),
+                reposts=reposts,
+            )
+        )
 
     def _start_search(self) -> None:
         if self._busy:

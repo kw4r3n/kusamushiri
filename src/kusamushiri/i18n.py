@@ -278,6 +278,19 @@ ENGLISH: Final[dict[str, str]] = {
         "post_kind_filter must be posts, reposts or all."
     ),
     "保存先の拡張子は .csv または .json を指定してください。": "The file extension must be .csv or .json.",
+    # Archive import
+    "X のアーカイブから読み込み": "Load from X archive",
+    "X の「データのアーカイブ」(zip) からポストを読み込み、上の条件で絞り込みます。検索で見つからない古いポストも対象にできます。": (
+        "Loads posts from your X data archive (zip) and filters them with the conditions above. "
+        "This includes old posts that search cannot find."
+    ),
+    "X のアーカイブを選択": "Choose your X archive",
+    "X のアーカイブ (*.zip tweets.js tweets-part*.js tweet.js)": "X archive (*.zip tweets.js tweets-part*.js tweet.js)",
+    "読み込みエラー": "Load error",
+    "アーカイブを読み込めませんでした: {error}": "Could not read the archive: {error}",
+    "アーカイブから {count} 件を読み込みました（全 {total} 件、リポスト {reposts} 件は対象外）。": (
+        "Loaded {count} posts from the archive ({total} in total; {reposts} reposts are not included)."
+    ),
     # Post export
     "選択項目を保存": "Save selected",
     "チェックした項目の本文や URL を CSV（または JSON）で保存します。削除前の控えに使えます。": (

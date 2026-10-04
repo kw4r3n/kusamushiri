@@ -7,6 +7,7 @@ use qtbot.add_widget() due to PySide6 6.9.x offscreen teardown hangs.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -871,3 +872,51 @@ def test_export_posts_cancelled_dialog_writes_nothing(window, qtbot, monkeypatch
     window.export_posts_button.click()
 
     assert list(tmp_path.glob("*.csv")) == []
+
+
+def _write_archive(folder: Path) -> None:
+    data = folder / "data"
+    data.mkdir(parents=True)
+    tweets = [
+        {"tweet": {"id_str": "10", "created_at": "Wed Oct 10 20:19:24 +0000 2018", "full_text": "old post",
+                   "favorite_count": "2", "retweet_count": "0"}},
+        {"tweet": {"id_str": "11", "created_at": "Thu Oct 11 20:19:24 +0000 2018", "full_text": "RT @bob: hi",
+                   "favorite_count": "0", "retweet_count": "0"}},
+        {"tweet": {"id_str": "12", "created_at": "Fri Oct 12 20:19:24 +0000 2018", "full_text": "keep me",
+                   "favorite_count": "0", "retweet_count": "0"}},
+    ]
+    (data / "tweets.js").write_text("window.YTD.tweets.part0 = " + json.dumps(tweets), encoding="utf-8")
+
+
+def test_import_archive_filters_and_skips_reposts(window, qtbot, monkeypatch, tmp_path) -> None:
+    _write_archive(tmp_path)
+    window.username_input.setText("alice")
+    window.exclude_keywords_input.setText("keep")
+    window.min_replies_input.setValue(5)
+    monkeypatch.setattr(
+        "kusamushiri.gui.QFileDialog.getOpenFileName",
+        lambda *args: (str(tmp_path / "data" / "tweets.js"), ""),
+    )
+    assert window.import_archive_button.isEnabled()
+
+    window.import_archive_button.click()
+
+    assert window.table.rowCount() == 1
+    url_item = window.table.item(0, 2)
+    assert url_item is not None
+    assert url_item.text() == "https://x.com/alice/status/10"
+    assert "リポスト 1 件" in window.status_label.text()
+
+
+def test_import_archive_reports_unreadable_archive(window, qtbot, monkeypatch, tmp_path) -> None:
+    window.username_input.setText("alice")
+    broken = tmp_path / "broken.zip"
+    broken.write_bytes(b"not a zip")
+    monkeypatch.setattr("kusamushiri.gui.QFileDialog.getOpenFileName", lambda *args: (str(broken), ""))
+    warnings: list[object] = []
+    monkeypatch.setattr("kusamushiri.gui.QMessageBox.warning", lambda *args: warnings.append(args))
+
+    window.import_archive_button.click()
+
+    assert len(warnings) == 1
+    assert window.table.rowCount() == 0
