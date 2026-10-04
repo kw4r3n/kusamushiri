@@ -15,7 +15,9 @@ from PySide6.QtCore import QSettings, Qt
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import QApplication, QMessageBox
 
+from kusamushiri.follows import FollowRecord, UnfollowRequest, UnfollowResult
 from kusamushiri.gui import XDeleterWindow, format_action_failures, remove_successful_rows
+from kusamushiri.gui_follows import FollowListDialog
 from kusamushiri.models import CollectRequest, ExecuteActionsRequest, PostActionResult, PostActionTarget, PostRecord
 from kusamushiri.paths import list_saved_accounts
 from kusamushiri.settings import AccountSettingsManager
@@ -979,3 +981,142 @@ def test_liked_posts_show_kind_and_unlike_summary(
         [PostActionResult(emitted_requests[0].targets[0], "いいね取り消し", True, None)],
     )
     assert window.table.rowCount() == 1
+def _follows() -> list[FollowRecord]:
+    return [
+        FollowRecord("mutual", "Mutual", "https://x.com/mutual", True),
+        FollowRecord("one_way", "One way", "https://x.com/one_way", False),
+        FollowRecord("quiet", "Quiet", "https://x.com/quiet", False),
+    ]
+
+
+def _open_follow_dialog(window: XDeleterWindow) -> FollowListDialog:
+    window.on_login_checked(True, "alice")
+    window.on_following_collected("alice", _follows(), False)
+    dialog = window.follow_dialog
+    assert dialog is not None
+    return dialog
+
+
+def _usernames(records: list[FollowRecord]) -> list[str]:
+    return [record.username for record in records]
+
+
+def test_manage_following_requires_login_and_emits_username(window, qtbot) -> None:
+    assert not window.manage_following_button.isEnabled()
+    window.on_login_checked(True, "alice")
+    emitted: list[str] = []
+    window.collect_following_requested.connect(emitted.append)
+
+    window.manage_following_button.click()
+
+    assert emitted == ["alice"]
+    assert not window.manage_following_button.isEnabled()
+
+
+def test_follow_dialog_hides_mutuals_and_starts_unchecked(window, qtbot) -> None:
+    dialog = _open_follow_dialog(window)
+    try:
+        assert dialog.selected_records() == []
+        dialog.toggle_all()
+        assert _usernames(dialog.selected_records()) == ["one_way", "quiet"]
+
+        dialog.hide_mutual_checkbox.setChecked(False)
+        dialog.toggle_all()
+        assert len(dialog.selected_records()) == 3
+        dialog.hide_mutual_checkbox.setChecked(True)
+        assert _usernames(dialog.selected_records()) == ["one_way", "quiet"]
+    finally:
+        dialog.close()
+
+
+def test_unfollow_confirmation_emits_only_checked_rows(window, qtbot, monkeypatch) -> None:
+    dialog = _open_follow_dialog(window)
+    emitted: list[UnfollowRequest] = []
+    window.unfollow_requested.connect(emitted.append)
+    answers = [QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes]
+    monkeypatch.setattr("PySide6.QtWidgets.QMessageBox.question", lambda *a, **kw: answers.pop(0))
+    try:
+        dialog.toggle_all()
+        quiet_row = next(row for row in range(dialog.table.rowCount()) if dialog._record(row).username == "quiet")
+        dialog.table.item(quiet_row, 0).setCheckState(Qt.CheckState.Unchecked)
+        dialog.unfollow_button.click()
+        assert emitted == []
+
+        dialog.unfollow_button.click()
+        assert len(emitted) == 1
+        assert _usernames(emitted[0].targets) == ["one_way"]
+        assert emitted[0].interval_seconds == 10.0
+        assert not dialog.unfollow_button.isEnabled()
+    finally:
+        dialog.close()
+
+
+def test_unfollow_rechecks_account_match(window, qtbot, monkeypatch) -> None:
+    dialog = _open_follow_dialog(window)
+    window._last_logged_in_username = "someone_else"
+    emitted: list[UnfollowRequest] = []
+    window.unfollow_requested.connect(emitted.append)
+    titles: list[str] = []
+
+    def answer(_parent, title, *_args, **_kwargs):
+        titles.append(title)
+        return QMessageBox.StandardButton.No
+
+    monkeypatch.setattr("PySide6.QtWidgets.QMessageBox.question", answer)
+    try:
+        dialog.toggle_all()
+        dialog.unfollow_button.click()
+        assert emitted == []
+        assert titles == ["アカウント不一致"]
+    finally:
+        dialog.close()
+
+
+def test_unfollow_done_removes_successes_and_offers_retry(window, qtbot, monkeypatch) -> None:
+    dialog = _open_follow_dialog(window)
+    records = _follows()
+    window._requested_unfollow_count = 2
+    retried: list[list[UnfollowResult]] = []
+    monkeypatch.setattr(window, "_retry_failed_unfollows", retried.append)
+    monkeypatch.setattr("PySide6.QtWidgets.QMessageBox.exec", lambda box: 0)
+    monkeypatch.setattr("PySide6.QtWidgets.QMessageBox.clickedButton", lambda box: box.buttons()[0])
+    try:
+        window.on_unfollow_done([
+            UnfollowResult(records[1], True),
+            UnfollowResult(records[2], False, "rate limited"),
+        ])
+        remaining = {dialog._record(row).username for row in range(dialog.table.rowCount())}
+        assert remaining == {"mutual", "quiet"}
+        assert "1 / 2" in window.status_label.text()
+        assert [_usernames([result.target for result in batch]) for batch in retried] == [["quiet"]]
+    finally:
+        dialog.close()
+
+
+def test_retry_failed_unfollows_uses_dialog_interval(window, qtbot) -> None:
+    dialog = _open_follow_dialog(window)
+    emitted: list[UnfollowRequest] = []
+    window.unfollow_requested.connect(emitted.append)
+    dialog.interval_input.setValue(30)
+    try:
+        window._retry_failed_unfollows([UnfollowResult(_follows()[1], False, "failed")])
+        assert len(emitted) == 1
+        assert emitted[0].interval_seconds == 30
+        assert _usernames(emitted[0].targets) == ["one_way"]
+    finally:
+        dialog.close()
+
+
+def test_follow_dialog_save_writes_checked_rows(window, qtbot, monkeypatch, tmp_path) -> None:
+    dialog = _open_follow_dialog(window)
+    monkeypatch.setattr(
+        "kusamushiri.gui_follows.QFileDialog.getSaveFileName", lambda *args: (str(tmp_path / "picked"), "")
+    )
+    monkeypatch.setattr("kusamushiri.gui_follows.QMessageBox.information", lambda *args: None)
+    try:
+        dialog.toggle_all()
+        dialog.save_button.click()
+        text = (tmp_path / "picked.csv").read_text(encoding="utf-8-sig")
+        assert "one_way" in text and "quiet" in text and "mutual" not in text
+    finally:
+        dialog.close()

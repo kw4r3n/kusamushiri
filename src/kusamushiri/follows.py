@@ -24,6 +24,8 @@ MAX_FOLLOW_COLLECTION_CYCLES = 500
 MAX_STABLE_CYCLES = 5
 INITIAL_LOAD_TIMEOUT_SECONDS = 15.0
 RESERVED_PATHS = frozenset({"home", "explore", "i", "messages", "notifications", "search", "settings"})
+# X throttles unfollows much harder than deletes; pace them well apart by default.
+DEFAULT_UNFOLLOW_INTERVAL_SECONDS = 10.0
 CSV_FIELDS = ("username", "display_name", "profile_url", "follows_you")
 
 # Emoji in names render as <img alt="…">; innerText would drop them.
@@ -72,6 +74,25 @@ class ExportFollowingRequest:
 class FollowCollectionResult:
     records: list[FollowRecord]
     limit_reached: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class UnfollowRequest:
+    targets: list[FollowRecord]
+    interval_seconds: float = DEFAULT_UNFOLLOW_INTERVAL_SECONDS
+
+    def validate(self) -> None:
+        if not self.targets:
+            raise ValueError(tr("フォロー解除するアカウントが選択されていません。"))
+        if self.interval_seconds < 0:
+            raise ValueError(tr("フォロー解除の間隔は0秒以上で指定してください。"))
+
+
+@dataclass(frozen=True, slots=True)
+class UnfollowResult:
+    target: FollowRecord
+    success: bool
+    error_message: str | None = None
 
 
 def parse_profile_href(href: str | None) -> str | None:

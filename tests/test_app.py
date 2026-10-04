@@ -7,7 +7,13 @@ from collections.abc import Callable
 import pytest
 
 from kusamushiri.app import DeletePostsCommand, XDeleterWorker
-from kusamushiri.follows import ExportFollowingRequest, FollowCollectionResult, FollowRecord
+from kusamushiri.follows import (
+    ExportFollowingRequest,
+    FollowCollectionResult,
+    FollowRecord,
+    UnfollowRequest,
+    UnfollowResult,
+)
 from kusamushiri.models import CollectRequest, ExecuteActionsRequest, PostActionResult, PostActionTarget, PostRecord
 
 
@@ -94,6 +100,13 @@ class FakeCore:
         self.calls.append(f"execute_post_action:{target.url}")
         self.executed_targets.append(target)
         return self.action_result
+
+    def unfollow_account(self, username: str) -> tuple[bool, str | None]:
+        self._raise_if_configured("unfollow_account")
+        self.calls.append(f"unfollow_account:{username}")
+        if username == "rate_limited":
+            return False, "friendships/destroy.json がエラーを返しました: Rate limit"
+        return True, None
 
     def stop_browser(self) -> None:
         self.calls.append("stop_browser")
@@ -410,3 +423,65 @@ def test_worker_active_batch_cancellation_survives_future_submission(
         if cancellation_thread.ident is not None:
             cancellation_thread.join(timeout=3)
         worker.shutdown()
+
+
+def _follow(username: str, follows_you: bool = False) -> FollowRecord:
+    return FollowRecord(username, username.title(), f"https://x.com/{username}", follows_you)
+
+
+def test_worker_collects_following_for_review(qtbot: object) -> None:
+    core = FakeCore()
+    worker = XDeleterWorker(core=core)
+    collected: list[tuple[str, list[FollowRecord], bool]] = []
+    worker.events.following_collected.connect(lambda name, records, limit: collected.append((name, records, limit)))
+
+    worker.enqueue_collect_following("tester")
+
+    wait_until(qtbot, lambda: len(collected) == 1)
+    assert collected[0] == ("tester", [FollowRecord("alice", "Alice", "https://x.com/alice", True)], False)
+    assert core.calls == ["collect_following:tester"]
+    worker.shutdown()
+
+
+def test_worker_unfollows_each_target_and_reports_results(qtbot: object) -> None:
+    core = FakeCore()
+    worker = XDeleterWorker(core=core)
+    progress: list[tuple[str, int, int]] = []
+    completed: list[list[UnfollowResult]] = []
+    worker.events.unfollow_progress.connect(lambda name, current, total: progress.append((name, current, total)))
+    worker.events.unfollow_completed.connect(completed.append)
+    targets = [_follow("alice"), _follow("rate_limited")]
+
+    worker.enqueue_unfollow(UnfollowRequest(targets=targets, interval_seconds=0))
+
+    wait_until(qtbot, lambda: len(completed) == 1)
+    assert core.calls == ["unfollow_account:alice", "unfollow_account:rate_limited"]
+    assert progress == [("alice", 1, 2), ("rate_limited", 2, 2)]
+    assert [(result.target.username, result.success) for result in completed[0]] == [
+        ("alice", True),
+        ("rate_limited", False),
+    ]
+    assert "Rate limit" in (completed[0][1].error_message or "")
+    worker.shutdown()
+
+
+def test_worker_cancels_unfollow_batch_during_interval(qtbot: object) -> None:
+    core = FakeCore()
+    worker = XDeleterWorker(core=core)
+    completed: list[list[UnfollowResult]] = []
+    worker.events.unfollow_progress.connect(lambda *args: worker.cancel_current_operation())
+    worker.events.unfollow_completed.connect(completed.append)
+
+    worker.enqueue_unfollow(UnfollowRequest(targets=[_follow("alice"), _follow("bob")], interval_seconds=30))
+
+    wait_until(qtbot, lambda: len(completed) == 1)
+    worker.shutdown()
+    assert len(completed[0]) <= 1
+    assert "unfollow_account:bob" not in core.calls
+
+
+def test_unfollow_request_rejects_empty_targets_and_negative_interval() -> None:
+    with pytest.raises(ValueError):
+        UnfollowRequest(targets=[]).validate()
+    with pytest.raises(ValueError):
+        UnfollowRequest(targets=[_follow("alice")], interval_seconds=-1).validate()

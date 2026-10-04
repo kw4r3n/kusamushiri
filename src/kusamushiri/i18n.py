@@ -324,6 +324,48 @@ ENGLISH: Final[dict[str, str]] = {
     "同じ名前のプロファイルが既にあります。": "A profile with that name already exists.",
     "default プロファイルは削除できません。": "The default profile cannot be deleted.",
     "設定を保存できませんでした: {status}": "Could not save settings: {status}",
+    # Unfollow
+    "フォローを整理": "Manage follows",
+    "フォロー一覧を取得して確認し、選んだアカウントだけフォローを解除します。": (
+        "Load the accounts you follow, review them, and unfollow only the ones you check."
+    ),
+    "フォロー {count} 件を取得しました。": "Loaded {count} followed accounts.",
+    "フォローリストの取得を中断しました。": "Stopped loading the following list.",
+    "相互フォローを除外": "Hide mutual follows",
+    "フォローされているアカウントを一覧から隠し、選択から外します。": (
+        "Hide accounts that follow you back and remove them from the selection."
+    ),
+    "ユーザー名": "Username",
+    "表示名": "Display name",
+    "フォローされている": "Follows you",
+    "@{username} のフォロー {count} 件（うち相互フォロー {mutual} 件）": (
+        "@{username} follows {count} accounts ({mutual} follow back)"
+    ),
+    "取得の安全上限に到達したため、一覧は途中までです。": "The safety limit was reached, so the list is incomplete.",
+    "解除間隔": "Interval",
+    "各アカウントのフォロー解除の間に待機する秒数です。X の制限を避けるため長めにしています。": (
+        "Seconds to wait between unfollows. It is long on purpose to stay within X's limits."
+    ),
+    "選択したフォローを解除": "Unfollow selected",
+    "フォロー解除するアカウントが選択されていません。": "No accounts are selected to unfollow.",
+    "フォロー解除の間隔は0秒以上で指定してください。": "The unfollow interval must be 0 seconds or more.",
+    "{count} 件のフォローを解除します。\n（この操作は元に戻せません）\n各アカウントの間に {interval} 秒待機します。続行しますか？": (
+        "Unfollow {count} accounts?\n(This cannot be undone.)\nWaits {interval} seconds between accounts."
+    ),
+    "フォロー解除を実行しています...": "Unfollowing...",
+    "フォロー解除中 ({current}/{total}): @{username}": "Unfollowing ({current}/{total}): @{username}",
+    "フォロー解除を中止": "Unfollow stopped",
+    "フォロー解除完了": "Unfollow finished",
+    "フォロー解除を中断しました。": "Unfollowing was stopped.",
+    "プロフィールの読み込み": "Loading the profile",
+    "フォロー解除ボタンの表示待ち": "Waiting for the Following button",
+    "フォロー解除ボタンが見つかりませんでした。": "The Following button was not found.",
+    "このアカウントをフォローしていません。": "You do not follow this account.",
+    "フォロー解除確認画面の表示": "Opening the unfollow confirmation",
+    "フォロー解除の確認ボタンが見つかりませんでした。": "The unfollow confirmation button was not found.",
+    "フォロー解除後の完了確認（結果不明。再試行前にXで確認してください）": (
+        "Confirming the unfollow (result unknown; check on X before retrying)"
+    ),
 }
 
 TRANSLATIONS: Final[dict[str, dict[str, str]]] = {"en": ENGLISH}

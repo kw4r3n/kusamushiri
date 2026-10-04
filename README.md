@@ -32,6 +32,7 @@ Qt (PySide6) list before anything is deleted**.
 - Adjustable interval between actions, stop at any time, retry only failed items
 - Multiple accounts via separate browser profiles
 - Export an account's following list to CSV (Excel-ready) or JSON
+- Review the accounts you follow (optionally hiding mutual follows) and unfollow only the checked ones
 
 ## Install
 

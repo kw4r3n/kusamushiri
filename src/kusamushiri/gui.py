@@ -34,7 +34,14 @@ from PySide6.QtWidgets import (
 
 from kusamushiri.archive import ArchiveError, filter_archive_posts, load_archive_posts
 from kusamushiri.exporting import EXPORT_SUFFIXES, write_post_list
-from kusamushiri.follows import ExportFollowingRequest
+from kusamushiri.follows import (
+    DEFAULT_UNFOLLOW_INTERVAL_SECONDS,
+    ExportFollowingRequest,
+    FollowRecord,
+    UnfollowRequest,
+    UnfollowResult,
+)
+from kusamushiri.gui_follows import FollowListDialog, format_unfollow_failures
 from kusamushiri.gui_table import URL_COLUMN_WIDTH, PostTableManager
 from kusamushiri.i18n import LANGUAGE_NAMES, get_language, tr, translate
 from kusamushiri.logger import logger
@@ -167,6 +174,8 @@ class XDeleterWindow(QMainWindow):
     collect_requested = Signal(object)
     delete_requested = Signal(object)
     export_following_requested = Signal(object)
+    collect_following_requested = Signal(str)
+    unfollow_requested = Signal(object)
 
     def __init__(self) -> None:
         super().__init__()
@@ -175,6 +184,8 @@ class XDeleterWindow(QMainWindow):
         self._login_verified = False
         self._stop_pending = False
         self._requested_action_count = 0
+        self._requested_unfollow_count = 0
+        self.follow_dialog: FollowListDialog | None = None
         self._last_logged_in_username: str | None = None
         self._current_account: str | None = None
         self._last_collect_request: CollectRequest | None = None
@@ -358,6 +369,12 @@ class XDeleterWindow(QMainWindow):
             tr("X アカウントIDのフォロー一覧を CSV（または JSON）で保存します。")
         )
         self.export_following_button.clicked.connect(self._handle_export_following)
+        self.manage_following_button = QPushButton(tr("フォローを整理"))
+        self.manage_following_button.setObjectName("secondaryButton")
+        self.manage_following_button.setToolTip(
+            tr("フォロー一覧を取得して確認し、選んだアカウントだけフォローを解除します。")
+        )
+        self.manage_following_button.clicked.connect(self._handle_manage_following)
 
         layout.addWidget(QLabel(tr("プロファイル選択")), 0, 0, 1, 2)
         layout.addWidget(self.account_combo, 1, 0, 1, 2)
@@ -381,6 +398,7 @@ class XDeleterWindow(QMainWindow):
         layout.addWidget(self.login_account_label, 9, 0, 1, 2)
         layout.addWidget(self.start_button, 10, 0, 1, 2)
         layout.addWidget(self.export_following_button, 11, 0, 1, 2)
+        layout.addWidget(self.manage_following_button, 12, 0, 1, 2)
         layout.setContentsMargins(0, 12, 0, 0)
         layout.setColumnStretch(0, 1)
         layout.setColumnStretch(1, 1)
@@ -654,6 +672,9 @@ class XDeleterWindow(QMainWindow):
         self.collect_button.setEnabled(enabled and self._login_verified)
         self.import_archive_button.setEnabled(enabled)
         self.export_following_button.setEnabled(enabled and self._login_verified)
+        self.manage_following_button.setEnabled(enabled and self._login_verified)
+        if self.follow_dialog is not None:
+            self.follow_dialog.set_busy(busy, can_run=self._login_verified)
         self.delete_button.setEnabled(enabled and self._login_verified and self.table.rowCount() > 0)
         self.delete_interval_input.setEnabled(enabled)
         self.table.setEnabled(enabled)
@@ -818,6 +839,10 @@ class XDeleterWindow(QMainWindow):
         self._login_verified = False
         self._last_logged_in_username = None
         self._last_collect_request = None
+        if self.follow_dialog is not None:
+            # The follow list belongs to the previous account's session.
+            self.follow_dialog.close()
+            self.follow_dialog.set_records("", [], False)
         self._clear_posts()
         self.preview_text.clear()
         self._update_filter_summary()
@@ -996,11 +1021,11 @@ class XDeleterWindow(QMainWindow):
     def _normalized_username_input(self) -> str:
         return self.username_input.text().strip().removeprefix("@")
 
-    def _confirm_account_match(self) -> bool:
+    def _confirm_account_match(self, target_username: str | None = None) -> bool:
         if not self._last_logged_in_username:
             return True
 
-        input_username = self._normalized_username_input()
+        input_username = self._normalized_username_input() if target_username is None else target_username
         if not input_username:
             return True
         if input_username.casefold() == self._last_logged_in_username.casefold():
@@ -1260,6 +1285,143 @@ class XDeleterWindow(QMainWindow):
             return
         self.update_status(tr("フォローリスト {count} 件を保存しました: {path}", count=count, path=path))
         QMessageBox.information(self, tr("エクスポート完了"), tr("{count} 件のフォローを保存しました。\n{path}", count=count, path=path))
+
+    def _handle_manage_following(self) -> None:
+        if self._busy:
+            return
+        self._commit_typed_account(load_settings=False)
+        if not self._login_verified:
+            QMessageBox.information(self, tr("ログイン確認が必要"), tr("先にブラウザを起動してログインを確認してください。"))
+            return
+        username = self._normalized_username_input()
+        if not USERNAME_PATTERN.fullmatch(username):
+            QMessageBox.warning(self, tr("入力エラー"), tr("X アカウントIDを入力してください（英数字とアンダースコア、15文字まで）。"))
+            return
+        self.set_busy(True)
+        self.show_progress(0, 0)
+        self.update_status(tr("@{username} のフォローリストを取得しています...", username=username))
+        self.collect_following_requested.emit(username)
+
+    def _ensure_follow_dialog(self) -> FollowListDialog:
+        if self.follow_dialog is None:
+            self.follow_dialog = FollowListDialog(self)
+            self.follow_dialog.unfollow_requested.connect(self._handle_unfollow)
+            self.follow_dialog.stop_requested.connect(self._on_stop_browser_clicked)
+        return self.follow_dialog
+
+    def on_following_collected(self, username: str, records: list[FollowRecord], limit_reached: bool) -> None:
+        stopped = self._stop_pending
+        dialog = self._ensure_follow_dialog()
+        dialog.set_records(username, records, limit_reached)
+        self.set_busy(False)
+        if stopped:
+            return
+        self.update_status(tr("フォロー {count} 件を取得しました。", count=len(records)))
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
+    def _handle_unfollow(self, records: list[FollowRecord], interval_seconds: float) -> None:
+        logger.info("GUI: Unfollow requested for %s accounts.", len(records))
+        if self._busy:
+            return
+        if not self._login_verified:
+            QMessageBox.information(self, tr("ログイン確認が必要"), tr("現在のアカウントでログインを確認してください。"))
+            return
+        source_username = self.follow_dialog.source_username if self.follow_dialog is not None else None
+        if not self._confirm_account_match(source_username):
+            logger.info("GUI: Unfollow cancelled due to account mismatch warning.")
+            return
+        request = UnfollowRequest(targets=list(records), interval_seconds=interval_seconds)
+        try:
+            request.validate()
+        except ValueError as error:
+            QMessageBox.warning(self, tr("入力エラー"), str(error))
+            return
+        result = QMessageBox.question(
+            self.follow_dialog or self,
+            tr("確認"),
+            tr(
+                "{count} 件のフォローを解除します。\n（この操作は元に戻せません）\n"
+                "各アカウントの間に {interval} 秒待機します。続行しますか？",
+                count=len(records),
+                interval=f"{interval_seconds:g}",
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if result != QMessageBox.StandardButton.Yes:
+            logger.info("GUI: Unfollow cancelled by user.")
+            return
+        self._submit_unfollow(request, tr("フォロー解除を実行しています..."))
+
+    def _submit_unfollow(self, request: UnfollowRequest, status: str) -> None:
+        self._requested_unfollow_count = len(request.targets)
+        self.set_busy(True)
+        self.update_status(status)
+        self.unfollow_requested.emit(request)
+
+    def on_unfollow_progress(self, username: str, current: int, total: int) -> None:
+        self.update_status(
+            tr("フォロー解除中 ({current}/{total}): @{username}", current=current, total=total, username=username)
+        )
+        self.show_progress(current, total)
+
+    def on_unfollow_done(self, results: list[UnfollowResult]) -> None:
+        requested = max(self._requested_unfollow_count, len(results))
+        succeeded = {result.target.username for result in results if result.success}
+        failures = [result for result in results if not result.success]
+        skipped = requested - len(results)
+        if self.follow_dialog is not None:
+            self.follow_dialog.remove_usernames(succeeded)
+        stopped = self._stop_pending
+        self.set_busy(False)
+        heading = tr("フォロー解除を中止") if stopped else tr("フォロー解除完了")
+        message = tr("{heading}: {success} / {requested} 件成功", heading=heading, success=len(succeeded), requested=requested)
+        notes = [tr("{count} 件失敗", count=len(failures))] if failures else []
+        if skipped > 0:
+            notes.append(tr("{count} 件未処理", count=skipped))
+        if notes:
+            message += tr("（{notes}）", notes=tr("、").join(notes))
+        self.update_status(message)
+        if stopped:
+            return
+        parent = self.follow_dialog or self
+        if not failures:
+            QMessageBox.information(parent, tr("完了"), message)
+            return
+
+        box = QMessageBox(parent)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle(tr("一部失敗"))
+        box.setText(message)
+        box.setInformativeText(tr("失敗した項目の詳細を確認し、失敗分だけ再試行できます。"))
+        box.setDetailedText(format_unfollow_failures(failures))
+        retry_button = box.addButton(tr("失敗分だけ再試行"), QMessageBox.ButtonRole.AcceptRole)
+        box.addButton(QMessageBox.StandardButton.Close)
+        box.exec()
+
+        if box.clickedButton() == retry_button:
+            self._retry_failed_unfollows(failures)
+
+    def _retry_failed_unfollows(self, failures: list[UnfollowResult]) -> None:
+        if self._busy or not self._login_verified:
+            QMessageBox.information(self, tr("ログイン確認が必要"), tr("現在のアカウントでログインを確認してください。"))
+            return
+        source_username = self.follow_dialog.source_username if self.follow_dialog is not None else None
+        if not self._confirm_account_match(source_username):
+            logger.info("GUI: Unfollow retry cancelled due to account mismatch warning.")
+            return
+        logger.info("GUI: Retrying %s failed unfollows.", len(failures))
+        interval_seconds = (
+            self.follow_dialog.interval_input.value()
+            if self.follow_dialog is not None
+            else DEFAULT_UNFOLLOW_INTERVAL_SECONDS
+        )
+        self._submit_unfollow(
+            UnfollowRequest(targets=[result.target for result in failures], interval_seconds=interval_seconds),
+            tr("失敗分を再試行しています..."),
+        )
 
     def _handle_export_posts(self) -> None:
         if self._busy:

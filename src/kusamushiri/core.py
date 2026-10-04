@@ -13,6 +13,7 @@ from kusamushiri import actions
 from kusamushiri.actions import delete_post as _delete_post
 from kusamushiri.actions import execute_post_action as _execute_post_action
 from kusamushiri.actions import undo_repost as _undo_repost
+from kusamushiri.actions import unfollow_account as _unfollow_account
 from kusamushiri.actions import unlike_post as _unlike_post
 from kusamushiri.browser import (
     BASE_X_URL,
@@ -748,6 +749,10 @@ class XDeleterCore:
     ) -> FollowCollectionResult:
         page = self._require_page()
         return collect_following(page, self._normalize_username(username), self._cancel_event, on_progress)
+
+    def unfollow_account(self, username: str) -> tuple[bool, str | None]:
+        page = self._require_page()
+        return _unfollow_account(page, username, find_locator=self._find_first_visible_locator)
 
     def execute_post_action(self, target: PostActionTarget) -> PostActionResult:
         page = self._browser._require_page()

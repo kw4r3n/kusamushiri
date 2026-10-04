@@ -16,6 +16,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   that search misses can be deleted too. The current filters apply; reposts in the archive are skipped.
 - Undo likes. Choose "Liked posts (undo likes)" as the post type to collect your profile's Likes
   tab; date, keyword, media and minimum-like filters still apply, and checked rows are unliked.
+- Bulk unfollow: "Manage follows" lists the accounts you follow, can hide mutual follows, and
+  unfollows only the checked ones with a confirmation, a 10-second default interval, stop, and
+  retry of failures.
 
 ## [0.3.0] - 2026-10-01
 

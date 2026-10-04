@@ -1,15 +1,15 @@
 import re
 from collections.abc import Callable
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 from playwright.sync_api import Locator, Page, Request
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
-from kusamushiri.browser import NAVIGATION_TIMEOUT_MS, find_first_visible_locator
+from kusamushiri.browser import BASE_X_URL, NAVIGATION_TIMEOUT_MS, find_first_visible_locator
 from kusamushiri.i18n import tr
 from kusamushiri.logger import logger
 from kusamushiri.models import PostActionResult, PostActionTarget, PostKind
-from kusamushiri.parsing import extract_post_id
+from kusamushiri.parsing import USERNAME_PATTERN, extract_post_id
 
 ACTION_STATE_TIMEOUT_MS = 10_000
 UNREPOST_CONFIRM_SELECTORS = (
@@ -34,6 +34,19 @@ DELETE_CONFIRM_SELECTOR = '[data-testid="confirmationSheetConfirm"]'
 DELETE_POST_MUTATION = "DeleteTweet"
 UNDO_REPOST_MUTATION = "DeleteRetweet"
 UNLIKE_MUTATION = "UnfavoriteTweet"
+# Unfollowing is a REST call (POST /i/api/1.1/friendships/destroy.json), not GraphQL.
+UNFOLLOW_MUTATION = "friendships/destroy.json"
+PROFILE_COLUMN_SELECTOR = '[data-testid="primaryColumn"]'
+# The profile header button is "<numeric user id>-unfollow" / "-follow". Recommendation
+# cards (UserCell) in the same column carry those test ids for other accounts.
+UNFOLLOW_BUTTON_SELECTOR = f'{PROFILE_COLUMN_SELECTOR} [data-testid$="-unfollow"]:not([data-testid="UserCell"] *)'
+FOLLOW_BUTTON_SELECTOR = f'{PROFILE_COLUMN_SELECTOR} [data-testid$="-follow"]:not([data-testid="UserCell"] *)'
+# Unfollowed once the header shows a visible "-follow" button and no "-unfollow" one.
+UNFOLLOW_DONE_SCRIPT = """({follow, unfollow}) => {
+    if (document.querySelector(unfollow)) return false;
+    const button = document.querySelector(follow);
+    return button !== null && button.getClientRects().length > 0;
+}"""
 
 LocatorFinder = Callable[[Page | Locator, tuple[str, ...]], Locator | None]
 
@@ -392,6 +405,87 @@ def delete_post(
 
     except Exception as error:
         logger.exception("Exception during deletion of post %s at %s.", post_url, stage)
+        return False, f"{stage}: {type(error).__name__}: {error}"
+    finally:
+        if listening:
+            page.remove_listener("request", record_mutation)
+
+
+def unfollow_account(
+    page: Page,
+    username: str,
+    find_locator: LocatorFinder = find_first_visible_locator,
+) -> tuple[bool, str | None]:
+    """Open ``x.com/<username>`` and unfollow it from the profile header."""
+    logger.info("Initiating unfollow for: @%s", username)
+    if not USERNAME_PATTERN.fullmatch(username):
+        return False, tr("ユーザー名は1〜15文字の英数字またはアンダースコアで指定してください。")
+    stage = tr("プロフィールの読み込み")
+    mutation_requests: list[Request] = []
+
+    def record_mutation(request: Request) -> None:
+        if _is_mutation_request(request, UNFOLLOW_MUTATION):
+            mutation_requests.append(request)
+
+    listening = False
+    try:
+        page.goto(urljoin(BASE_X_URL, username), timeout=NAVIGATION_TIMEOUT_MS)
+        page.locator(PROFILE_COLUMN_SELECTOR).first.wait_for(state="visible", timeout=NAVIGATION_TIMEOUT_MS)
+        stage = tr("フォロー解除ボタンの表示待ち")
+        try:
+            page.wait_for_selector(
+                f"{UNFOLLOW_BUTTON_SELECTOR}, {FOLLOW_BUTTON_SELECTOR}",
+                state="visible",
+                timeout=ACTION_STATE_TIMEOUT_MS,
+            )
+        except PlaywrightTimeoutError:
+            message = tr("フォロー解除ボタンが見つかりませんでした。")
+            logger.warning("%s @%s", message, username)
+            return False, message
+        # Exactly one header button; more would mean the page is not the profile we expect.
+        if page.locator(UNFOLLOW_BUTTON_SELECTOR).count() != 1:
+            message = (
+                tr("このアカウントをフォローしていません。")
+                if page.locator(FOLLOW_BUTTON_SELECTOR).count() > 0
+                else tr("フォロー解除ボタンが見つかりませんでした。")
+            )
+            logger.warning("%s @%s", message, username)
+            return False, message
+        unfollow_button = find_locator(page, (UNFOLLOW_BUTTON_SELECTOR,))
+        if unfollow_button is None:
+            message = tr("フォロー解除ボタンが見つかりませんでした。")
+            logger.warning("%s @%s", message, username)
+            return False, message
+
+        unfollow_button.click()
+        stage = tr("フォロー解除確認画面の表示")
+        page.wait_for_selector(DELETE_CONFIRM_SELECTOR, state="visible", timeout=ACTION_STATE_TIMEOUT_MS)
+        confirm_button = find_locator(page, (DELETE_CONFIRM_SELECTOR,))
+        if confirm_button is None:
+            message = tr("フォロー解除の確認ボタンが見つかりませんでした。")
+            logger.warning("%s @%s", message, username)
+            return False, message
+
+        stage = tr("フォロー解除後の完了確認（結果不明。再試行前にXで確認してください）")
+        page.on("request", record_mutation)
+        listening = True
+        confirm_button.click()
+        error_message = _wait_for_mutation_result(
+            mutation_requests,
+            UNFOLLOW_MUTATION,
+            lambda: page.wait_for_function(
+                UNFOLLOW_DONE_SCRIPT,
+                arg={"follow": FOLLOW_BUTTON_SELECTOR, "unfollow": UNFOLLOW_BUTTON_SELECTOR},
+                timeout=ACTION_STATE_TIMEOUT_MS,
+            ),
+        )
+        if error_message is not None:
+            logger.warning("%s @%s", error_message, username)
+            return False, error_message
+        logger.info("Successfully unfollowed: @%s", username)
+        return True, None
+    except Exception as error:
+        logger.exception("Exception during unfollow of @%s at %s.", username, stage)
         return False, f"{stage}: {type(error).__name__}: {error}"
     finally:
         if listening:

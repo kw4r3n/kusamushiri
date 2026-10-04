@@ -9,7 +9,7 @@ from PySide6.QtWidgets import QApplication
 
 from kusamushiri.actions import action_label_for
 from kusamushiri.core import XDeleterCore
-from kusamushiri.follows import ExportFollowingRequest, write_follow_list
+from kusamushiri.follows import ExportFollowingRequest, UnfollowRequest, UnfollowResult, write_follow_list
 from kusamushiri.gui import XDeleterWindow
 from kusamushiri.i18n import set_language, tr
 from kusamushiri.logger import logger
@@ -78,6 +78,18 @@ class ExportFollowingCommand:
     action: str = "export_following"
 
 
+@dataclass(frozen=True, slots=True)
+class CollectFollowingCommand:
+    username: str
+    action: str = "collect_following"
+
+
+@dataclass(frozen=True, slots=True)
+class UnfollowCommand:
+    request: UnfollowRequest
+    action: str = "unfollow"
+
+
 WorkerCommand = (
     StartBrowserCommand
     | StopBrowserCommand
@@ -85,6 +97,8 @@ WorkerCommand = (
     | CollectPostsCommand
     | DeletePostsCommand
     | ExportFollowingCommand
+    | CollectFollowingCommand
+    | UnfollowCommand
 )
 
 
@@ -105,6 +119,9 @@ class XDeleterWorkerEvents(QObject):
     delete_completed = Signal(list)
     following_progress = Signal(int)
     following_export_finished = Signal(str, int)  # empty path: nothing was written
+    following_collected = Signal(str, list, bool)  # username, records, limit reached
+    unfollow_progress = Signal(str, int, int)
+    unfollow_completed = Signal(list)
     error_occurred = Signal(str)
 
 
@@ -154,6 +171,12 @@ class XDeleterWorker:
 
     def enqueue_export_following(self, request: ExportFollowingRequest) -> None:
         self._enqueue(ExportFollowingCommand(request=request))
+
+    def enqueue_collect_following(self, username: str) -> None:
+        self._enqueue(CollectFollowingCommand(username=username))
+
+    def enqueue_unfollow(self, request: UnfollowRequest) -> None:
+        self._enqueue(UnfollowCommand(request=request))
 
     def _discard_pending_commands(self) -> None:
         while True:
@@ -302,6 +325,42 @@ class XDeleterWorker:
                         )
                     continue
 
+                if isinstance(command, CollectFollowingCommand):
+                    result = self._require_running_core(core).collect_following(
+                        command.username,
+                        on_progress=self.events.following_progress.emit,
+                    )
+                    if self._cancel_event.is_set():
+                        self.events.status_changed.emit(tr("フォローリストの取得を中断しました。"))
+                    self.events.following_collected.emit(
+                        command.username, result.records, result.limit_reached
+                    )
+                    continue
+
+                if isinstance(command, UnfollowCommand):
+                    command.request.validate()
+                    active_core = self._require_running_core(core)
+                    targets = command.request.targets
+                    interval_seconds = command.request.interval_seconds
+                    unfollow_results: list[UnfollowResult] = []
+                    for index, target in enumerate(targets, start=1):
+                        if self._cancel_event.is_set():
+                            break
+                        self.events.unfollow_progress.emit(target.username, index, len(targets))
+                        success, error_message = active_core.unfollow_account(target.username)
+                        unfollow_results.append(UnfollowResult(target, success, error_message))
+                        if interval_seconds > 0 and index < len(targets) and self._cancel_event.wait(interval_seconds):
+                            break
+                    logger.info(
+                        "Finished unfollow batch: %s/%s succeeded",
+                        sum(1 for result in unfollow_results if result.success),
+                        len(targets),
+                    )
+                    self.events.unfollow_completed.emit(unfollow_results)
+                    if self._cancel_event.is_set():
+                        self.events.status_changed.emit(tr("フォロー解除を中断しました。"))
+                    continue
+
                 logger.warning("Unknown worker command received: %s", command)
             except Exception as error:
                 self._handle_error(getattr(command, "action", "worker command"), error)
@@ -341,6 +400,8 @@ def main() -> int:
     window.collect_requested.connect(worker.enqueue_collect_posts)
     window.delete_requested.connect(worker.enqueue_delete_posts)
     window.export_following_requested.connect(worker.enqueue_export_following)
+    window.collect_following_requested.connect(worker.enqueue_collect_following)
+    window.unfollow_requested.connect(worker.enqueue_unfollow)
 
     worker.events.status_changed.connect(window.update_status)
     worker.events.browser_ready.connect(window.show_login_wait_dialog)
@@ -352,6 +413,9 @@ def main() -> int:
     worker.events.delete_completed.connect(window.on_delete_done)
     worker.events.following_progress.connect(window.on_following_progress)
     worker.events.following_export_finished.connect(window.on_following_export_finished)
+    worker.events.following_collected.connect(window.on_following_collected)
+    worker.events.unfollow_progress.connect(window.on_unfollow_progress)
+    worker.events.unfollow_completed.connect(window.on_unfollow_done)
     worker.events.error_occurred.connect(window.show_error)
 
     window.show()
