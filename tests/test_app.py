@@ -11,9 +11,11 @@ from kusamushiri.follows import (
     ExportFollowingRequest,
     FollowCollectionResult,
     FollowRecord,
+    LastPostEntry,
     UnfollowRequest,
     UnfollowResult,
 )
+from kusamushiri.last_posts import FetchLastPostsRequest, LastPostResult
 from kusamushiri.models import CollectRequest, ExecuteActionsRequest, PostActionResult, PostActionTarget, PostRecord
 
 
@@ -107,6 +109,13 @@ class FakeCore:
         if username == "rate_limited":
             return False, "friendships/destroy.json がエラーを返しました: Rate limit"
         return True, None
+
+    def fetch_last_post(self, username: str) -> LastPostResult:
+        self._raise_if_configured("fetch_last_post")
+        self.calls.append(f"fetch_last_post:{username}")
+        if username == "broken":
+            return LastPostResult(username, "2026-10-01T00:00:00+00:00", error_message="timeline did not load")
+        return LastPostResult(username, "2026-10-01T00:00:00+00:00", last_post_at="2026-09-30T00:00:00+00:00")
 
     def stop_browser(self) -> None:
         self.calls.append("stop_browser")
@@ -203,12 +212,17 @@ def test_worker_exports_following_to_file(qtbot: object, tmp_path) -> None:
     worker.events.following_export_finished.connect(lambda path, count: finished.append((path, count)))
     output_path = tmp_path / "following.csv"
 
-    worker.enqueue_export_following(ExportFollowingRequest(username="tester", output_path=output_path))
+    entry = LastPostEntry("2026-10-01T09:30:00+00:00", "2026-09-30T08:00:00+00:00")
+
+    worker.enqueue_export_following(
+        ExportFollowingRequest(username="tester", output_path=output_path, last_posts={"alice": entry})
+    )
 
     wait_until(qtbot, lambda: finished == [(str(output_path), 1)])
     assert core.calls == ["collect_following:tester"]
     assert progress == [1]
-    assert "alice" in output_path.read_text(encoding="utf-8-sig")
+    text = output_path.read_text(encoding="utf-8-sig")
+    assert "alice" in text and "2026-09-30T08:00:00+00:00,2026-10-01T09:30:00+00:00" in text
     worker.shutdown()
 
 
@@ -485,3 +499,49 @@ def test_unfollow_request_rejects_empty_targets_and_negative_interval() -> None:
         UnfollowRequest(targets=[]).validate()
     with pytest.raises(ValueError):
         UnfollowRequest(targets=[_follow("alice")], interval_seconds=-1).validate()
+
+
+def test_worker_fetches_last_posts_for_each_target(qtbot: object) -> None:
+    core = FakeCore()
+    worker = XDeleterWorker(core=core)
+    progress: list[tuple[str, int, int]] = []
+    completed: list[list[LastPostResult]] = []
+    worker.events.last_post_progress.connect(lambda name, current, total: progress.append((name, current, total)))
+    worker.events.last_posts_completed.connect(completed.append)
+
+    worker.enqueue_fetch_last_posts(
+        FetchLastPostsRequest(targets=[_follow("alice"), _follow("broken")], interval_seconds=0)
+    )
+
+    wait_until(qtbot, lambda: len(completed) == 1)
+    assert core.calls == ["fetch_last_post:alice", "fetch_last_post:broken"]
+    assert progress == [("alice", 1, 2), ("broken", 2, 2)]
+    assert [(result.username, result.success, result.last_post_at) for result in completed[0]] == [
+        ("alice", True, "2026-09-30T00:00:00+00:00"),
+        ("broken", False, None),
+    ]
+    worker.shutdown()
+
+
+def test_worker_cancels_last_post_batch_during_interval(qtbot: object) -> None:
+    core = FakeCore()
+    worker = XDeleterWorker(core=core)
+    completed: list[list[LastPostResult]] = []
+    worker.events.last_post_progress.connect(lambda *args: worker.cancel_current_operation())
+    worker.events.last_posts_completed.connect(completed.append)
+
+    worker.enqueue_fetch_last_posts(
+        FetchLastPostsRequest(targets=[_follow("alice"), _follow("bob")], interval_seconds=30)
+    )
+
+    wait_until(qtbot, lambda: len(completed) == 1)
+    worker.shutdown()
+    assert len(completed[0]) <= 1
+    assert "fetch_last_post:bob" not in core.calls
+
+
+def test_fetch_last_posts_request_rejects_empty_targets_and_negative_interval() -> None:
+    with pytest.raises(ValueError):
+        FetchLastPostsRequest(targets=[]).validate()
+    with pytest.raises(ValueError):
+        FetchLastPostsRequest(targets=[_follow("alice")], interval_seconds=-1).validate()

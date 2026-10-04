@@ -41,9 +41,10 @@ from kusamushiri.follows import (
     UnfollowRequest,
     UnfollowResult,
 )
-from kusamushiri.gui_follows import FollowListDialog, format_unfollow_failures
+from kusamushiri.gui_follows import FollowListDialog, format_last_post_failures, format_unfollow_failures
 from kusamushiri.gui_table import URL_COLUMN_WIDTH, PostTableManager, ask_export_path, save_selected_with_dialog
 from kusamushiri.i18n import LANGUAGE_NAMES, get_language, tr, translate
+from kusamushiri.last_posts import FetchLastPostsRequest, LastPostEntry, LastPostResult, LastPostStore
 from kusamushiri.logger import logger
 from kusamushiri.models import (
     DEFAULT_ACTION_INTERVAL_SECONDS,
@@ -176,6 +177,7 @@ class XDeleterWindow(QMainWindow):
     export_following_requested = Signal(object)
     collect_following_requested = Signal(str)
     unfollow_requested = Signal(object)
+    fetch_last_posts_requested = Signal(object)
 
     def __init__(self) -> None:
         super().__init__()
@@ -185,6 +187,7 @@ class XDeleterWindow(QMainWindow):
         self._stop_pending = False
         self._requested_action_count = 0
         self._requested_unfollow_count = 0
+        self._requested_last_post_count = 0
         self.follow_dialog: FollowListDialog | None = None
         self._last_logged_in_username: str | None = None
         self._current_account: str | None = None
@@ -1246,7 +1249,9 @@ class XDeleterWindow(QMainWindow):
         if output_path is None:
             return
 
-        request = ExportFollowingRequest(username=username, output_path=output_path)
+        request = ExportFollowingRequest(
+            username=username, output_path=output_path, last_posts=self._load_last_posts()
+        )
         try:
             request.validate()
         except ValueError as error:
@@ -1288,6 +1293,7 @@ class XDeleterWindow(QMainWindow):
         if self.follow_dialog is None:
             self.follow_dialog = FollowListDialog(self)
             self.follow_dialog.unfollow_requested.connect(self._handle_unfollow)
+            self.follow_dialog.last_posts_requested.connect(self._handle_fetch_last_posts)
             self.follow_dialog.stop_requested.connect(self._on_stop_browser_clicked)
         return self.follow_dialog
 
@@ -1295,6 +1301,7 @@ class XDeleterWindow(QMainWindow):
         stopped = self._stop_pending
         dialog = self._ensure_follow_dialog()
         dialog.set_records(username, records, limit_reached)
+        dialog.apply_last_posts(self._load_last_posts())
         self.set_busy(False)
         if stopped:
             return
@@ -1302,6 +1309,84 @@ class XDeleterWindow(QMainWindow):
         dialog.show()
         dialog.raise_()
         dialog.activateWindow()
+
+    def _last_post_store(self) -> LastPostStore:
+        return LastPostStore.for_account(self._current_account)
+
+    def _load_last_posts(self) -> dict[str, LastPostEntry]:
+        try:
+            return self._last_post_store().load()
+        except OSError:
+            logger.exception("Failed to open the last-post store.")
+            return {}
+
+    def _handle_fetch_last_posts(self, records: list[FollowRecord], interval_seconds: float) -> None:
+        logger.info("GUI: Last-post fetch requested for %s accounts.", len(records))
+        if self._busy:
+            return
+        if not self._login_verified:
+            QMessageBox.information(self, tr("ログイン確認が必要"), tr("現在のアカウントでログインを確認してください。"))
+            return
+        request = FetchLastPostsRequest(targets=list(records), interval_seconds=interval_seconds)
+        try:
+            request.validate()
+        except ValueError as error:
+            QMessageBox.warning(self, tr("入力エラー"), str(error))
+            return
+        self._requested_last_post_count = len(request.targets)
+        self.set_busy(True)
+        self.update_status(tr("最終ポスト日を取得しています..."))
+        self.fetch_last_posts_requested.emit(request)
+
+    def on_last_post_progress(self, username: str, current: int, total: int) -> None:
+        self.update_status(
+            tr("最終ポスト日を取得中 ({current}/{total}): @{username}", current=current, total=total, username=username)
+        )
+        self.show_progress(current, total)
+
+    def on_last_posts_done(self, results: list[LastPostResult]) -> None:
+        requested = max(self._requested_last_post_count, len(results))
+        failures = [result for result in results if not result.success]
+        succeeded = len(results) - len(failures)
+        skipped = requested - len(results)
+        save_error = ""
+        try:
+            entries = self._last_post_store().record(results)
+        except OSError as error:
+            logger.exception("Failed to save last-post results.")
+            save_error = str(error)
+            entries = {
+                result.username.casefold(): LastPostEntry(result.checked_at, result.last_post_at, result.note)
+                for result in results
+                if result.success
+            }
+        if self.follow_dialog is not None:
+            self.follow_dialog.apply_last_posts(entries)
+        stopped = self._stop_pending
+        self.set_busy(False)
+        heading = tr("最終ポスト日の取得を中止") if stopped else tr("最終ポスト日の取得完了")
+        message = tr("{heading}: {success} / {requested} 件成功", heading=heading, success=succeeded, requested=requested)
+        notes = [tr("{count} 件失敗", count=len(failures))] if failures else []
+        if skipped > 0:
+            notes.append(tr("{count} 件未処理", count=skipped))
+        if notes:
+            message += tr("（{notes}）", notes=tr("、").join(notes))
+        self.update_status(message)
+        if save_error:
+            QMessageBox.warning(
+                self.follow_dialog or self,
+                tr("エラー"),
+                tr("取得結果を保存できませんでした: {message}", message=save_error),
+            )
+        if stopped or not failures:
+            return
+        box = QMessageBox(self.follow_dialog or self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle(tr("一部失敗"))
+        box.setText(message)
+        box.setDetailedText(format_last_post_failures(failures))
+        box.addButton(QMessageBox.StandardButton.Close)
+        box.exec()
 
     def _handle_unfollow(self, records: list[FollowRecord], interval_seconds: float) -> None:
         logger.info("GUI: Unfollow requested for %s accounts.", len(records))

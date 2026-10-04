@@ -17,7 +17,8 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 
 from kusamushiri.follows import FollowRecord, UnfollowRequest, UnfollowResult
 from kusamushiri.gui import XDeleterWindow, format_action_failures, remove_successful_rows
-from kusamushiri.gui_follows import FollowListDialog
+from kusamushiri.gui_follows import CHECKED_AT_COLUMN, LAST_POST_COLUMN, FollowListDialog
+from kusamushiri.last_posts import FetchLastPostsRequest, LastPostResult, LastPostStore
 from kusamushiri.models import CollectRequest, ExecuteActionsRequest, PostActionResult, PostActionTarget, PostRecord
 from kusamushiri.paths import list_saved_accounts
 from kusamushiri.settings import AccountSettingsManager
@@ -1118,5 +1119,97 @@ def test_follow_dialog_save_writes_checked_rows(window, qtbot, monkeypatch, tmp_
         dialog.save_button.click()
         text = (tmp_path / "picked.csv").read_text(encoding="utf-8-sig")
         assert "one_way" in text and "quiet" in text and "mutual" not in text
+    finally:
+        dialog.close()
+
+
+def _row_of(dialog: FollowListDialog, username: str) -> int:
+    return next(row for row in range(dialog.table.rowCount()) if dialog._record(row).username == username)
+
+
+def _visible_order(dialog: FollowListDialog) -> list[str]:
+    return [dialog._record(row).username for row in range(dialog.table.rowCount()) if not dialog.table.isRowHidden(row)]
+
+
+def test_follow_dialog_shows_stored_last_posts_and_sorts_chronologically(window, qtbot) -> None:
+    LastPostStore.for_account(window._current_account).record([
+        LastPostResult("ONE_WAY", "2026-10-01T09:30:00+00:00", last_post_at="2026-09-30T08:00:00+00:00"),
+        LastPostResult("quiet", "2026-10-02T09:30:00+00:00", note="These posts are protected"),
+    ])
+    dialog = _open_follow_dialog(window)
+    try:
+        dialog.hide_mutual_checkbox.setChecked(False)
+        headers = [dialog.table.horizontalHeaderItem(column).text() for column in (LAST_POST_COLUMN, CHECKED_AT_COLUMN)]
+        assert headers == ["最終ポスト", "取得日"]
+        one_way = _row_of(dialog, "one_way")
+        assert dialog.table.item(one_way, LAST_POST_COLUMN).text() == "2026-09-30"
+        assert len(dialog.table.item(one_way, CHECKED_AT_COLUMN).text()) == len("2026-10-01 09:30")
+        quiet = _row_of(dialog, "quiet")
+        assert dialog.table.item(quiet, LAST_POST_COLUMN).text() == "不明"
+        assert dialog.table.item(quiet, LAST_POST_COLUMN).toolTip() == "These posts are protected"
+        assert dialog.table.item(_row_of(dialog, "mutual"), LAST_POST_COLUMN).text() == ""
+
+        # Text order would put "不明" after the date; chronological order puts unknown first.
+        dialog.table.sortByColumn(LAST_POST_COLUMN, Qt.SortOrder.AscendingOrder)
+        assert _visible_order(dialog) == ["mutual", "quiet", "one_way"]
+        dialog.table.sortByColumn(CHECKED_AT_COLUMN, Qt.SortOrder.DescendingOrder)
+        assert _visible_order(dialog) == ["quiet", "one_way", "mutual"]
+    finally:
+        dialog.close()
+
+
+def test_fetch_last_posts_emits_only_checked_rows(window, qtbot) -> None:
+    dialog = _open_follow_dialog(window)
+    emitted: list[FetchLastPostsRequest] = []
+    window.fetch_last_posts_requested.connect(emitted.append)
+    try:
+        dialog.interval_input.setValue(3)
+        dialog.table.item(_row_of(dialog, "quiet"), 0).setCheckState(Qt.CheckState.Checked)
+        dialog.last_posts_button.click()
+        assert len(emitted) == 1
+        assert _usernames(emitted[0].targets) == ["quiet"]
+        assert emitted[0].interval_seconds == 3
+        assert not dialog.last_posts_button.isEnabled()
+    finally:
+        dialog.close()
+
+
+def test_fetch_last_posts_without_checked_rows_emits_nothing(window, qtbot, monkeypatch) -> None:
+    dialog = _open_follow_dialog(window)
+    emitted: list[FetchLastPostsRequest] = []
+    window.fetch_last_posts_requested.connect(emitted.append)
+    shown: list[str] = []
+    monkeypatch.setattr(
+        "kusamushiri.gui_follows.QMessageBox.information", lambda _parent, _title, text: shown.append(text)
+    )
+    try:
+        dialog.last_posts_button.click()
+        assert emitted == []
+        assert shown == ["最終ポスト日を取得するアカウントが選択されていません。"]
+    finally:
+        dialog.close()
+
+
+def test_last_posts_done_updates_rows_and_survives_recollecting(window, qtbot, monkeypatch) -> None:
+    dialog = _open_follow_dialog(window)
+    monkeypatch.setattr("PySide6.QtWidgets.QMessageBox.exec", lambda box: 0)
+    try:
+        dialog.table.sortByColumn(LAST_POST_COLUMN, Qt.SortOrder.AscendingOrder)
+        window._requested_last_post_count = 2
+        window.on_last_posts_done([
+            LastPostResult("quiet", "2026-10-01T09:30:00+00:00", last_post_at="2026-09-30T08:00:00+00:00"),
+            LastPostResult("one_way", "2026-10-01T09:31:00+00:00", error_message="timeline did not load"),
+        ])
+        assert "1 / 2" in window.status_label.text()
+        assert dialog.table.item(_row_of(dialog, "quiet"), LAST_POST_COLUMN).text() == "2026-09-30"
+        assert dialog.table.item(_row_of(dialog, "one_way"), LAST_POST_COLUMN).text() == ""
+        assert _visible_order(dialog) == ["one_way", "quiet"]
+
+        window.on_following_collected("alice", _follows(), False)
+        assert dialog.table.item(_row_of(dialog, "quiet"), LAST_POST_COLUMN).text() == "2026-09-30"
+        dialog.table.item(_row_of(dialog, "quiet"), 0).setCheckState(Qt.CheckState.Checked)
+        assert [(record.last_post_at, record.checked_at) for record in dialog.selected_records()] == [
+            ("2026-09-30T08:00:00+00:00", "2026-10-01T09:30:00+00:00")
+        ]
     finally:
         dialog.close()

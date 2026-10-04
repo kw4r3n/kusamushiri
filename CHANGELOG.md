@@ -19,6 +19,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Bulk unfollow: "Manage follows" lists the accounts you follow, can hide mutual follows, and
   unfollows only the checked ones with a confirmation, a 10-second default interval, stop, and
   retry of failures.
+- Fetch the last post date of checked followed accounts (pinned posts and reposts are ignored) and
+  record when it was fetched; results are kept per profile, shown as sortable columns, and exported.
 
 ## [0.3.0] - 2026-10-01
 

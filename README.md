@@ -33,6 +33,7 @@ Qt (PySide6) list before anything is deleted**.
 - Multiple accounts via separate browser profiles
 - Export an account's following list to CSV (Excel-ready) or JSON
 - Review the accounts you follow (optionally hiding mutual follows) and unfollow only the checked ones
+- Fetch each checked account's last post date, kept per profile and shown in sortable columns
 
 ## Install
 

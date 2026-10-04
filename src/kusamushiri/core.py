@@ -10,6 +10,7 @@ from urllib.parse import quote, urljoin, urlparse
 from playwright.sync_api import Browser, BrowserContext, Locator, Page, Playwright
 
 from kusamushiri import actions
+from kusamushiri.actions import OWNED_TIMESTAMP_LINK_SELECTOR, POST_ARTICLE_SELECTOR
 from kusamushiri.actions import delete_post as _delete_post
 from kusamushiri.actions import execute_post_action as _execute_post_action
 from kusamushiri.actions import undo_repost as _undo_repost
@@ -23,6 +24,7 @@ from kusamushiri.browser import (
 )
 from kusamushiri.follows import FollowCollectionResult, collect_following
 from kusamushiri.i18n import tr
+from kusamushiri.last_posts import LastPostResult, fetch_last_post
 from kusamushiri.logger import logger
 from kusamushiri.models import (
     CollectRequest,
@@ -63,11 +65,7 @@ SEARCH_EMPTY_STATE_MARKERS = (
 )
 EMPTY_SEARCH_TIMEOUT_SECONDS = 15.0
 MAX_ARTICLE_PARSE_ATTEMPTS = 3
-POST_ARTICLE_SELECTOR = "xpath=//article[@data-testid='tweet'][not(ancestor::article)]"
 POST_TIME_SELECTOR = "time"
-OWNED_TIMESTAMP_LINK_SELECTOR = (
-    f"xpath=.//a[.//time][{actions.OWNED_NODE_XPATH}]"
-)
 OWNED_TEXT_SELECTOR = f"xpath=.//*[@data-testid='tweetText'][{actions.OWNED_NODE_XPATH}]"
 SUPPORTED_POST_PATH_PATTERN = re.compile(
     r"/[A-Za-z0-9_]+/status/([0-9]+)(?:/[^?#]*)?"
@@ -696,6 +694,10 @@ class XDeleterCore:
     def unfollow_account(self, username: str) -> tuple[bool, str | None]:
         page = self._require_page()
         return _unfollow_account(page, username, find_locator=self._find_first_visible_locator)
+
+    def fetch_last_post(self, username: str) -> LastPostResult:
+        page = self._require_page()
+        return fetch_last_post(page, username, self._cancel_event)
 
     def execute_post_action(self, target: PostActionTarget) -> PostActionResult:
         page = self._browser._require_page()

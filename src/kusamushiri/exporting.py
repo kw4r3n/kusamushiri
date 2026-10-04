@@ -19,6 +19,8 @@ def _spreadsheet_safe(value: str) -> str:
 
 
 def _csv_cell(value: object) -> str:
+    if value is None:
+        return ""
     if isinstance(value, bool):
         return "true" if value else "false"
     if isinstance(value, str):

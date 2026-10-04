@@ -58,6 +58,9 @@ OWNED_NODE_XPATH = (
     "not(ancestor::blockquote or ancestor::*[@data-testid='quoteTweet' or "
     "@data-testid='tweetText' or @role='link'])"
 )
+POST_ARTICLE_SELECTOR = "xpath=//article[@data-testid='tweet'][not(ancestor::article)]"
+# The post's own timestamp anchor is its permalink (/<author>/status/<id>).
+OWNED_TIMESTAMP_LINK_SELECTOR = f"xpath=.//a[.//time][{OWNED_NODE_XPATH}]"
 
 # A toggle has flipped when the owned "undo" control (e.g. "unretweet") is gone
 # and the owned "do" control (e.g. "retweet") is visible.

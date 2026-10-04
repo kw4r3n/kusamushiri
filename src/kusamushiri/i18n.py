@@ -366,6 +366,27 @@ ENGLISH: Final[dict[str, str]] = {
     "フォロー解除後の完了確認（結果不明。再試行前にXで確認してください）": (
         "Confirming the unfollow (result unknown; check on X before retrying)"
     ),
+    # Last post dates of followed accounts
+    "最終ポスト": "Last post",
+    "取得日": "Checked at",
+    "不明": "Unknown",
+    "チェックした項目の最終ポスト日を取得": "Fetch last post dates of checked accounts",
+    "チェックしたアカウントのプロフィールを順に開き、固定ポストとリポストを除いた最新ポストの日付を記録します。": (
+        "Opens each checked account's profile in turn and records the date of its newest post, "
+        "ignoring pinned posts and reposts."
+    ),
+    "最終ポスト日を取得するアカウントが選択されていません。": "No accounts are checked to fetch last post dates for.",
+    "取得の間隔は0秒以上で指定してください。": "The fetch interval must be 0 seconds or more.",
+    "取得を中断しました。": "Fetching was stopped.",
+    "タイムラインを読み込めませんでした。": "The timeline did not load.",
+    "ポストが見つかりません。": "No posts were found.",
+    "固定ポストとリポスト以外のポストが見つかりません。": "No posts were found other than pinned posts and reposts.",
+    "最終ポスト日の取得を中断しました。": "Fetching last post dates was stopped.",
+    "最終ポスト日を取得しています...": "Fetching last post dates...",
+    "最終ポスト日を取得中 ({current}/{total}): @{username}": "Fetching last post dates ({current}/{total}): @{username}",
+    "最終ポスト日の取得を中止": "Last post fetch stopped",
+    "最終ポスト日の取得完了": "Last post fetch finished",
+    "取得結果を保存できませんでした: {message}": "Could not save the fetched results: {message}",
 }
 
 TRANSLATIONS: Final[dict[str, dict[str, str]]] = {"en": ENGLISH}

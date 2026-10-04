@@ -1,6 +1,7 @@
 """Review dialog for the collected following list: filter, check, save and unfollow."""
 
-from datetime import date
+from collections.abc import Mapping
+from datetime import date, datetime
 from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal
@@ -23,10 +24,45 @@ from PySide6.QtWidgets import (
 from kusamushiri.follows import DEFAULT_UNFOLLOW_INTERVAL_SECONDS, FollowRecord, UnfollowResult, write_follow_list
 from kusamushiri.gui_table import save_selected_with_dialog
 from kusamushiri.i18n import tr
+from kusamushiri.last_posts import LastPostEntry, LastPostResult, apply_last_post_entries
+from kusamushiri.parsing import parse_post_date
 
 USERNAME_COLUMN = 1
 DISPLAY_NAME_COLUMN = 2
 FOLLOWS_YOU_COLUMN = 3
+LAST_POST_COLUMN = 4
+CHECKED_AT_COLUMN = 5
+# Date cells sort by their UTC ISO timestamp, not by the displayed local text.
+SORT_KEY_ROLE = Qt.ItemDataRole.UserRole + 1
+
+
+class SortKeyItem(QTableWidgetItem):
+    def __lt__(self, other: QTableWidgetItem) -> bool:
+        return str(self.data(SORT_KEY_ROLE) or "") < str(other.data(SORT_KEY_ROLE) or "")
+
+
+def format_last_post(record: FollowRecord) -> str:
+    if record.last_post_at:
+        post_date = parse_post_date(record.last_post_at)
+        return post_date.isoformat() if post_date is not None else record.last_post_at[:10]
+    return tr("不明") if record.checked_at else ""
+
+
+def format_checked_at(checked_at: str | None) -> str:
+    if not checked_at:
+        return ""
+    try:
+        return datetime.fromisoformat(checked_at).astimezone().strftime("%Y-%m-%d %H:%M")
+    except (ValueError, OverflowError, OSError):
+        return checked_at
+
+
+def format_last_post_failures(failures: list[LastPostResult]) -> str:
+    lines: list[str] = []
+    for result in failures:
+        lines.append(f"@{result.username}")
+        lines.append(f"  {result.error_message or tr('詳細不明')}")
+    return "\n".join(lines)
 
 
 def format_unfollow_failures(failures: list[UnfollowResult]) -> str:
@@ -41,6 +77,7 @@ class FollowListDialog(QDialog):
     """Non-modal, so the main window's stop button stays reachable during a run."""
 
     unfollow_requested = Signal(list, float)  # checked FollowRecords, interval seconds
+    last_posts_requested = Signal(list, float)  # checked FollowRecords, interval seconds
     stop_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -63,8 +100,10 @@ class FollowListDialog(QDialog):
         self.selection_label = QLabel()
         self.selection_label.setObjectName("selectionCount")
 
-        self.table = QTableWidget(0, 4)
-        self.table.setHorizontalHeaderLabels(["", tr("ユーザー名"), tr("表示名"), tr("フォローされている")])
+        self.table = QTableWidget(0, 6)
+        self.table.setHorizontalHeaderLabels(
+            ["", tr("ユーザー名"), tr("表示名"), tr("フォローされている"), tr("最終ポスト"), tr("取得日")]
+        )
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setAlternatingRowColors(True)
@@ -88,6 +127,12 @@ class FollowListDialog(QDialog):
         self.stop_button = QPushButton(tr("ブラウザ停止 / 処理中止"))
         self.stop_button.setObjectName("secondaryButton")
         self.stop_button.clicked.connect(self.stop_requested.emit)
+        self.last_posts_button = QPushButton(tr("チェックした項目の最終ポスト日を取得"))
+        self.last_posts_button.setObjectName("secondaryButton")
+        self.last_posts_button.setToolTip(
+            tr("チェックしたアカウントのプロフィールを順に開き、固定ポストとリポストを除いた最新ポストの日付を記録します。")
+        )
+        self.last_posts_button.clicked.connect(self._request_last_posts)
         self.unfollow_button = QPushButton(tr("選択したフォローを解除"))
         self.unfollow_button.setObjectName("dangerButton")
         self.unfollow_button.clicked.connect(self._request_unfollow)
@@ -102,6 +147,7 @@ class FollowListDialog(QDialog):
         footer.addWidget(self.interval_input)
         footer.addStretch(1)
         footer.addWidget(self.save_button)
+        footer.addWidget(self.last_posts_button)
         footer.addWidget(self.stop_button)
         footer.addWidget(self.unfollow_button)
         layout = QVBoxLayout(self)
@@ -131,11 +177,16 @@ class FollowListDialog(QDialog):
             self.table.setItem(row, USERNAME_COLUMN, name_item)
             self.table.setItem(row, DISPLAY_NAME_COLUMN, QTableWidgetItem(record.display_name))
             self.table.setItem(row, FOLLOWS_YOU_COLUMN, QTableWidgetItem(tr("はい") if record.follows_you else ""))
+            self.table.setItem(row, LAST_POST_COLUMN, SortKeyItem())
+            self.table.setItem(row, CHECKED_AT_COLUMN, SortKeyItem())
+            self._show_last_post(row, record)
         self.table.setSortingEnabled(True)
         self.table.blockSignals(False)
         self.table.resizeColumnToContents(0)
         self.table.resizeColumnToContents(USERNAME_COLUMN)
         self.table.resizeColumnToContents(FOLLOWS_YOU_COLUMN)
+        self.table.resizeColumnToContents(LAST_POST_COLUMN)
+        self.table.resizeColumnToContents(CHECKED_AT_COLUMN)
         mutual = sum(1 for record in records if record.follows_you)
         summary = tr(
             "@{username} のフォロー {count} 件（うち相互フォロー {mutual} 件）",
@@ -152,6 +203,37 @@ class FollowListDialog(QDialog):
         item = self.table.item(row, 0)
         record = item.data(Qt.ItemDataRole.UserRole) if item is not None else None
         return record if isinstance(record, FollowRecord) else None
+
+    def _show_last_post(self, row: int, record: FollowRecord) -> None:
+        last_post_item = self.table.item(row, LAST_POST_COLUMN)
+        checked_item = self.table.item(row, CHECKED_AT_COLUMN)
+        if last_post_item is None or checked_item is None:
+            return
+        last_post_item.setText(format_last_post(record))
+        last_post_item.setToolTip(record.last_post_note or record.last_post_at or "")
+        # Never checked < checked but unknown < any date, oldest first.
+        last_post_item.setData(SORT_KEY_ROLE, record.last_post_at or ("0" if record.checked_at else ""))
+        checked_item.setText(format_checked_at(record.checked_at))
+        checked_item.setData(SORT_KEY_ROLE, record.checked_at or "")
+
+    def apply_last_posts(self, entries: Mapping[str, LastPostEntry]) -> None:
+        """Show stored last-post results on the matching rows."""
+        # Editing cells of a sorted table would move rows during the loop.
+        sorting = self.table.isSortingEnabled()
+        self.table.setSortingEnabled(False)
+        self.table.blockSignals(True)
+        try:
+            for row in range(self.table.rowCount()):
+                record = self._record(row)
+                item = self.table.item(row, 0)
+                if record is None or item is None:
+                    continue
+                updated = apply_last_post_entries([record], entries)[0]
+                item.setData(Qt.ItemDataRole.UserRole, updated)
+                self._show_last_post(row, updated)
+        finally:
+            self.table.blockSignals(False)
+            self.table.setSortingEnabled(sorting)
 
     def _apply_mutual_filter(self, *_args: object) -> None:
         hide = self.hide_mutual_checkbox.isChecked()
@@ -222,6 +304,7 @@ class FollowListDialog(QDialog):
         self.select_all_button.setEnabled(idle and has_rows)
         self.interval_input.setEnabled(idle)
         self.save_button.setEnabled(idle and has_rows)
+        self.last_posts_button.setEnabled(idle and can_run and has_rows)
         self.unfollow_button.setEnabled(idle and can_run and has_rows)
         self.stop_button.setEnabled(busy)
 
@@ -233,6 +316,15 @@ class FollowListDialog(QDialog):
             QMessageBox.information(self, tr("情報"), tr("フォロー解除するアカウントが選択されていません。"))
             return
         self.unfollow_requested.emit(records, self.interval_input.value())
+
+    def _request_last_posts(self) -> None:
+        if self._busy or not self._can_run:
+            return
+        records = self.selected_records()
+        if not records:
+            QMessageBox.information(self, tr("情報"), tr("最終ポスト日を取得するアカウントが選択されていません。"))
+            return
+        self.last_posts_requested.emit(records, self.interval_input.value())
 
     def _save_selected(self) -> None:
         records = self.selected_records()

@@ -1,8 +1,8 @@
 """Collect an account's following list from X and export it to CSV or JSON."""
 
 import threading
-from collections.abc import Callable
-from dataclasses import asdict, dataclass
+from collections.abc import Callable, Mapping
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
 
@@ -26,7 +26,7 @@ INITIAL_LOAD_TIMEOUT_SECONDS = 15.0
 RESERVED_PATHS = frozenset({"home", "explore", "i", "messages", "notifications", "search", "settings"})
 # X throttles unfollows much harder than deletes; pace them well apart by default.
 DEFAULT_UNFOLLOW_INTERVAL_SECONDS = 10.0
-CSV_FIELDS = ("username", "display_name", "profile_url", "follows_you")
+CSV_FIELDS = ("username", "display_name", "profile_url", "follows_you", "last_post_at", "checked_at")
 
 # Emoji in names render as <img alt="…">; innerText would drop them.
 _READ_CELLS_JS = """
@@ -56,12 +56,27 @@ class FollowRecord:
     display_name: str
     profile_url: str
     follows_you: bool
+    # ISO timestamps from the last-post check; None until the account is checked.
+    last_post_at: str | None = None
+    checked_at: str | None = None
+    last_post_note: str | None = None  # why no date was found; shown in the dialog, not exported
+
+
+@dataclass(frozen=True, slots=True)
+class LastPostEntry:
+    """A stored last-post check (see last_posts.py), kept here so export requests can carry it."""
+
+    checked_at: str
+    last_post_at: str | None = None
+    note: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class ExportFollowingRequest:
     username: str
     output_path: Path
+    # Stored last-post results by lowercase username, written alongside the collected list.
+    last_posts: Mapping[str, LastPostEntry] = field(default_factory=dict)
 
     def validate(self) -> None:
         if not USERNAME_PATTERN.fullmatch(self.username.strip().removeprefix("@")):
