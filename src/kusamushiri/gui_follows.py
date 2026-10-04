@@ -9,7 +9,6 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QDialog,
     QDoubleSpinBox,
-    QFileDialog,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -21,10 +20,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from kusamushiri.exporting import EXPORT_SUFFIXES
 from kusamushiri.follows import DEFAULT_UNFOLLOW_INTERVAL_SECONDS, FollowRecord, UnfollowResult, write_follow_list
+from kusamushiri.gui_table import save_selected_with_dialog
 from kusamushiri.i18n import tr
-from kusamushiri.logger import logger
 
 USERNAME_COLUMN = 1
 DISPLAY_NAME_COLUMN = 2
@@ -194,10 +192,15 @@ class FollowListDialog(QDialog):
 
     def remove_usernames(self, usernames: set[str]) -> None:
         folded = {username.casefold() for username in usernames}
-        for row in range(self.table.rowCount() - 1, -1, -1):
-            record = self._record(row)
-            if record is not None and record.username.casefold() in folded:
-                self.table.removeRow(row)
+        # One repaint for the whole batch instead of one per removed row.
+        self.table.setUpdatesEnabled(False)
+        try:
+            for row in range(self.table.rowCount() - 1, -1, -1):
+                record = self._record(row)
+                if record is not None and record.username.casefold() in folded:
+                    self.table.removeRow(row)
+        finally:
+            self.table.setUpdatesEnabled(True)
         self._update_selection_label()
 
     def _update_selection_label(self, *_args: object) -> None:
@@ -233,26 +236,5 @@ class FollowListDialog(QDialog):
 
     def _save_selected(self) -> None:
         records = self.selected_records()
-        if not records:
-            QMessageBox.information(self, tr("情報"), tr("保存する項目が選択されていません。"))
-            return
         default_path = Path.home() / f"following-{self.source_username or 'selected'}-{date.today():%Y%m%d}.csv"
-        path_text, _selected_filter = QFileDialog.getSaveFileName(
-            self, tr("選択項目の保存先"), str(default_path), "CSV (*.csv);;JSON (*.json)"
-        )
-        if not path_text:
-            return
-        output_path = Path(path_text)
-        if output_path.suffix.lower() not in EXPORT_SUFFIXES:
-            output_path = output_path.with_name(f"{output_path.name}.csv")
-        try:
-            write_follow_list(output_path, records)
-        except OSError as error:
-            logger.warning("Follow list export failed: %s", error)
-            QMessageBox.warning(self, tr("保存エラー"), tr("ファイルを保存できませんでした: {error}", error=error))
-            return
-        QMessageBox.information(
-            self,
-            tr("エクスポート完了"),
-            tr("{count} 件の項目を保存しました。\n{path}", count=len(records), path=output_path),
-        )
+        save_selected_with_dialog(self, default_path, len(records), lambda path: write_follow_list(path, records))

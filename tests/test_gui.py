@@ -1110,7 +1110,7 @@ def test_retry_failed_unfollows_uses_dialog_interval(window, qtbot) -> None:
 def test_follow_dialog_save_writes_checked_rows(window, qtbot, monkeypatch, tmp_path) -> None:
     dialog = _open_follow_dialog(window)
     monkeypatch.setattr(
-        "kusamushiri.gui_follows.QFileDialog.getSaveFileName", lambda *args: (str(tmp_path / "picked"), "")
+        "kusamushiri.gui_table.QFileDialog.getSaveFileName", lambda *args: (str(tmp_path / "picked"), "")
     )
     monkeypatch.setattr("kusamushiri.gui_follows.QMessageBox.information", lambda *args: None)
     try:

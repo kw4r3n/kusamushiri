@@ -112,3 +112,45 @@ class CollectRequest:
             raise ValueError(tr("開始日は終了日以前で指定してください。"))
         if any(not keyword.strip() for keyword in (*self.include_keywords, *self.exclude_keywords)):
             raise ValueError(tr("空のキーワードは指定できません。"))
+
+
+POST_KIND_BY_FILTER: Final[dict[str, PostKind]] = {"posts": "post", "reposts": "repost", "likes": "like"}
+
+
+def is_within_date_range(post_date: date | None, request: CollectRequest) -> bool:
+    if request.since_date is not None and (post_date is None or post_date < request.since_date):
+        return False
+    return not (request.until_date is not None and (post_date is None or post_date > request.until_date))
+
+
+def post_skip_reason(
+    request: CollectRequest,
+    *,
+    has_media: bool,
+    is_reply: bool,
+    kind: PostKind,
+    likes_count: int,
+    replies_count: int,
+    post_date: date | None,
+    text: str,
+) -> str | None:
+    """Return why a post fails the collection filters, or None when it matches."""
+    if request.media_filter == "with_media" and not has_media:
+        return "no media"
+    if request.media_filter == "without_media" and has_media:
+        return "has media"
+    if request.is_reply and not is_reply:
+        return "not a reply"
+    if request.post_kind_filter != "all" and kind != POST_KIND_BY_FILTER[request.post_kind_filter]:
+        return f"kind={kind} while filter={request.post_kind_filter}"
+    if likes_count < request.min_likes:
+        return f"likes={likes_count} < min={request.min_likes}"
+    if replies_count < request.min_replies:
+        return f"replies={replies_count} < min={request.min_replies}"
+    if not is_within_date_range(post_date, request):
+        return f"date={post_date} outside since={request.since_date}, until={request.until_date}"
+    if request.include_keywords and not text_contains_any_keyword(text, request.include_keywords):
+        return "no include keyword matched"
+    if request.exclude_keywords and text_contains_any_keyword(text, request.exclude_keywords):
+        return "exclude keyword matched"
+    return None

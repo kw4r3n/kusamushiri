@@ -30,7 +30,8 @@ from kusamushiri.models import (
     PostActionTarget,
     PostKind,
     PostRecord,
-    text_contains_any_keyword,
+    is_within_date_range,
+    post_skip_reason,
 )
 from kusamushiri.parsing import (
     TEXT_PREVIEW_LENGTH,
@@ -166,9 +167,7 @@ class XDeleterCore:
             logger.debug("Timeline height did not change before timeout: %s", error)
 
     def _is_post_within_date_range(self, post_date: date | None, request: CollectRequest) -> bool:
-        if request.since_date is not None and (post_date is None or post_date < request.since_date):
-            return False
-        return not (request.until_date is not None and (post_date is None or post_date > request.until_date))
+        return is_within_date_range(post_date, request)
 
     def _find_first_visible_locator(
         self,
@@ -374,74 +373,18 @@ class XDeleterCore:
         article_index: int,
         text_content: str = "",
     ) -> bool:
-        if request.media_filter == "with_media" and not has_media:
-            logger.debug(
-                "Article %s: Skipped (has_media=%s but required=%s)",
-                article_index,
-                has_media,
-                request.media_filter,
-            )
-            return False
-        if request.media_filter == "without_media" and has_media:
-            logger.debug(
-                "Article %s: Skipped (has_media=%s but required=%s)",
-                article_index,
-                has_media,
-                request.media_filter,
-            )
-            return False
-        if request.is_reply and not is_reply:
-            logger.debug(
-                "Article %s: Skipped (is_reply=%s but required=%s)",
-                article_index,
-                is_reply,
-                request.is_reply,
-            )
-            return False
-        if request.post_kind_filter == "posts" and kind != "post":
-            logger.debug(
-                "Article %s: Skipped repost while filter=%s",
-                article_index,
-                request.post_kind_filter,
-            )
-            return False
-        if request.post_kind_filter == "reposts" and kind != "repost":
-            logger.debug(
-                "Article %s: Skipped non-repost while filter=%s",
-                article_index,
-                request.post_kind_filter,
-            )
-            return False
-        if request.min_likes > 0 and likes_count < request.min_likes:
-            logger.debug(
-                "Article %s: Skipped (likes=%s < min=%s)",
-                article_index,
-                likes_count,
-                request.min_likes,
-            )
-            return False
-        if request.min_replies > 0 and replies_count < request.min_replies:
-            logger.debug(
-                "Article %s: Skipped (replies=%s < min=%s)",
-                article_index,
-                replies_count,
-                request.min_replies,
-            )
-            return False
-        if not self._is_post_within_date_range(post_date, request):
-            logger.debug(
-                "Article %s: Skipped by date range (date=%s, since=%s, until=%s)",
-                article_index,
-                post_date.isoformat() if post_date is not None else "unknown",
-                request.since_date.isoformat() if request.since_date is not None else "none",
-                request.until_date.isoformat() if request.until_date is not None else "none",
-            )
-            return False
-        if request.include_keywords and not text_contains_any_keyword(text_content, request.include_keywords):
-            logger.debug("Article %s: Skipped (no include keyword matched)", article_index)
-            return False
-        if request.exclude_keywords and text_contains_any_keyword(text_content, request.exclude_keywords):
-            logger.debug("Article %s: Skipped (exclude keyword matched)", article_index)
+        reason = post_skip_reason(
+            request,
+            has_media=has_media,
+            is_reply=is_reply,
+            kind=kind,
+            likes_count=likes_count,
+            replies_count=replies_count,
+            post_date=post_date,
+            text=text_content,
+        )
+        if reason is not None:
+            logger.debug("Article %s: Skipped (%s)", article_index, reason)
             return False
         return True
 

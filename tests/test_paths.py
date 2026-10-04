@@ -158,10 +158,7 @@ def test_app_data_and_profile_dirs_are_private(app_data_dir: Path) -> None:
 
 @pytest.mark.parametrize("frozen", [False, True])
 def test_configure_frozen_browser_path_uses_app_data_only_when_frozen(monkeypatch, app_data_dir, frozen):
-    # setenv first so teardown removes the value the code under test sets; a bare
-    # delenv of an unset variable records nothing and later browser tests would skip.
-    monkeypatch.setenv("PLAYWRIGHT_BROWSERS_PATH", "unused")
-    monkeypatch.delenv("PLAYWRIGHT_BROWSERS_PATH")
+    monkeypatch.delenv("PLAYWRIGHT_BROWSERS_PATH", raising=False)
     monkeypatch.setattr(x_deleter_paths.sys, "frozen", frozen, raising=False)
 
     x_deleter_paths.configure_frozen_browser_path()

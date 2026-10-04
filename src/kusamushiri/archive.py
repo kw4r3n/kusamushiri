@@ -6,13 +6,13 @@ GUI に依存しない純粋なモジュールで、収集結果と同じ PostRe
 import json
 import re
 import zipfile
-from collections.abc import Iterable
-from dataclasses import dataclass
+from collections.abc import Iterable, Sequence
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Final
 
-from kusamushiri.models import CollectRequest, PostRecord, text_contains_any_keyword
+from kusamushiri.models import CollectRequest, PostRecord, post_skip_reason
 from kusamushiri.parsing import USERNAME_PATTERN, parse_post_date
 
 FALLBACK_USERNAME: Final = "i"
@@ -43,10 +43,14 @@ class _ArchiveFile:
 def load_archive_posts(archive_path: str | Path, fallback_username: str | None = None) -> list[PostRecord]:
     """アーカイブ(.zip または展開済みフォルダ)からポストを読み込み、新しい順に返す。
 
+    archive_path には data/tweets.js などのファイル自体も渡せる。
     URL のユーザー名は data/account.js を優先し、無ければ fallback_username、
     それも無ければ "i" (https://x.com/i/status/<id>) を使う。
     """
     path = Path(archive_path)
+    # A picked tweets.js stands for the extracted archive folder around it.
+    if path.is_file() and path.suffix.lower() == ".js":
+        path = path.parent
     if path.is_dir():
         tweet_files, account_file = _read_folder(path)
     elif path.is_file():
@@ -75,29 +79,42 @@ def filter_archive_posts(posts: Iterable[PostRecord], request: CollectRequest) -
     return [post for post in posts if _post_matches_request(post, request)]
 
 
+@dataclass(frozen=True, slots=True)
+class ArchiveSelection:
+    posts: list[PostRecord]
+    total: int
+    skipped_reposts: int
+
+
+def select_archive_posts(posts: Sequence[PostRecord], request: CollectRequest) -> ArchiveSelection:
+    """アーカイブで扱えない条件を除いて絞り込み、新しい順に max_posts 件までを返す。
+
+    アーカイブのリポストは元ポストではなくリポスト自体の ID を持つため URL から解除できず、対象外にする。
+    アーカイブには返信数が無いので、最低返信数の条件は使わない。
+    """
+    originals = [post for post in posts if post.kind != "repost"]
+    matched = filter_archive_posts(originals, replace(request, min_replies=0))
+    return ArchiveSelection(
+        posts=matched[: request.max_posts],
+        total=len(posts),
+        skipped_reposts=len(posts) - len(originals),
+    )
+
+
 def _post_matches_request(post: PostRecord, request: CollectRequest) -> bool:
-    if request.media_filter == "with_media" and not post.has_media:
-        return False
-    if request.media_filter == "without_media" and post.has_media:
-        return False
-    if request.is_reply and not post.is_reply:
-        return False
-    if request.post_kind_filter == "posts" and post.kind != "post":
-        return False
-    if request.post_kind_filter == "reposts" and post.kind != "repost":
-        return False
-    if request.post_kind_filter == "likes" and post.kind != "like":
-        return False
-    if post.likes < request.min_likes or post.replies < request.min_replies:
-        return False
-    post_date = parse_post_date(post.date)
-    if request.since_date is not None and (post_date is None or post_date < request.since_date):
-        return False
-    if request.until_date is not None and (post_date is None or post_date > request.until_date):
-        return False
-    if request.include_keywords and not text_contains_any_keyword(post.text, request.include_keywords):
-        return False
-    return not (request.exclude_keywords and text_contains_any_keyword(post.text, request.exclude_keywords))
+    return (
+        post_skip_reason(
+            request,
+            has_media=post.has_media,
+            is_reply=post.is_reply,
+            kind=post.kind,
+            likes_count=post.likes,
+            replies_count=post.replies,
+            post_date=parse_post_date(post.date) if request.since_date or request.until_date else None,
+            text=post.text,
+        )
+        is None
+    )
 
 
 def _is_archive_data_dir(parent: PurePosixPath) -> bool:
@@ -159,12 +176,20 @@ def _parse_ytd_array(archive_file: _ArchiveFile) -> list[dict[str, Any]]:
     if prefix is None:
         raise ArchiveError(f"Unexpected format in {archive_file.name}: missing window.YTD prefix")
     try:
-        data = json.loads(archive_file.content[prefix.end() :].strip().removesuffix(";"))
+        # raw_decode parses in place, so the (possibly large) text is not copied; a trailing ";" is ignored.
+        start = _skip_whitespace(archive_file.content, prefix.end())
+        data, _end = json.JSONDecoder().raw_decode(archive_file.content, start)
     except json.JSONDecodeError as error:
         raise ArchiveError(f"Malformed JSON in {archive_file.name}: {error}") from error
     if not isinstance(data, list) or not all(isinstance(entry, dict) for entry in data):
         raise ArchiveError(f"Unexpected format in {archive_file.name}: expected an array of objects")
     return data
+
+
+def _skip_whitespace(text: str, index: int) -> int:
+    while index < len(text) and text[index].isspace():
+        index += 1
+    return index
 
 
 def _resolve_username(account_file: _ArchiveFile | None, fallback_username: str | None) -> str:

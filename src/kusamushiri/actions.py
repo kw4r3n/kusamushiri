@@ -30,7 +30,7 @@ DELETE_MENU_ITEM_SELECTORS = (
     '[data-testid="Dropdown"] [role="menuitem"]:has-text("削除"):not(:has-text("リスト")):visible',
     '[data-testid="Dropdown"] [role="menuitem"]:has-text("삭제"):not(:has-text("리스트")):not(:has-text("목록")):visible',
 )
-DELETE_CONFIRM_SELECTOR = '[data-testid="confirmationSheetConfirm"]'
+CONFIRMATION_SHEET_CONFIRM_SELECTOR = '[data-testid="confirmationSheetConfirm"]'
 DELETE_POST_MUTATION = "DeleteTweet"
 UNDO_REPOST_MUTATION = "DeleteRetweet"
 UNLIKE_MUTATION = "UnfavoriteTweet"
@@ -197,65 +197,17 @@ def undo_repost(
     find_locator: LocatorFinder = find_first_visible_locator,
 ) -> tuple[bool, str | None]:
     """指定されたポストのリポストを解除する"""
-    logger.info("Initiating undo repost for: %s", post_url)
-    mutation_requests: list[Request] = []
-
-    def record_mutation(request: Request) -> None:
-        if _is_mutation_request(request, UNDO_REPOST_MUTATION):
-            mutation_requests.append(request)
-
-    listening = False
-    try:
-        main_tweet_article = _target_article(page, post_url)
-        page.goto(post_url, timeout=NAVIGATION_TIMEOUT_MS)
-
-        main_tweet_article.wait_for(state="visible", timeout=NAVIGATION_TIMEOUT_MS)
-        unrepost_button = find_locator(
-            main_tweet_article,
-            (_own_control('unretweet'),),
-        )
-        if unrepost_button is None:
-            message = tr("リポスト解除ボタンが見つかりませんでした。")
-            logger.warning("%s URL=%s", message, post_url)
-            return False, message
-
-        article_element = main_tweet_article.element_handle()
-        unrepost_button.click()
-        page.wait_for_selector(
-            ", ".join(UNREPOST_CONFIRM_SELECTORS),
-            state="visible",
-            timeout=ACTION_STATE_TIMEOUT_MS,
-        )
-
-        confirm_button = find_locator(page, UNREPOST_CONFIRM_SELECTORS)
-        if confirm_button is None:
-            message = tr("リポスト解除の確認ボタンが見つかりませんでした。")
-            logger.warning("%s URL=%s", message, post_url)
-            return False, message
-
-        page.on("request", record_mutation)
-        listening = True
-        confirm_button.click()
-        error_message = _wait_for_mutation_result(
-            mutation_requests,
-            UNDO_REPOST_MUTATION,
-            lambda: page.wait_for_function(
-                TOGGLE_OFF_DONE_SCRIPT,
-                arg={"article": article_element, "owned": OWNED_NODE_XPATH, "undoId": "unretweet", "doId": "retweet"},
-                timeout=ACTION_STATE_TIMEOUT_MS,
-            ),
-        )
-        if error_message is not None:
-            logger.warning("%s URL=%s", error_message, post_url)
-            return False, error_message
-        logger.info("Successfully removed repost: %s", post_url)
-        return True, None
-    except Exception as error:
-        logger.exception("Exception during undo repost for %s.", post_url)
-        return False, f"{type(error).__name__}: {error}"
-    finally:
-        if listening:
-            page.remove_listener("request", record_mutation)
+    return _toggle_off_post(
+        page,
+        post_url,
+        find_locator,
+        action_name="undo repost",
+        undo_id="unretweet",
+        do_id="retweet",
+        mutation=UNDO_REPOST_MUTATION,
+        button_missing=tr("リポスト解除ボタンが見つかりませんでした。"),
+        confirm=(UNREPOST_CONFIRM_SELECTORS, tr("リポスト解除の確認ボタンが見つかりませんでした。")),
+    )
 
 
 def unlike_post(
@@ -264,11 +216,37 @@ def unlike_post(
     find_locator: LocatorFinder = find_first_visible_locator,
 ) -> tuple[bool, str | None]:
     """指定されたポストのいいねを取り消す"""
-    logger.info("Initiating unlike for: %s", post_url)
+    # Unliking has no confirmation step; the first click sends the mutation.
+    return _toggle_off_post(
+        page,
+        post_url,
+        find_locator,
+        action_name="unlike",
+        undo_id="unlike",
+        do_id="like",
+        mutation=UNLIKE_MUTATION,
+        button_missing=tr("いいね取り消しボタンが見つかりませんでした。"),
+    )
+
+
+def _toggle_off_post(
+    page: Page,
+    post_url: str,
+    find_locator: LocatorFinder,
+    *,
+    action_name: str,
+    undo_id: str,
+    do_id: str,
+    mutation: str,
+    button_missing: str,
+    confirm: tuple[tuple[str, ...], str] | None = None,
+) -> tuple[bool, str | None]:
+    """Click the post's own `undo_id` control (and its confirmation) until it turns back into `do_id`."""
+    logger.info("Initiating %s for: %s", action_name, post_url)
     mutation_requests: list[Request] = []
 
     def record_mutation(request: Request) -> None:
-        if _is_mutation_request(request, UNLIKE_MUTATION):
+        if _is_mutation_request(request, mutation):
             mutation_requests.append(request)
 
     listening = False
@@ -277,33 +255,44 @@ def unlike_post(
         page.goto(post_url, timeout=NAVIGATION_TIMEOUT_MS)
 
         main_tweet_article.wait_for(state="visible", timeout=NAVIGATION_TIMEOUT_MS)
-        unlike_button = find_locator(main_tweet_article, (_own_control("unlike"),))
-        if unlike_button is None:
-            message = tr("いいね取り消しボタンが見つかりませんでした。")
-            logger.warning("%s URL=%s", message, post_url)
-            return False, message
+        undo_button = find_locator(main_tweet_article, (_own_control(undo_id),))
+        if undo_button is None:
+            logger.warning("%s URL=%s", button_missing, post_url)
+            return False, button_missing
 
         article_element = main_tweet_article.element_handle()
-        # Unliking has no confirmation step; the first click sends the mutation.
-        page.on("request", record_mutation)
-        listening = True
-        unlike_button.click()
+        if confirm is None:
+            page.on("request", record_mutation)
+            listening = True
+            undo_button.click()
+        else:
+            confirm_selectors, confirm_missing = confirm
+            undo_button.click()
+            page.wait_for_selector(", ".join(confirm_selectors), state="visible", timeout=ACTION_STATE_TIMEOUT_MS)
+            confirm_button = find_locator(page, confirm_selectors)
+            if confirm_button is None:
+                logger.warning("%s URL=%s", confirm_missing, post_url)
+                return False, confirm_missing
+            page.on("request", record_mutation)
+            listening = True
+            confirm_button.click()
+
         error_message = _wait_for_mutation_result(
             mutation_requests,
-            UNLIKE_MUTATION,
+            mutation,
             lambda: page.wait_for_function(
                 TOGGLE_OFF_DONE_SCRIPT,
-                arg={"article": article_element, "owned": OWNED_NODE_XPATH, "undoId": "unlike", "doId": "like"},
+                arg={"article": article_element, "owned": OWNED_NODE_XPATH, "undoId": undo_id, "doId": do_id},
                 timeout=ACTION_STATE_TIMEOUT_MS,
             ),
         )
         if error_message is not None:
             logger.warning("%s URL=%s", error_message, post_url)
             return False, error_message
-        logger.info("Successfully removed like: %s", post_url)
+        logger.info("Completed %s: %s", action_name, post_url)
         return True, None
     except Exception as error:
-        logger.exception("Exception during unlike for %s.", post_url)
+        logger.exception("Exception during %s for %s.", action_name, post_url)
         return False, f"{type(error).__name__}: {error}"
     finally:
         if listening:
@@ -370,14 +359,14 @@ def delete_post(
         stage = tr("削除確認画面の表示")
         delete_menu_item.click()
         page.wait_for_selector(
-            DELETE_CONFIRM_SELECTOR,
+            CONFIRMATION_SHEET_CONFIRM_SELECTOR,
             state="visible",
             timeout=ACTION_STATE_TIMEOUT_MS,
         )
 
         confirm_btn = find_locator(
             page,
-            (DELETE_CONFIRM_SELECTOR,),
+            (CONFIRMATION_SHEET_CONFIRM_SELECTOR,),
         )
         if confirm_btn is not None:
             stage = tr("削除確定後の完了確認（結果不明。再試行前にXで確認してください）")
@@ -427,6 +416,11 @@ def unfollow_account(
         if _is_mutation_request(request, UNFOLLOW_MUTATION):
             mutation_requests.append(request)
 
+    def fail(message: str) -> tuple[bool, str]:
+        logger.warning("%s @%s", message, username)
+        return False, message
+
+    button_missing = tr("フォロー解除ボタンが見つかりませんでした。")
     listening = False
     try:
         page.goto(urljoin(BASE_X_URL, username), timeout=NAVIGATION_TIMEOUT_MS)
@@ -439,32 +433,21 @@ def unfollow_account(
                 timeout=ACTION_STATE_TIMEOUT_MS,
             )
         except PlaywrightTimeoutError:
-            message = tr("フォロー解除ボタンが見つかりませんでした。")
-            logger.warning("%s @%s", message, username)
-            return False, message
+            return fail(button_missing)
         # Exactly one header button; more would mean the page is not the profile we expect.
         if page.locator(UNFOLLOW_BUTTON_SELECTOR).count() != 1:
-            message = (
-                tr("このアカウントをフォローしていません。")
-                if page.locator(FOLLOW_BUTTON_SELECTOR).count() > 0
-                else tr("フォロー解除ボタンが見つかりませんでした。")
-            )
-            logger.warning("%s @%s", message, username)
-            return False, message
+            not_following = page.locator(FOLLOW_BUTTON_SELECTOR).count() > 0
+            return fail(tr("このアカウントをフォローしていません。") if not_following else button_missing)
         unfollow_button = find_locator(page, (UNFOLLOW_BUTTON_SELECTOR,))
         if unfollow_button is None:
-            message = tr("フォロー解除ボタンが見つかりませんでした。")
-            logger.warning("%s @%s", message, username)
-            return False, message
+            return fail(button_missing)
 
         unfollow_button.click()
         stage = tr("フォロー解除確認画面の表示")
-        page.wait_for_selector(DELETE_CONFIRM_SELECTOR, state="visible", timeout=ACTION_STATE_TIMEOUT_MS)
-        confirm_button = find_locator(page, (DELETE_CONFIRM_SELECTOR,))
+        page.wait_for_selector(CONFIRMATION_SHEET_CONFIRM_SELECTOR, state="visible", timeout=ACTION_STATE_TIMEOUT_MS)
+        confirm_button = find_locator(page, (CONFIRMATION_SHEET_CONFIRM_SELECTOR,))
         if confirm_button is None:
-            message = tr("フォロー解除の確認ボタンが見つかりませんでした。")
-            logger.warning("%s @%s", message, username)
-            return False, message
+            return fail(tr("フォロー解除の確認ボタンが見つかりませんでした。"))
 
         stage = tr("フォロー解除後の完了確認（結果不明。再試行前にXで確認してください）")
         page.on("request", record_mutation)
@@ -480,8 +463,7 @@ def unfollow_account(
             ),
         )
         if error_message is not None:
-            logger.warning("%s @%s", error_message, username)
-            return False, error_message
+            return fail(error_message)
         logger.info("Successfully unfollowed: @%s", username)
         return True, None
     except Exception as error:

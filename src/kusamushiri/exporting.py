@@ -3,6 +3,7 @@
 import csv
 import json
 from collections.abc import Mapping, Sequence
+from dataclasses import asdict
 from pathlib import Path
 
 from kusamushiri.models import PostRecord
@@ -13,7 +14,7 @@ POST_CSV_FIELDS = ("id", "url", "date", "kind", "text", "likes", "replies", "has
 FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
 
 
-def spreadsheet_safe(value: str) -> str:
+def _spreadsheet_safe(value: str) -> str:
     return f"'{value}" if value.startswith(FORMULA_PREFIXES) else value
 
 
@@ -21,7 +22,7 @@ def _csv_cell(value: object) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
     if isinstance(value, str):
-        return spreadsheet_safe(value)
+        return _spreadsheet_safe(value)
     return str(value)
 
 
@@ -44,21 +45,4 @@ def write_records(path: Path, fields: Sequence[str], rows: Sequence[Mapping[str,
 
 
 def write_post_list(path: Path, posts: Sequence[PostRecord]) -> None:
-    write_records(
-        path,
-        POST_CSV_FIELDS,
-        [
-            {
-                "id": post.id,
-                "url": post.url,
-                "date": post.date,
-                "kind": post.kind,
-                "text": post.text,
-                "likes": post.likes,
-                "replies": post.replies,
-                "has_media": post.has_media,
-                "is_reply": post.is_reply,
-            }
-            for post in posts
-        ],
-    )
+    write_records(path, POST_CSV_FIELDS, [asdict(post) for post in posts])

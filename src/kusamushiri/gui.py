@@ -1,4 +1,4 @@
-from dataclasses import replace
+from collections import Counter
 from datetime import date, datetime
 from pathlib import Path
 
@@ -32,8 +32,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from kusamushiri.archive import ArchiveError, filter_archive_posts, load_archive_posts
-from kusamushiri.exporting import EXPORT_SUFFIXES, write_post_list
+from kusamushiri.archive import ArchiveError, load_archive_posts, select_archive_posts
+from kusamushiri.exporting import write_post_list
 from kusamushiri.follows import (
     DEFAULT_UNFOLLOW_INTERVAL_SECONDS,
     ExportFollowingRequest,
@@ -42,7 +42,7 @@ from kusamushiri.follows import (
     UnfollowResult,
 )
 from kusamushiri.gui_follows import FollowListDialog, format_unfollow_failures
-from kusamushiri.gui_table import URL_COLUMN_WIDTH, PostTableManager
+from kusamushiri.gui_table import URL_COLUMN_WIDTH, PostTableManager, ask_export_path, save_selected_with_dialog
 from kusamushiri.i18n import LANGUAGE_NAMES, get_language, tr, translate
 from kusamushiri.logger import logger
 from kusamushiri.models import (
@@ -421,7 +421,7 @@ class XDeleterWindow(QMainWindow):
         self.post_kind_combo.addItem(tr("通常ポスト + リポスト"), userData="all")
         self.post_kind_combo.addItem(tr("いいねしたポスト（いいね取り消し）"), userData="likes")
         self.post_kind_combo.setItemData(
-            3,
+            self.post_kind_combo.findData("likes"),
             tr("プロフィールのいいね欄を走査し、チェックしたポストのいいねを取り消します。"),
             Qt.ItemDataRole.ToolTipRole,
         )
@@ -1186,12 +1186,8 @@ class XDeleterWindow(QMainWindow):
         )
         if not path_text:
             return
-        archive_path = Path(path_text)
-        # A picked tweets.js stands for the extracted archive folder around it.
-        if archive_path.suffix.lower() == ".js":
-            archive_path = archive_path.parent
         try:
-            posts = load_archive_posts(archive_path, fallback_username=request.username)
+            posts = load_archive_posts(path_text, fallback_username=request.username)
         except ArchiveError as error:
             logger.warning("Archive import failed: %s", error)
             QMessageBox.warning(
@@ -1199,22 +1195,16 @@ class XDeleterWindow(QMainWindow):
             )
             return
 
-        # Archive reposts carry the repost's own ID, not the original post's, so they cannot be undone by URL.
-        # Archives have no reply counts either, so the minimum-replies filter is not applied.
-        reposts = sum(1 for post in posts if post.kind == "repost")
-        matched = filter_archive_posts(
-            (post for post in posts if post.kind != "repost"), replace(request, min_replies=0)
-        )[: request.max_posts]
-
+        selection = select_archive_posts(posts, request)
         self._last_collect_request = request
         self._save_settings()
-        self.display_posts(matched)
+        self.display_posts(selection.posts)
         self.update_status(
             tr(
                 "アーカイブから {count} 件を読み込みました（全 {total} 件、リポスト {reposts} 件は対象外）。",
-                count=len(matched),
-                total=len(posts),
-                reposts=reposts,
+                count=len(selection.posts),
+                total=selection.total,
+                reposts=selection.skipped_reposts,
             )
         )
 
@@ -1252,17 +1242,9 @@ class XDeleterWindow(QMainWindow):
             QMessageBox.warning(self, tr("入力エラー"), tr("X アカウントIDを入力してください（英数字とアンダースコア、15文字まで）。"))
             return
         default_path = Path.home() / f"following-{username}-{date.today():%Y%m%d}.csv"
-        path_text, _selected_filter = QFileDialog.getSaveFileName(
-            self,
-            tr("フォローリストの保存先"),
-            str(default_path),
-            "CSV (*.csv);;JSON (*.json)",
-        )
-        if not path_text:
+        output_path = ask_export_path(self, tr("フォローリストの保存先"), default_path)
+        if output_path is None:
             return
-        output_path = Path(path_text)
-        if output_path.suffix.lower() not in {".csv", ".json"}:
-            output_path = output_path.with_name(f"{output_path.name}.csv")
 
         request = ExportFollowingRequest(username=username, output_path=output_path)
         try:
@@ -1427,34 +1409,11 @@ class XDeleterWindow(QMainWindow):
         if self._busy:
             return
         posts = self.table_manager.selected_posts()
-        if not posts:
-            QMessageBox.information(self, tr("情報"), tr("保存する項目が選択されていません。"))
-            return
         username = self._normalized_username_input() or "posts"
         default_path = Path.home() / f"posts-{username}-{date.today():%Y%m%d}.csv"
-        path_text, _selected_filter = QFileDialog.getSaveFileName(
-            self,
-            tr("選択項目の保存先"),
-            str(default_path),
-            "CSV (*.csv);;JSON (*.json)",
-        )
-        if not path_text:
-            return
-        output_path = Path(path_text)
-        if output_path.suffix.lower() not in EXPORT_SUFFIXES:
-            output_path = output_path.with_name(f"{output_path.name}.csv")
-        try:
-            write_post_list(output_path, posts)
-        except OSError as error:
-            logger.warning("Post export failed: %s", error)
-            QMessageBox.warning(self, tr("保存エラー"), tr("ファイルを保存できませんでした: {error}", error=error))
-            return
-        self.update_status(tr("選択項目 {count} 件を保存しました: {path}", count=len(posts), path=output_path))
-        QMessageBox.information(
-            self,
-            tr("エクスポート完了"),
-            tr("{count} 件の項目を保存しました。\n{path}", count=len(posts), path=output_path),
-        )
+        output_path = save_selected_with_dialog(self, default_path, len(posts), lambda path: write_post_list(path, posts))
+        if output_path is not None:
+            self.update_status(tr("選択項目 {count} 件を保存しました: {path}", count=len(posts), path=output_path))
 
     def _clear_posts(self) -> None:
         self.table_manager.clear()
@@ -1480,18 +1439,13 @@ class XDeleterWindow(QMainWindow):
             logger.info("GUI: Execution cancelled due to account mismatch warning.")
             return
 
-        delete_count = sum(1 for target in targets if target.kind == "post")
-        unrepost_count = sum(1 for target in targets if target.kind == "repost")
-        unlike_count = sum(1 for target in targets if target.kind == "like")
-        operations: list[str] = []
-        if delete_count > 0:
-            operations.append(tr("ポスト削除 {count} 件", count=delete_count))
-        if unrepost_count > 0:
-            operations.append(tr("リポスト解除 {count} 件", count=unrepost_count))
-        if unlike_count > 0:
-            operations.append(tr("いいね取り消し {count} 件", count=unlike_count))
-
-        summary = " / ".join(operations)
+        counts = Counter(target.kind for target in targets)
+        operations = {
+            "post": tr("ポスト削除 {count} 件", count=counts["post"]),
+            "repost": tr("リポスト解除 {count} 件", count=counts["repost"]),
+            "like": tr("いいね取り消し {count} 件", count=counts["like"]),
+        }
+        summary = " / ".join(text for kind, text in operations.items() if counts[kind])
 
         result = QMessageBox.question(
             self,
