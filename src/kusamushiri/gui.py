@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from kusamushiri.exporting import EXPORT_SUFFIXES, write_post_list
 from kusamushiri.follows import ExportFollowingRequest
 from kusamushiri.gui_table import URL_COLUMN_WIDTH, PostTableManager
 from kusamushiri.i18n import LANGUAGE_NAMES, get_language, tr, translate
@@ -487,6 +488,11 @@ class XDeleterWindow(QMainWindow):
         interval_note = QLabel(tr("0 秒で連続実行"))
         action_options_layout.addWidget(interval_note)
         action_options_layout.addStretch(1)
+        self.export_posts_button = QPushButton(tr("選択項目を保存"))
+        self.export_posts_button.setObjectName("secondaryButton")
+        self.export_posts_button.setToolTip(tr("チェックした項目の本文や URL を CSV（または JSON）で保存します。削除前の控えに使えます。"))
+        self.export_posts_button.clicked.connect(self._handle_export_posts)
+        action_options_layout.addWidget(self.export_posts_button)
         layout.addLayout(action_options_layout)
 
         self.table = QTableWidget(0, 9)
@@ -635,6 +641,7 @@ class XDeleterWindow(QMainWindow):
         self.delete_interval_input.setEnabled(enabled)
         self.table.setEnabled(enabled)
         self.select_all_button.setEnabled(enabled and self.table.rowCount() > 0)
+        self.export_posts_button.setEnabled(enabled and self.table.rowCount() > 0)
         self.stop_button.setEnabled(self._browser_running or busy)
         if not busy:
             self.hide_progress()
@@ -1173,6 +1180,39 @@ class XDeleterWindow(QMainWindow):
             return
         self.update_status(tr("フォローリスト {count} 件を保存しました: {path}", count=count, path=path))
         QMessageBox.information(self, tr("エクスポート完了"), tr("{count} 件のフォローを保存しました。\n{path}", count=count, path=path))
+
+    def _handle_export_posts(self) -> None:
+        if self._busy:
+            return
+        posts = self.table_manager.selected_posts()
+        if not posts:
+            QMessageBox.information(self, tr("情報"), tr("保存する項目が選択されていません。"))
+            return
+        username = self._normalized_username_input() or "posts"
+        default_path = Path.home() / f"posts-{username}-{date.today():%Y%m%d}.csv"
+        path_text, _selected_filter = QFileDialog.getSaveFileName(
+            self,
+            tr("選択項目の保存先"),
+            str(default_path),
+            "CSV (*.csv);;JSON (*.json)",
+        )
+        if not path_text:
+            return
+        output_path = Path(path_text)
+        if output_path.suffix.lower() not in EXPORT_SUFFIXES:
+            output_path = output_path.with_name(f"{output_path.name}.csv")
+        try:
+            write_post_list(output_path, posts)
+        except OSError as error:
+            logger.warning("Post export failed: %s", error)
+            QMessageBox.warning(self, tr("保存エラー"), tr("ファイルを保存できませんでした: {error}", error=error))
+            return
+        self.update_status(tr("選択項目 {count} 件を保存しました: {path}", count=len(posts), path=output_path))
+        QMessageBox.information(
+            self,
+            tr("エクスポート完了"),
+            tr("{count} 件の項目を保存しました。\n{path}", count=len(posts), path=output_path),
+        )
 
     def _clear_posts(self) -> None:
         self.table_manager.clear()

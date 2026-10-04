@@ -11,6 +11,8 @@ TEXT_COLUMN = 1
 URL_COLUMN = 2
 TEXT_COLUMN_MIN_WIDTH = 240
 URL_COLUMN_WIDTH = 180
+# The check item keeps the full record so checked rows can be exported.
+POST_RECORD_ROLE = Qt.ItemDataRole.UserRole + 1
 
 
 class PostTableManager(QObject):
@@ -82,6 +84,7 @@ class PostTableManager(QObject):
                 Qt.ItemDataRole.UserRole,
                 PostActionTarget(url=post.url, is_repost=post.is_repost),
             )
+            check_item.setData(POST_RECORD_ROLE, post)
             self.table.setItem(row_index, 0, check_item)
 
             text_item = QTableWidgetItem(post.text.replace("\n", " "))
@@ -151,6 +154,18 @@ class PostTableManager(QObject):
                 if isinstance(target, PostActionTarget):
                     targets.append(target)
         return targets
+
+    def selected_posts(self) -> list[PostRecord]:
+        """Get the PostRecord of every checked row, in table order."""
+        posts: list[PostRecord] = []
+        for row_index in range(self.table.rowCount()):
+            item = self.table.item(row_index, 0)
+            if item is None or item.checkState() != Qt.CheckState.Checked:
+                continue
+            post = item.data(POST_RECORD_ROLE)
+            if isinstance(post, PostRecord):
+                posts.append(post)
+        return posts
 
     def toggle_all(self) -> None:
         """Toggle all checkboxes between checked and unchecked."""

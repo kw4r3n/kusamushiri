@@ -1,7 +1,5 @@
 """Collect an account's following list from X and export it to CSV or JSON."""
 
-import csv
-import json
 import threading
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
@@ -11,6 +9,7 @@ from urllib.parse import urljoin, urlparse
 from playwright.sync_api import Page
 
 from kusamushiri.browser import BASE_X_URL, NAVIGATION_TIMEOUT_MS
+from kusamushiri.exporting import write_records
 from kusamushiri.i18n import tr
 from kusamushiri.logger import logger
 from kusamushiri.parsing import USERNAME_PATTERN
@@ -26,8 +25,6 @@ MAX_STABLE_CYCLES = 5
 INITIAL_LOAD_TIMEOUT_SECONDS = 15.0
 RESERVED_PATHS = frozenset({"home", "explore", "i", "messages", "notifications", "search", "settings"})
 CSV_FIELDS = ("username", "display_name", "profile_url", "follows_you")
-# Leading characters that make spreadsheet apps evaluate a cell as a formula.
-FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
 
 # Emoji in names render as <img alt="…">; innerText would drop them.
 _READ_CELLS_JS = """
@@ -173,27 +170,6 @@ def collect_following(
     return result
 
 
-def _spreadsheet_safe(value: str) -> str:
-    return f"'{value}" if value.startswith(FORMULA_PREFIXES) else value
-
-
 def write_follow_list(path: Path, records: list[FollowRecord]) -> None:
     """Write CSV (UTF-8 with BOM, for Excel) or JSON, chosen by the file extension."""
-    if path.suffix.lower() == ".json":
-        path.write_text(
-            json.dumps([asdict(record) for record in records], ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
-        )
-        return
-    with path.open("w", encoding="utf-8-sig", newline="") as file:
-        writer = csv.writer(file)
-        writer.writerow(CSV_FIELDS)
-        for record in records:
-            writer.writerow(
-                (
-                    record.username,
-                    _spreadsheet_safe(record.display_name),
-                    record.profile_url,
-                    "true" if record.follows_you else "false",
-                )
-            )
+    write_records(path, CSV_FIELDS, [asdict(record) for record in records])

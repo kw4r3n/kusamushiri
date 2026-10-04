@@ -26,6 +26,7 @@ Qt (PySide6) list before anything is deleted**.
 - Filter by date range, minimum likes/replies, media presence, replies only, and keywords to include or exclude
 - Delete regular posts and undo reposts
 - Preview the collected list and post text; run only the rows you check
+- Save the checked posts to CSV or JSON as a record before deleting them
 - Adjustable interval between actions, stop at any time, retry only failed items
 - Multiple accounts via separate browser profiles
 - Export an account's following list to CSV (Excel-ready) or JSON

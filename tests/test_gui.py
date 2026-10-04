@@ -838,3 +838,36 @@ def test_collect_request_carries_keywords_and_they_persist(window: XDeleterWindo
     window._load_account_settings(window._current_account)
     assert window.include_keywords_input.text() == "懸賞、キャンペーン"
     assert window.exclude_keywords_input.text() == "大事"
+
+
+def test_export_posts_saves_only_checked_rows(window, qtbot, monkeypatch, tmp_path) -> None:
+    assert not window.export_posts_button.isEnabled()
+    window.display_posts([_sample(), _sample(id="2", url="https://x.com/user/status/2", text="second")])
+    assert window.export_posts_button.isEnabled()
+    item = window.table.item(0, 0)
+    assert item is not None
+    item.setCheckState(Qt.CheckState.Unchecked)
+
+    chosen = tmp_path / "backup"
+    monkeypatch.setattr(
+        "kusamushiri.gui.QFileDialog.getSaveFileName",
+        lambda *args: (str(chosen), "JSON (*.json)"),
+    )
+    monkeypatch.setattr("kusamushiri.gui.QMessageBox.information", lambda *args: None)
+    window.export_posts_button.click()
+
+    saved = tmp_path / "backup.csv"
+    assert saved.exists()
+    text = saved.read_text(encoding="utf-8-sig")
+    assert "second" in text
+    assert "hello" not in text
+    assert "1 件" in window.status_label.text()
+
+
+def test_export_posts_cancelled_dialog_writes_nothing(window, qtbot, monkeypatch, tmp_path) -> None:
+    window.display_posts([_sample()])
+    monkeypatch.setattr("kusamushiri.gui.QFileDialog.getSaveFileName", lambda *args: ("", ""))
+
+    window.export_posts_button.click()
+
+    assert list(tmp_path.glob("*.csv")) == []

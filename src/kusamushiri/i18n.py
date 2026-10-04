@@ -278,6 +278,17 @@ ENGLISH: Final[dict[str, str]] = {
         "post_kind_filter must be posts, reposts or all."
     ),
     "保存先の拡張子は .csv または .json を指定してください。": "The file extension must be .csv or .json.",
+    # Post export
+    "選択項目を保存": "Save selected",
+    "チェックした項目の本文や URL を CSV（または JSON）で保存します。削除前の控えに使えます。": (
+        "Saves the text and URL of the checked items as CSV (or JSON), as a record before deleting."
+    ),
+    "保存する項目が選択されていません。": "No items are selected to save.",
+    "選択項目の保存先": "Save selected items as",
+    "保存エラー": "Save error",
+    "ファイルを保存できませんでした: {error}": "Could not save the file: {error}",
+    "選択項目 {count} 件を保存しました: {path}": "Saved {count} selected items: {path}",
+    "{count} 件の項目を保存しました。\n{path}": "Saved {count} items.\n{path}",
     # Profiles
     "プロファイル名を入力してください。": "Enter a profile name.",
     "default プロファイルの名前は変更できません。": "The default profile cannot be renamed.",
