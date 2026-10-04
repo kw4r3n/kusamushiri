@@ -125,11 +125,11 @@ def test_older_tweet_js_name(tmp_path: Path) -> None:
 def test_retweet_reply_and_media_flags(tmp_path: Path) -> None:
     posts = {post.id: post for post in load_archive_posts(write_folder(tmp_path, standard_files()))}
 
-    assert posts["300"].is_repost is True
+    assert posts["300"].kind == "repost"
     assert posts["300"].author_username == "bob"
     assert posts["300"].url == "https://x.com/alice/status/300"
     assert posts["200"].is_reply is True
-    assert posts["200"].is_repost is False
+    assert posts["200"].kind == "post"
     assert posts["100"].is_reply is False
     assert posts["100"].has_media is False
     assert posts["100"].author_username == "alice"

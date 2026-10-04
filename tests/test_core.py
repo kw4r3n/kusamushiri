@@ -7,7 +7,7 @@ from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from kusamushiri.actions import DELETE_MENU_ITEM_SELECTORS
 from kusamushiri.browser import BrowserManager
 from kusamushiri.core import POST_ARTICLE_SELECTOR, XDeleterCore
-from kusamushiri.models import CollectRequest
+from kusamushiri.models import CollectRequest, PostKind
 from kusamushiri.parsing import (
     extract_post_id,
     extract_profile_username,
@@ -179,7 +179,7 @@ def test_post_matches_filters_respects_all_filters() -> None:
                 request=request,
                 has_media=has_media,
                 is_reply=is_reply,
-                is_repost=is_repost,
+                kind="repost" if is_repost else "post",
                 likes_count=likes_count,
                 replies_count=replies_count,
                 post_date=post_date,
@@ -218,7 +218,7 @@ def test_post_matches_filters_applies_keywords(
             request=request,
             has_media=False,
             is_reply=False,
-            is_repost=False,
+            kind="post",
             likes_count=0,
             replies_count=0,
             post_date=date(2026, 4, 15),
@@ -234,6 +234,72 @@ def test_keywords_do_not_change_search_query() -> None:
     request = build_request(include_keywords=("懸賞",), exclude_keywords=("大事",))
 
     assert core._build_search_query("user", request) == "from:user"
+
+
+def test_build_collection_url_uses_likes_timeline_for_likes() -> None:
+    core = XDeleterCore()
+    request = build_request(search_mode="profile", post_kind_filter="likes")
+
+    assert core._build_collection_url("user", request) == "https://x.com/user/likes"
+
+
+def test_likes_filter_accepts_only_like_kind() -> None:
+    core = XDeleterCore()
+    request = build_request(search_mode="profile", post_kind_filter="likes", min_likes=2)
+
+    def matches(kind: PostKind, likes_count: int = 5) -> bool:
+        return core._post_matches_filters(
+            request=request,
+            has_media=False,
+            is_reply=False,
+            kind=kind,
+            likes_count=likes_count,
+            replies_count=0,
+            post_date=date(2026, 4, 15),
+            article_index=1,
+        )
+
+    assert matches("like") is True
+    assert matches("like", likes_count=1) is False
+    # Posts and reposts filters never keep liked posts.
+    assert core._post_matches_filters(
+        request=build_request(post_kind_filter="posts"),
+        has_media=False,
+        is_reply=False,
+        kind="like",
+        likes_count=0,
+        replies_count=0,
+        post_date=date(2026, 4, 15),
+        article_index=1,
+    ) is False
+
+
+def test_unlike_post_verifies_like_button_becomes_visible(monkeypatch) -> None:
+    calls: list[object] = []
+
+    class RecordingPage(DeletePage):
+        def wait_for_function(self, expression: str, *, arg: object, timeout: int) -> None:
+            calls.append(arg)
+
+    core = XDeleterCore()
+    core._browser.page = RecordingPage()
+    monkeypatch.setattr(core, "_find_first_visible_locator", lambda root, selectors: ClickableLocator())
+
+    assert core.unlike_post("https://x.com/someone/status/12345") == (True, None)
+    assert len(calls) == 1
+    assert isinstance(calls[0], dict)
+    assert (calls[0]["undoId"], calls[0]["doId"]) == ("unlike", "like")
+
+
+def test_unlike_post_fails_without_unlike_button(monkeypatch) -> None:
+    core = XDeleterCore()
+    core._browser.page = DeletePage()
+    monkeypatch.setattr(core, "_find_first_visible_locator", lambda root, selectors: None)
+
+    assert core.unlike_post("https://x.com/someone/status/12345") == (
+        False,
+        "いいね取り消しボタンが見つかりませんでした。",
+    )
 
 
 def test_build_collection_url_uses_profile_path_for_profile_mode() -> None:
@@ -536,7 +602,7 @@ def test_undo_repost_fails_when_button_state_does_not_change(monkeypatch) -> Non
     assert "retweet button did not become visible" in error_message
 
 
-@pytest.mark.parametrize("action_name", ["delete_post", "undo_repost"])
+@pytest.mark.parametrize("action_name", ["delete_post", "undo_repost", "unlike_post"])
 @pytest.mark.parametrize("url", [
     "https://x.com/user/12345",
     "https://x.com/user/status/not-a-number",
@@ -598,7 +664,7 @@ def test_build_post_record_truncates_long_text_preview() -> None:
         replies_count=2,
         has_media=True,
         is_reply=False,
-        is_repost=False,
+        kind="post",
     )
 
     assert record.text == ("x" * 100) + "..."

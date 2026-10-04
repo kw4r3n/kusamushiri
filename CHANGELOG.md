@@ -14,6 +14,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Save the checked posts to CSV or JSON (text, URL, date, counts) as a record before deleting.
 - Load posts from an X data archive (zip or extracted folder) instead of searching, so old posts
   that search misses can be deleted too. The current filters apply; reposts in the archive are skipped.
+- Undo likes. Choose "Liked posts (undo likes)" as the post type to collect your profile's Likes
+  tab; date, keyword, media and minimum-like filters still apply, and checked rows are unliked.
 
 ## [0.3.0] - 2026-10-01
 

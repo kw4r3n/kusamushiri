@@ -82,7 +82,7 @@ class PostTableManager(QObject):
             check_item.setCheckState(Qt.CheckState.Checked)
             check_item.setData(
                 Qt.ItemDataRole.UserRole,
-                PostActionTarget(url=post.url, is_repost=post.is_repost),
+                PostActionTarget(url=post.url, kind=post.kind),
             )
             check_item.setData(POST_RECORD_ROLE, post)
             self.table.setItem(row_index, 0, check_item)
@@ -103,7 +103,8 @@ class PostTableManager(QObject):
             date_item = QTableWidgetItem(formatted)
             self.table.setItem(row_index, 3, date_item)
 
-            kind_item = QTableWidgetItem(tr("リポスト") if post.is_repost else tr("ポスト"))
+            kind_labels = {"post": tr("ポスト"), "repost": tr("リポスト"), "like": tr("いいね済み")}
+            kind_item = QTableWidgetItem(kind_labels[post.kind])
             kind_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             self.table.setItem(row_index, 4, kind_item)
 

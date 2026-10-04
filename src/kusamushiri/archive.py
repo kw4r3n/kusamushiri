@@ -82,9 +82,11 @@ def _post_matches_request(post: PostRecord, request: CollectRequest) -> bool:
         return False
     if request.is_reply and not post.is_reply:
         return False
-    if request.post_kind_filter == "posts" and post.is_repost:
+    if request.post_kind_filter == "posts" and post.kind != "post":
         return False
-    if request.post_kind_filter == "reposts" and not post.is_repost:
+    if request.post_kind_filter == "reposts" and post.kind != "repost":
+        return False
+    if request.post_kind_filter == "likes" and post.kind != "like":
         return False
     if post.likes < request.min_likes or post.replies < request.min_replies:
         return False
@@ -230,7 +232,7 @@ def _build_record(entry: dict[str, Any], username: str, source_name: str) -> tup
         replies=_to_int(tweet.get("reply_count")),
         has_media=_has_media(tweet),
         is_reply=bool(tweet.get("in_reply_to_status_id_str")),
-        is_repost=retweet_match is not None,
+        kind="repost" if retweet_match is not None else "post",
     )
 
 

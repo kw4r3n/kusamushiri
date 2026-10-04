@@ -16,7 +16,7 @@ from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from kusamushiri.gui import XDeleterWindow, format_action_failures, remove_successful_rows
-from kusamushiri.models import ExecuteActionsRequest, PostActionResult, PostActionTarget, PostRecord
+from kusamushiri.models import CollectRequest, ExecuteActionsRequest, PostActionResult, PostActionTarget, PostRecord
 from kusamushiri.paths import list_saved_accounts
 from kusamushiri.settings import AccountSettingsManager
 
@@ -40,7 +40,7 @@ def _sample(**kw: object) -> PostRecord:
         "replies": 0,
         "has_media": False,
         "is_reply": False,
-        "is_repost": False,
+        "kind": "post",
     }
     kwargs.update(kw)
     return PostRecord(**kwargs)
@@ -108,7 +108,7 @@ def test_display_posts_columns(window: XDeleterWindow, qtbot) -> None:
     window.display_posts([
         _sample(url="https://x.com/user/status/42", text="Hello World", has_media=True),
         _sample(id="99", url="https://x.com/user/status/99", text="Repost",
-                is_repost=True, is_reply=True, has_media=False),
+                kind="repost", is_reply=True, has_media=False),
     ])
     assert window.table.rowCount() == 2
     assert window.table.item(0, 1).text() == "Hello World"
@@ -158,7 +158,7 @@ def test_handle_delete_confirmation_emits_request(
 
     assert len(emitted_requests) == 1
     request = emitted_requests[0]
-    assert request.targets == [PostActionTarget(url="https://x.com/user/status/42", is_repost=False)]
+    assert request.targets == [PostActionTarget(url="https://x.com/user/status/42", kind="post")]
 
 
 def test_ctrl_return_shortcut_triggers_delete(
@@ -345,7 +345,7 @@ def test_on_delete_done_removes_successful_rows_without_dialog_hang(
 
     window.on_delete_done([
         PostActionResult(
-            target=PostActionTarget(url="https://x.com/user/status/1", is_repost=False),
+            target=PostActionTarget(url="https://x.com/user/status/1", kind="post"),
             action_label="削除",
             success=True,
             error_message=None,
@@ -359,13 +359,13 @@ def test_on_delete_done_removes_successful_rows_without_dialog_hang(
 def test_format_action_failures_returns_labels_urls_and_error_messages() -> None:
     failures = [
         PostActionResult(
-            target=PostActionTarget(url="https://x.com/user/status/1", is_repost=False),
+            target=PostActionTarget(url="https://x.com/user/status/1", kind="post"),
             action_label="削除",
             success=False,
             error_message="failed",
         ),
         PostActionResult(
-            target=PostActionTarget(url="https://x.com/user/status/2", is_repost=True),
+            target=PostActionTarget(url="https://x.com/user/status/2", kind="repost"),
             action_label="リポスト解除",
             success=False,
             error_message=None,
@@ -383,7 +383,7 @@ def test_format_action_failures_returns_labels_urls_and_error_messages() -> None
 def test_remove_successful_rows_removes_matching_targets(window: XDeleterWindow, qtbot) -> None:
     window.display_posts([
         _sample(url="https://x.com/user/status/1"),
-        _sample(id="2", url="https://x.com/user/status/2", is_repost=True),
+        _sample(id="2", url="https://x.com/user/status/2", kind="repost"),
         _sample(id="3", url="https://x.com/user/status/3"),
     ])
 
@@ -391,13 +391,13 @@ def test_remove_successful_rows_removes_matching_targets(window: XDeleterWindow,
         window.table,
         [
             PostActionResult(
-                target=PostActionTarget(url="https://x.com/user/status/2", is_repost=True),
+                target=PostActionTarget(url="https://x.com/user/status/2", kind="repost"),
                 action_label="リポスト解除",
                 success=True,
                 error_message=None,
             ),
             PostActionResult(
-                target=PostActionTarget(url="https://x.com/user/status/3", is_repost=False),
+                target=PostActionTarget(url="https://x.com/user/status/3", kind="post"),
                 action_label="削除",
                 success=False,
                 error_message="failed",
@@ -682,7 +682,7 @@ def test_empty_state_explains_no_match_and_all_processed(window, qtbot, monkeypa
     window._requested_action_count = 1
     window.on_delete_done([
         PostActionResult(
-            target=PostActionTarget(url="https://x.com/user/status/1", is_repost=False),
+            target=PostActionTarget(url="https://x.com/user/status/1", kind="post"),
             action_label="削除",
             success=True,
             error_message=None,
@@ -717,7 +717,7 @@ def test_stop_keeps_controls_locked_until_browser_stopped(window, monkeypatch) -
 
     window.on_delete_done([
         PostActionResult(
-            target=PostActionTarget(url="https://x.com/user/status/1", is_repost=False),
+            target=PostActionTarget(url="https://x.com/user/status/1", kind="post"),
             action_label="削除",
             success=True,
             error_message=None,
@@ -742,7 +742,7 @@ def test_retry_failed_rechecks_account_match(window, monkeypatch) -> None:
         "PySide6.QtWidgets.QMessageBox.question", lambda *a, **kw: QMessageBox.StandardButton.No
     )
     failure = PostActionResult(
-        target=PostActionTarget(url="https://x.com/user/status/1", is_repost=False),
+        target=PostActionTarget(url="https://x.com/user/status/1", kind="post"),
         action_label="削除",
         success=False,
         error_message="failed",
@@ -920,3 +920,62 @@ def test_import_archive_reports_unreadable_archive(window, qtbot, monkeypatch, t
 
     assert len(warnings) == 1
     assert window.table.rowCount() == 0
+def test_likes_option_collects_from_profile_and_disables_mode(window: XDeleterWindow, qtbot) -> None:
+    emitted_requests: list[object] = []
+    window._commit_typed_account(load_settings=False)
+    window.username_input.setText("test_user")
+    window.on_login_checked(True, "test_user")
+    window.collect_requested.connect(emitted_requests.append)
+    window._set_combo_current_data(window.mode_combo, "search")
+    window._set_combo_current_data(window.post_kind_combo, "likes")
+
+    assert not window.mode_combo.isEnabled()
+    window._handle_collect()
+
+    assert len(emitted_requests) == 1
+    request = emitted_requests[0]
+    assert isinstance(request, CollectRequest)
+    assert (request.post_kind_filter, request.search_mode) == ("likes", "profile")
+    assert "種別: いいね" in window.filter_summary.text()
+
+    window._set_combo_current_data(window.post_kind_combo, "posts")
+    assert window.mode_combo.isEnabled()
+
+
+def test_liked_posts_show_kind_and_unlike_summary(
+    window: XDeleterWindow,
+    qtbot,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    questions: list[str] = []
+    emitted_requests: list[ExecuteActionsRequest] = []
+    window.username_input.setText("user")
+    window.on_login_checked(True, "user")
+    window.display_posts([
+        _sample(url="https://x.com/someone/status/42", author_username="someone", kind="like"),
+        _sample(id="43", url="https://x.com/other/status/43", author_username="other", kind="like"),
+    ])
+    window.delete_requested.connect(emitted_requests.append)
+
+    def answer(_parent, _title, text, *args, **kwargs):
+        questions.append(text)
+        return QMessageBox.StandardButton.Yes
+
+    monkeypatch.setattr("PySide6.QtWidgets.QMessageBox.question", answer)
+
+    window._handle_delete()
+
+    assert window.table.item(0, 4).text() == "いいね済み"
+    assert len(questions) == 1
+    assert "いいね取り消し 2 件" in questions[0]
+    assert "ポスト削除" not in questions[0]
+    assert emitted_requests[0].targets == [
+        PostActionTarget(url="https://x.com/someone/status/42", kind="like"),
+        PostActionTarget(url="https://x.com/other/status/43", kind="like"),
+    ]
+
+    remove_successful_rows(
+        window.table,
+        [PostActionResult(emitted_requests[0].targets[0], "いいね取り消し", True, None)],
+    )
+    assert window.table.rowCount() == 1

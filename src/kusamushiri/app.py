@@ -7,6 +7,7 @@ from PySide6.QtCore import QObject, Signal
 from PySide6.QtGui import QColor, QPalette
 from PySide6.QtWidgets import QApplication
 
+from kusamushiri.actions import action_label_for
 from kusamushiri.core import XDeleterCore
 from kusamushiri.follows import ExportFollowingRequest, write_follow_list
 from kusamushiri.gui import XDeleterWindow
@@ -267,7 +268,7 @@ class XDeleterWorker:
                     for index, target in enumerate(command.request.targets, start=1):
                         if self._cancel_event.is_set():
                             break
-                        action_label = tr("リポスト解除") if target.is_repost else tr("ポスト削除")
+                        action_label = action_label_for(target.kind)
                         self.events.delete_progress.emit(action_label, target.url, index, total)
                         result = active_core.execute_post_action(target)
                         results.append(result)

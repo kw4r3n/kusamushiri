@@ -25,6 +25,7 @@ Qt (PySide6) list before anything is deleted**.
 
 - Filter by date range, minimum likes/replies, media presence, replies only, and keywords to include or exclude
 - Delete regular posts and undo reposts
+- Undo likes: collect the posts on your profile's Likes tab and remove your like from the ones you check
 - Preview the collected list and post text; run only the rows you check
 - Save the checked posts to CSV or JSON as a record before deleting them
 - Load posts from your X data archive to reach old posts that search misses

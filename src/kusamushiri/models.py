@@ -8,7 +8,8 @@ from kusamushiri.i18n import tr
 
 MediaFilter = Literal["all", "with_media", "without_media"]
 SearchMode = Literal["profile", "search"]
-PostKindFilter = Literal["posts", "reposts", "all"]
+PostKindFilter = Literal["posts", "reposts", "all", "likes"]
+PostKind = Literal["post", "repost", "like"]
 DEFAULT_ACTION_INTERVAL_SECONDS = 1.0
 KEYWORD_SEPARATOR_PATTERN: Final = re.compile(r"[,、，\n]")
 
@@ -44,13 +45,13 @@ class PostRecord:
     replies: int
     has_media: bool
     is_reply: bool
-    is_repost: bool
+    kind: PostKind
 
 
 @dataclass(frozen=True, slots=True)
 class PostActionTarget:
     url: str
-    is_repost: bool
+    kind: PostKind
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,8 +100,10 @@ class CollectRequest:
             raise ValueError(tr("不正なメディア条件が指定されました。"))
         if self.search_mode not in {"profile", "search"}:
             raise ValueError(tr("収集モードは profile または search を指定してください。"))
-        if self.post_kind_filter not in {"posts", "reposts", "all"}:
-            raise ValueError(tr("対象種別は posts / reposts / all のいずれかで指定してください。"))
+        if self.post_kind_filter not in {"posts", "reposts", "all", "likes"}:
+            raise ValueError(tr("対象種別は posts / reposts / all / likes のいずれかで指定してください。"))
+        if self.post_kind_filter == "likes" and self.search_mode != "profile":
+            raise ValueError(tr("いいねはプロフィールのいいね欄からのみ収集できます。収集モードを profile にしてください。"))
         if self.since_date is not None and not isinstance(self.since_date, date):
             raise ValueError(tr("開始日は YYYY-MM-DD 形式の日付で指定してください。"))
         if self.until_date is not None and not isinstance(self.until_date, date):

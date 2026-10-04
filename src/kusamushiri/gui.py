@@ -142,7 +142,7 @@ def format_action_failures(failures: list[PostActionResult]) -> str:
 
 def remove_successful_rows(table: QTableWidget, results: list[PostActionResult]) -> None:
     succeeded = {
-        (result.target.url, result.target.is_repost)
+        (result.target.url, result.target.kind)
         for result in results
         if result.success
     }
@@ -156,7 +156,7 @@ def remove_successful_rows(table: QTableWidget, results: list[PostActionResult])
         target = item.data(Qt.ItemDataRole.UserRole)
         if not isinstance(target, PostActionTarget):
             continue
-        if (target.url, target.is_repost) in succeeded:
+        if (target.url, target.kind) in succeeded:
             table.removeRow(row_index)
 
 
@@ -401,6 +401,13 @@ class XDeleterWindow(QMainWindow):
         self.post_kind_combo.addItem(tr("通常ポストのみ"), userData="posts")
         self.post_kind_combo.addItem(tr("リポストのみ"), userData="reposts")
         self.post_kind_combo.addItem(tr("通常ポスト + リポスト"), userData="all")
+        self.post_kind_combo.addItem(tr("いいねしたポスト（いいね取り消し）"), userData="likes")
+        self.post_kind_combo.setItemData(
+            3,
+            tr("プロフィールのいいね欄を走査し、チェックしたポストのいいねを取り消します。"),
+            Qt.ItemDataRole.ToolTipRole,
+        )
+        self.post_kind_combo.currentIndexChanged.connect(self._update_mode_availability)
 
         self.reply_only_checkbox = QCheckBox(tr("リプライのみ"))
 
@@ -707,7 +714,7 @@ class XDeleterWindow(QMainWindow):
             return
         parts: list[str] = []
         media_map = {"all": tr("すべて"), "with_media": tr("画像/動画あり"), "without_media": tr("画像/動画なし")}
-        kind_map = {"posts": tr("ポストのみ"), "reposts": tr("リポストのみ"), "all": tr("すべて")}
+        kind_map = {"posts": tr("ポストのみ"), "reposts": tr("リポストのみ"), "all": tr("すべて"), "likes": tr("いいね")}
         parts.append(tr("メディア: {value}", value=media_map.get(request.media_filter, request.media_filter)))
         parts.append(tr("種別: {value}", value=kind_map.get(request.post_kind_filter, request.post_kind_filter)))
         parts.append(tr("最大: {count}件", count=request.max_posts))
@@ -1053,6 +1060,13 @@ class XDeleterWindow(QMainWindow):
                 ),
             )
 
+    def _update_mode_availability(self) -> None:
+        likes_selected = self.post_kind_combo.currentData() == "likes"
+        self.mode_combo.setEnabled(not likes_selected)
+        self.mode_combo.setToolTip(
+            tr("いいねはプロフィールのいいね欄から収集するため、収集モードは使いません。") if likes_selected else ""
+        )
+
     def _toggle_since_date(self, checked: bool) -> None:
         self.since_date_input.setEnabled(checked)
 
@@ -1114,7 +1128,8 @@ class XDeleterWindow(QMainWindow):
             is_reply=self.reply_only_checkbox.isChecked(),
             min_likes=self.min_likes_input.value(),
             min_replies=self.min_replies_input.value(),
-            search_mode=self.mode_combo.currentData(),
+            # Likes are listed only on the profile's likes timeline, never via search.
+            search_mode="profile" if self.post_kind_combo.currentData() == "likes" else self.mode_combo.currentData(),
             post_kind_filter=self.post_kind_combo.currentData(),
             since_date=since_date,
             until_date=until_date,
@@ -1161,9 +1176,9 @@ class XDeleterWindow(QMainWindow):
 
         # Archive reposts carry the repost's own ID, not the original post's, so they cannot be undone by URL.
         # Archives have no reply counts either, so the minimum-replies filter is not applied.
-        reposts = sum(1 for post in posts if post.is_repost)
+        reposts = sum(1 for post in posts if post.kind == "repost")
         matched = filter_archive_posts(
-            (post for post in posts if not post.is_repost), replace(request, min_replies=0)
+            (post for post in posts if post.kind != "repost"), replace(request, min_replies=0)
         )[: request.max_posts]
 
         self._last_collect_request = request
@@ -1303,13 +1318,16 @@ class XDeleterWindow(QMainWindow):
             logger.info("GUI: Execution cancelled due to account mismatch warning.")
             return
 
-        delete_count = sum(1 for target in targets if not target.is_repost)
-        unrepost_count = sum(1 for target in targets if target.is_repost)
+        delete_count = sum(1 for target in targets if target.kind == "post")
+        unrepost_count = sum(1 for target in targets if target.kind == "repost")
+        unlike_count = sum(1 for target in targets if target.kind == "like")
         operations: list[str] = []
         if delete_count > 0:
             operations.append(tr("ポスト削除 {count} 件", count=delete_count))
         if unrepost_count > 0:
             operations.append(tr("リポスト解除 {count} 件", count=unrepost_count))
+        if unlike_count > 0:
+            operations.append(tr("いいね取り消し {count} 件", count=unlike_count))
 
         summary = " / ".join(operations)
 

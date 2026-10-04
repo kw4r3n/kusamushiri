@@ -56,6 +56,13 @@ ENGLISH: Final[dict[str, str]] = {
     "通常ポストのみ": "Posts only",
     "リポストのみ": "Reposts only",
     "通常ポスト + リポスト": "Posts + reposts",
+    "いいねしたポスト（いいね取り消し）": "Liked posts (undo likes)",
+    "プロフィールのいいね欄を走査し、チェックしたポストのいいねを取り消します。": (
+        "Scans the profile's Likes tab and removes your like from the checked posts."
+    ),
+    "いいねはプロフィールのいいね欄から収集するため、収集モードは使いません。": (
+        "Likes are collected from the profile's Likes tab, so the collection mode is not used."
+    ),
     "リプライのみ": "Replies only",
     "最低いいね数": "Min likes",
     "最低返信数": "Min replies",
@@ -91,6 +98,7 @@ ENGLISH: Final[dict[str, str]] = {
     "メディア": "Media",
     "リプライ": "Reply",
     "リポスト": "Repost",
+    "いいね済み": "Liked",
     "ポスト": "Post",
     "あり": "Yes",
     "はい": "Yes",
@@ -171,6 +179,7 @@ ENGLISH: Final[dict[str, str]] = {
     ),
     "ポスト削除 {count} 件": "delete {count} posts",
     "リポスト解除 {count} 件": "undo {count} reposts",
+    "いいね取り消し {count} 件": "undo {count} likes",
     "一部失敗": "Some items failed",
     "失敗した項目の詳細を確認し、失敗分だけ再試行できます。": (
         "Check the details of the failed items; you can retry just those."
@@ -234,6 +243,7 @@ ENGLISH: Final[dict[str, str]] = {
     ),
     # Post actions
     "リポスト解除": "Undo repost",
+    "いいね取り消し": "Undo like",
     "ポスト削除": "Delete post",
     "応答なし": "no response",
     "{mutation} の通信に失敗しました: {detail}": "{mutation} request failed: {detail}",
@@ -242,6 +252,7 @@ ENGLISH: Final[dict[str, str]] = {
     "操作対象のポストIDをURLから確認できませんでした。": "Could not read the target post ID from the URL.",
     "リポスト解除ボタンが見つかりませんでした。": "Could not find the undo repost button.",
     "リポスト解除の確認ボタンが見つかりませんでした。": "Could not find the undo repost confirmation button.",
+    "いいね取り消しボタンが見つかりませんでした。": "Could not find the undo like button.",
     "対象ポストの読み込み": "Loading the target post",
     "「…」メニューボタンの表示待ち": "Waiting for the \"…\" menu button",
     "削除メニューが見つかりませんでした。": "Could not find the delete menu.",
@@ -262,7 +273,12 @@ ENGLISH: Final[dict[str, str]] = {
     "最低いいね数と最低返信数は0以上で指定してください。": "Min likes and min replies must be 0 or more.",
     "不正なメディア条件が指定されました。": "Invalid media filter.",
     "収集モードは profile または search を指定してください。": "Collection mode must be profile or search.",
-    "対象種別は posts / reposts / all のいずれかで指定してください。": "Post type must be posts, reposts or all.",
+    "対象種別は posts / reposts / all / likes のいずれかで指定してください。": (
+        "Post type must be posts, reposts, all or likes."
+    ),
+    "いいねはプロフィールのいいね欄からのみ収集できます。収集モードを profile にしてください。": (
+        "Likes can only be collected from the profile's Likes tab. Set the collection mode to profile."
+    ),
     "開始日は YYYY-MM-DD 形式の日付で指定してください。": "The start date must be a YYYY-MM-DD date.",
     "終了日は YYYY-MM-DD 形式の日付で指定してください。": "The end date must be a YYYY-MM-DD date.",
     "開始日は終了日以前で指定してください。": "The start date must be on or before the end date.",
@@ -274,8 +290,8 @@ ENGLISH: Final[dict[str, str]] = {
         "media_filter must be all, with_media or without_media."
     ),
     "search_mode は profile / search のいずれかで指定してください。": "search_mode must be profile or search.",
-    "post_kind_filter は posts / reposts / all のいずれかで指定してください。": (
-        "post_kind_filter must be posts, reposts or all."
+    "post_kind_filter は posts / reposts / all / likes のいずれかで指定してください。": (
+        "post_kind_filter must be posts, reposts, all or likes."
     ),
     "保存先の拡張子は .csv または .json を指定してください。": "The file extension must be .csv or .json.",
     # Archive import

@@ -36,11 +36,11 @@ class FakeCore:
                 replies=0,
                 has_media=False,
                 is_reply=False,
-                is_repost=False,
+                kind="post",
             )
         ]
         self.action_result = PostActionResult(
-            target=PostActionTarget(url="https://x.com/user/status/1", is_repost=False),
+            target=PostActionTarget(url="https://x.com/user/status/1", kind="post"),
             action_label="ポスト削除",
             success=True,
             error_message=None,
@@ -225,7 +225,7 @@ def test_full_collect_and_delete_flow(qtbot: object, monkeypatch: pytest.MonkeyP
         window.delete_requested.emit(request)
         wait_until(qtbot, lambda: completed_events == [[core.action_result]])
 
-        assert core.executed_targets == [PostActionTarget(url="https://x.com/user/status/1", is_repost=False)]
+        assert core.executed_targets == [PostActionTarget(url="https://x.com/user/status/1", kind="post")]
         assert window.status_label.text() == "削除/解除処理完了: 1 / 1 件成功"
     finally:
         worker.shutdown()
@@ -281,7 +281,7 @@ def test_gui_to_worker_signal_chain(app_window: XDeleterWindow) -> None:
 
     collect_request = build_collect_request()
     delete_request = ExecuteActionsRequest(
-        targets=[PostActionTarget(url="https://x.com/user/status/1", is_repost=False)],
+        targets=[PostActionTarget(url="https://x.com/user/status/1", kind="post")],
         interval_seconds=0,
     )
 

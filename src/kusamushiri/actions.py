@@ -8,7 +8,7 @@ from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from kusamushiri.browser import NAVIGATION_TIMEOUT_MS, find_first_visible_locator
 from kusamushiri.i18n import tr
 from kusamushiri.logger import logger
-from kusamushiri.models import PostActionResult, PostActionTarget
+from kusamushiri.models import PostActionResult, PostActionTarget, PostKind
 from kusamushiri.parsing import extract_post_id
 
 ACTION_STATE_TIMEOUT_MS = 10_000
@@ -33,6 +33,7 @@ DELETE_MENU_ITEM_SELECTORS = (
 DELETE_CONFIRM_SELECTOR = '[data-testid="confirmationSheetConfirm"]'
 DELETE_POST_MUTATION = "DeleteTweet"
 UNDO_REPOST_MUTATION = "DeleteRetweet"
+UNLIKE_MUTATION = "UnfavoriteTweet"
 
 LocatorFinder = Callable[[Page | Locator, tuple[str, ...]], Locator | None]
 
@@ -45,21 +46,30 @@ OWNED_NODE_XPATH = (
     "@data-testid='tweetText' or @role='link'])"
 )
 
-# The repost state has flipped when the owned control is a visible "retweet".
-UNREPOST_DONE_SCRIPT = """({article, owned}) => {
+# A toggle has flipped when the owned "undo" control (e.g. "unretweet") is gone
+# and the owned "do" control (e.g. "retweet") is visible.
+TOGGLE_OFF_DONE_SCRIPT = """({article, owned, undoId, doId}) => {
     if (!article || !article.isConnected) return false;
     const controls = id => document.evaluate(
         `.//*[@data-testid='${id}'][${owned}]`, article, null,
         XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
-    if (controls('unretweet').snapshotLength !== 0) return false;
-    const repost = controls('retweet');
-    for (let i = 0; i < repost.snapshotLength; i++) {
-        const button = repost.snapshotItem(i);
+    if (controls(undoId).snapshotLength !== 0) return false;
+    const done = controls(doId);
+    for (let i = 0; i < done.snapshotLength; i++) {
+        const button = done.snapshotItem(i);
         if (button.getClientRects().length &&
             getComputedStyle(button).visibility !== 'hidden') return true;
     }
     return false;
 }"""
+
+
+def action_label_for(kind: PostKind) -> str:
+    if kind == "repost":
+        return tr("リポスト解除")
+    if kind == "like":
+        return tr("いいね取り消し")
+    return tr("ポスト削除")
 
 
 def _own_control(test_id: str) -> str:
@@ -152,9 +162,11 @@ def execute_post_action(
     target: PostActionTarget,
     find_locator: LocatorFinder = find_first_visible_locator,
 ) -> PostActionResult:
-    action_label = tr("リポスト解除") if target.is_repost else tr("ポスト削除")
-    if target.is_repost:
+    action_label = action_label_for(target.kind)
+    if target.kind == "repost":
         success, error_message = undo_repost(page, target.url, find_locator)
+    elif target.kind == "like":
+        success, error_message = unlike_post(page, target.url, find_locator)
     else:
         success, error_message = delete_post(page, target.url, find_locator)
 
@@ -215,8 +227,8 @@ def undo_repost(
             mutation_requests,
             UNDO_REPOST_MUTATION,
             lambda: page.wait_for_function(
-                UNREPOST_DONE_SCRIPT,
-                arg={"article": article_element, "owned": OWNED_NODE_XPATH},
+                TOGGLE_OFF_DONE_SCRIPT,
+                arg={"article": article_element, "owned": OWNED_NODE_XPATH, "undoId": "unretweet", "doId": "retweet"},
                 timeout=ACTION_STATE_TIMEOUT_MS,
             ),
         )
@@ -227,6 +239,58 @@ def undo_repost(
         return True, None
     except Exception as error:
         logger.exception("Exception during undo repost for %s.", post_url)
+        return False, f"{type(error).__name__}: {error}"
+    finally:
+        if listening:
+            page.remove_listener("request", record_mutation)
+
+
+def unlike_post(
+    page: Page,
+    post_url: str,
+    find_locator: LocatorFinder = find_first_visible_locator,
+) -> tuple[bool, str | None]:
+    """指定されたポストのいいねを取り消す"""
+    logger.info("Initiating unlike for: %s", post_url)
+    mutation_requests: list[Request] = []
+
+    def record_mutation(request: Request) -> None:
+        if _is_mutation_request(request, UNLIKE_MUTATION):
+            mutation_requests.append(request)
+
+    listening = False
+    try:
+        main_tweet_article = _target_article(page, post_url)
+        page.goto(post_url, timeout=NAVIGATION_TIMEOUT_MS)
+
+        main_tweet_article.wait_for(state="visible", timeout=NAVIGATION_TIMEOUT_MS)
+        unlike_button = find_locator(main_tweet_article, (_own_control("unlike"),))
+        if unlike_button is None:
+            message = tr("いいね取り消しボタンが見つかりませんでした。")
+            logger.warning("%s URL=%s", message, post_url)
+            return False, message
+
+        article_element = main_tweet_article.element_handle()
+        # Unliking has no confirmation step; the first click sends the mutation.
+        page.on("request", record_mutation)
+        listening = True
+        unlike_button.click()
+        error_message = _wait_for_mutation_result(
+            mutation_requests,
+            UNLIKE_MUTATION,
+            lambda: page.wait_for_function(
+                TOGGLE_OFF_DONE_SCRIPT,
+                arg={"article": article_element, "owned": OWNED_NODE_XPATH, "undoId": "unlike", "doId": "like"},
+                timeout=ACTION_STATE_TIMEOUT_MS,
+            ),
+        )
+        if error_message is not None:
+            logger.warning("%s URL=%s", error_message, post_url)
+            return False, error_message
+        logger.info("Successfully removed like: %s", post_url)
+        return True, None
+    except Exception as error:
+        logger.exception("Exception during unlike for %s.", post_url)
         return False, f"{type(error).__name__}: {error}"
     finally:
         if listening:

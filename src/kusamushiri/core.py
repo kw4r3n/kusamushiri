@@ -13,6 +13,7 @@ from kusamushiri import actions
 from kusamushiri.actions import delete_post as _delete_post
 from kusamushiri.actions import execute_post_action as _execute_post_action
 from kusamushiri.actions import undo_repost as _undo_repost
+from kusamushiri.actions import unlike_post as _unlike_post
 from kusamushiri.browser import (
     BASE_X_URL,
     NAVIGATION_TIMEOUT_MS,
@@ -26,6 +27,7 @@ from kusamushiri.models import (
     CollectRequest,
     PostActionResult,
     PostActionTarget,
+    PostKind,
     PostRecord,
     text_contains_any_keyword,
 )
@@ -47,7 +49,8 @@ COLLECTION_SCROLL_Y = 1_500  # Scroll distance during active collection (trigger
 MAX_STABLE_SCROLL_CYCLES = 3
 VALID_MEDIA_FILTERS = {"all", "with_media", "without_media"}
 VALID_SEARCH_MODES = {"profile", "search"}
-VALID_POST_KIND_FILTERS = {"posts", "reposts", "all"}
+VALID_POST_KIND_FILTERS = {"posts", "reposts", "all", "likes"}
+LIKES_PATH = "likes"
 SEARCH_EMPTY_STATE_MARKERS = (
     "No results for",
     "Try searching for something else",
@@ -227,9 +230,12 @@ class XDeleterCore:
         if request.search_mode not in VALID_SEARCH_MODES:
             raise ValueError(tr("search_mode は profile / search のいずれかで指定してください。"))
         if request.post_kind_filter not in VALID_POST_KIND_FILTERS:
-            raise ValueError(tr("post_kind_filter は posts / reposts / all のいずれかで指定してください。"))
+            raise ValueError(tr("post_kind_filter は posts / reposts / all / likes のいずれかで指定してください。"))
 
     def _build_collection_url(self, normalized_username: str, request: CollectRequest) -> str:
+        if request.post_kind_filter == "likes":
+            # Liked posts are listed only on the account's own likes timeline.
+            return urljoin(BASE_X_URL, f"{normalized_username}/{LIKES_PATH}")
         if request.search_mode == "search":
             query = self._build_search_query(normalized_username, request)
             encoded_query = quote(query)
@@ -335,7 +341,7 @@ class XDeleterCore:
         replies_count: int,
         has_media: bool,
         is_reply: bool,
-        is_repost: bool,
+        kind: PostKind,
     ) -> PostRecord:
         return PostRecord(
             id=post_id,
@@ -351,7 +357,7 @@ class XDeleterCore:
             replies=replies_count,
             has_media=has_media,
             is_reply=is_reply,
-            is_repost=is_repost,
+            kind=kind,
         )
 
     def _post_matches_filters(
@@ -360,7 +366,7 @@ class XDeleterCore:
         request: CollectRequest,
         has_media: bool,
         is_reply: bool,
-        is_repost: bool,
+        kind: PostKind,
         likes_count: int,
         replies_count: int,
         post_date: date | None,
@@ -391,14 +397,14 @@ class XDeleterCore:
                 request.is_reply,
             )
             return False
-        if request.post_kind_filter == "posts" and is_repost:
+        if request.post_kind_filter == "posts" and kind != "post":
             logger.debug(
                 "Article %s: Skipped repost while filter=%s",
                 article_index,
                 request.post_kind_filter,
             )
             return False
-        if request.post_kind_filter == "reposts" and not is_repost:
+        if request.post_kind_filter == "reposts" and kind != "repost":
             logger.debug(
                 "Article %s: Skipped non-repost while filter=%s",
                 article_index,
@@ -537,7 +543,14 @@ class XDeleterCore:
     ) -> PostRecord | None:
         post_id = extract_post_id(post_url)
         author_username = extract_post_author_username(post_url) or normalized_username
-        is_repost_post = author_username.casefold() != normalized_username.casefold()
+        kind: PostKind
+        if request.post_kind_filter == "likes":
+            # The likes timeline lists other accounts' posts; none of them is a repost.
+            kind = "like"
+        elif author_username.casefold() != normalized_username.casefold():
+            kind = "repost"
+        else:
+            kind = "post"
         logger.debug("Article %s: Found new URL: %s", article_index, post_url)
 
         text_content = self._get_article_text(article)
@@ -551,7 +564,7 @@ class XDeleterCore:
             request=request,
             has_media=has_media_post,
             is_reply=is_reply_post,
-            is_repost=is_repost_post,
+            kind=kind,
             likes_count=likes_count,
             replies_count=replies_count,
             post_date=post_date,
@@ -570,12 +583,12 @@ class XDeleterCore:
             replies_count=replies_count,
             has_media=has_media_post,
             is_reply=is_reply_post,
-            is_repost=is_repost_post,
+            kind=kind,
         )
         logger.debug(
             "Collected post: %s - Kind: %s, Likes: %s, Replies: %s, Media: %s, Reply: %s",
             post_url,
-            "repost" if is_repost_post else "post",
+            kind,
             likes_count,
             replies_count,
             has_media_post,
@@ -743,6 +756,10 @@ class XDeleterCore:
     def undo_repost(self, post_url: str) -> tuple[bool, str | None]:
         page = self._browser._require_page()
         return _undo_repost(page, post_url, find_locator=self._find_first_visible_locator)
+
+    def unlike_post(self, post_url: str) -> tuple[bool, str | None]:
+        page = self._browser._require_page()
+        return _unlike_post(page, post_url, find_locator=self._find_first_visible_locator)
 
     def delete_post(self, post_url: str) -> tuple[bool, str | None]:
         page = self._browser._require_page()

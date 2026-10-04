@@ -52,7 +52,7 @@ def write_post_list(path: Path, posts: Sequence[PostRecord]) -> None:
                 "id": post.id,
                 "url": post.url,
                 "date": post.date,
-                "kind": "repost" if post.is_repost else "post",
+                "kind": post.kind,
                 "text": post.text,
                 "likes": post.likes,
                 "replies": post.replies,

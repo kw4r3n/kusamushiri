@@ -29,11 +29,11 @@ class FakeCore:
                 replies=0,
                 has_media=False,
                 is_reply=False,
-                is_repost=False,
+                kind="post",
             )
         ]
         self.action_result = PostActionResult(
-            target=PostActionTarget(url="https://x.com/tester/status/1", is_repost=False),
+            target=PostActionTarget(url="https://x.com/tester/status/1", kind="post"),
             action_label="ポスト削除",
             success=True,
             error_message=None,
@@ -113,7 +113,7 @@ def build_collect_request() -> CollectRequest:
 
 def build_delete_request() -> ExecuteActionsRequest:
     return ExecuteActionsRequest(
-        targets=[PostActionTarget(url="https://x.com/tester/status/1", is_repost=False)],
+        targets=[PostActionTarget(url="https://x.com/tester/status/1", kind="post")],
         interval_seconds=0,
     )
 
@@ -177,7 +177,7 @@ def test_worker_dispatches_delete_posts_when_enqueued(qtbot: object) -> None:
 
     wait_until(qtbot, lambda: completed_events == [[core.action_result]])
     assert core.calls == ["execute_post_action:https://x.com/tester/status/1"]
-    assert core.executed_targets == [PostActionTarget(url="https://x.com/tester/status/1", is_repost=False)]
+    assert core.executed_targets == [PostActionTarget(url="https://x.com/tester/status/1", kind="post")]
     worker.shutdown()
 
 
@@ -251,8 +251,8 @@ def test_worker_cancels_delete_batch_during_interval(qtbot: object) -> None:
     worker.events.delete_completed.connect(completed_events.append)
     request = ExecuteActionsRequest(
         targets=[
-            PostActionTarget(url="https://x.com/user/status/1", is_repost=False),
-            PostActionTarget(url="https://x.com/user/status/2", is_repost=False),
+            PostActionTarget(url="https://x.com/user/status/1", kind="post"),
+            PostActionTarget(url="https://x.com/user/status/2", kind="post"),
         ],
         interval_seconds=10,
     )
@@ -316,7 +316,7 @@ def test_worker_cancellation_after_dequeue_skips_old_commands(
     worker.events.error_occurred.connect(errors.append)
     shutdown_thread = None
     future_request = ExecuteActionsRequest(
-        targets=[PostActionTarget(url="https://x.com/tester/status/3", is_repost=False)],
+        targets=[PostActionTarget(url="https://x.com/tester/status/3", kind="post")],
         interval_seconds=0,
     )
 
@@ -377,13 +377,13 @@ def test_worker_active_batch_cancellation_survives_future_submission(
     worker.events.delete_completed.connect(completed.append)
     request = ExecuteActionsRequest(
         targets=[
-            PostActionTarget(url="https://x.com/tester/status/1", is_repost=False),
-            PostActionTarget(url="https://x.com/tester/status/2", is_repost=False),
+            PostActionTarget(url="https://x.com/tester/status/1", kind="post"),
+            PostActionTarget(url="https://x.com/tester/status/2", kind="post"),
         ],
         interval_seconds=10,
     )
     future_request = ExecuteActionsRequest(
-        targets=[PostActionTarget(url="https://x.com/tester/status/3", is_repost=False)],
+        targets=[PostActionTarget(url="https://x.com/tester/status/3", kind="post")],
         interval_seconds=0,
     )
 

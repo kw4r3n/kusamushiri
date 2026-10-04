@@ -16,7 +16,7 @@ POSTS = [
         replies=1,
         has_media=True,
         is_reply=False,
-        is_repost=False,
+        kind="post",
     ),
     PostRecord(
         id="2",
@@ -28,7 +28,7 @@ POSTS = [
         replies=0,
         has_media=False,
         is_reply=True,
-        is_repost=True,
+        kind="repost",
     ),
 ]
 
