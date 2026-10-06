@@ -181,11 +181,26 @@ def test_missing_path_and_bad_zip_raise(tmp_path: Path) -> None:
         "[]",
         'window.YTD.tweets.part0 = {"tweet": {}}',
         'window.YTD.tweets.part0 = [{"tweet": {"full_text": "no id"}}]',
+        'window.YTD.tweets.part0 = [{"tweet": {"id_str": "1"}} {"tweet": {"id_str": "2"}}]',
+        'window.YTD.tweets.part0 = [{"tweet": {"id_str": "1"}}, 3]',
     ],
 )
 def test_malformed_tweets_raise(tmp_path: Path, content: str) -> None:
     with pytest.raises(ArchiveError):
         load_archive_posts(write_folder(tmp_path, {"tweets.js": content}))
+
+
+def test_empty_part_and_trailing_semicolon_are_accepted(tmp_path: Path) -> None:
+    files = {
+        "tweets.js": "window.YTD.tweets.part0 = [ ];",
+        "tweets-part1.js": 'window.YTD.tweets.part1 = [\n {"tweet": {"id_str": "5"}} ,\n {"tweet": {"id_str": "6"}}\n];\n',
+    }
+    progress: list[tuple[int, int]] = []
+
+    posts = load_archive_posts(write_folder(tmp_path, files), on_progress=lambda done, total: progress.append((done, total)))
+
+    assert [post.id for post in posts] == ["6", "5"]
+    assert progress == [(0, 2), (1, 2)]
 
 
 def test_filter_applies_collect_request(tmp_path: Path) -> None:

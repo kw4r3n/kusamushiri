@@ -6,7 +6,8 @@ GUI に依存しない純粋なモジュールで、収集結果と同じ PostRe
 import json
 import re
 import zipfile
-from collections.abc import Collection, Iterable, Sequence
+from collections.abc import Callable, Collection, Iterable, Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
@@ -40,33 +41,49 @@ class _ArchiveFile:
     content: str
 
 
-def load_archive_posts(archive_path: str | Path, fallback_username: str | None = None) -> list[PostRecord]:
+@dataclass(frozen=True, slots=True)
+class _ArchiveSource:
+    tweet_names: list[str]
+    account_name: str | None
+    read: Callable[[str], _ArchiveFile]
+
+
+def load_archive_posts(
+    archive_path: str | Path,
+    fallback_username: str | None = None,
+    on_progress: Callable[[int, int], None] | None = None,
+) -> list[PostRecord]:
     """アーカイブ(.zip または展開済みフォルダ)からポストを読み込み、新しい順に返す。
 
     archive_path には data/tweets.js などのファイル自体も渡せる。
     URL のユーザー名は data/account.js を優先し、無ければ fallback_username、
     それも無ければ "i" (https://x.com/i/status/<id>) を使う。
+    on_progress は tweets.js の各パートを読み始める前に (読み終えたパート数, 全パート数) で呼ばれる。
     """
     path = Path(archive_path)
     # A picked tweets.js stands for the extracted archive folder around it.
     if path.is_file() and path.suffix.lower() == ".js":
         path = path.parent
-    if path.is_dir():
-        tweet_files, account_file = _read_folder(path)
-    elif path.is_file():
-        tweet_files, account_file = _read_zip(path)
-    else:
+    if not path.exists():
         raise ArchiveError(f"Archive not found: {path}")
 
-    if not tweet_files:
-        raise ArchiveError(f"No tweets.js found in archive: {path}")
-
-    username = _resolve_username(account_file, fallback_username)
     records: dict[str, tuple[datetime | None, PostRecord]] = {}
-    for tweet_file in tweet_files:
-        for entry in _parse_ytd_array(tweet_file):
-            created_at, record = _build_record(entry, username, tweet_file.name)
-            records[record.id] = (created_at, record)
+    try:
+        with _open_archive(path) as source:
+            if not source.tweet_names:
+                raise ArchiveError(f"No tweets.js found in archive: {path}")
+            account_file = source.read(source.account_name) if source.account_name is not None else None
+            username = _resolve_username(account_file, fallback_username)
+            for index, name in enumerate(source.tweet_names):
+                if on_progress is not None:
+                    on_progress(index, len(source.tweet_names))
+                # Read one part at a time and drop each tweet dict as soon as its record is built,
+                # so a large archive never holds every parsed tweet in memory at once.
+                for entry in _iter_ytd_array(source.read(name)):
+                    created_at, record = _build_record(entry, username, name)
+                    records[record.id] = (created_at, record)
+    except (zipfile.BadZipFile, OSError, UnicodeDecodeError, RuntimeError) as error:
+        raise ArchiveError(f"Could not read archive {path}: {error}") from error
 
     return [record for _, record in sorted(records.values(), key=_sort_key, reverse=True)]
 
@@ -133,63 +150,62 @@ def _tweet_file_order(name: str) -> int:
     return int(match.group(1)) if match and match.group(1) else 0
 
 
-def _read_folder(folder: Path) -> tuple[list[_ArchiveFile], _ArchiveFile | None]:
-    data_dir = folder / "data" if (folder / "data").is_dir() else folder
-    tweet_paths = sorted(
-        (child for child in data_dir.iterdir() if child.is_file() and TWEETS_FILE_PATTERN.match(child.name)),
-        key=lambda child: _tweet_file_order(child.name),
-    )
-    account_path = data_dir / ACCOUNT_FILE_NAME
-    try:
-        tweet_files = [_ArchiveFile(child.name, child.read_text(encoding="utf-8-sig")) for child in tweet_paths]
-        account_file = (
-            _ArchiveFile(account_path.name, account_path.read_text(encoding="utf-8-sig"))
-            if account_path.is_file()
-            else None
+@contextmanager
+def _open_archive(path: Path) -> Iterator[_ArchiveSource]:
+    if path.is_dir():
+        data_dir = path / "data" if (path / "data").is_dir() else path
+        tweet_names = sorted(
+            (child.name for child in data_dir.iterdir() if child.is_file() and TWEETS_FILE_PATTERN.match(child.name)),
+            key=_tweet_file_order,
         )
-    except (OSError, UnicodeDecodeError) as error:
-        raise ArchiveError(f"Could not read archive folder {folder}: {error}") from error
-    return tweet_files, account_file
+        account_name = ACCOUNT_FILE_NAME if (data_dir / ACCOUNT_FILE_NAME).is_file() else None
+        yield _ArchiveSource(
+            tweet_names,
+            account_name,
+            lambda name: _ArchiveFile(name, (data_dir / name).read_text(encoding="utf-8-sig")),
+        )
+        return
+    with zipfile.ZipFile(path) as archive:
+        members = [
+            name
+            for name in archive.namelist()
+            if not name.endswith("/") and _is_archive_data_dir(PurePosixPath(name).parent)
+        ]
+        yield _ArchiveSource(
+            sorted((name for name in members if TWEETS_FILE_PATTERN.match(PurePosixPath(name).name)), key=_tweet_file_order),
+            next((name for name in members if PurePosixPath(name).name == ACCOUNT_FILE_NAME), None),
+            lambda name: _ArchiveFile(name, archive.read(name).decode("utf-8-sig")),
+        )
 
 
-def _read_zip(zip_path: Path) -> tuple[list[_ArchiveFile], _ArchiveFile | None]:
-    try:
-        with zipfile.ZipFile(zip_path) as archive:
-            members = [
-                name
-                for name in archive.namelist()
-                if not name.endswith("/") and _is_archive_data_dir(PurePosixPath(name).parent)
-            ]
-            tweet_names = sorted(
-                (name for name in members if TWEETS_FILE_PATTERN.match(PurePosixPath(name).name)),
-                key=_tweet_file_order,
-            )
-            account_name = next((name for name in members if PurePosixPath(name).name == ACCOUNT_FILE_NAME), None)
-            tweet_files = [_ArchiveFile(name, archive.read(name).decode("utf-8-sig")) for name in tweet_names]
-            account_file = (
-                _ArchiveFile(account_name, archive.read(account_name).decode("utf-8-sig"))
-                if account_name is not None
-                else None
-            )
-    except (zipfile.BadZipFile, OSError, UnicodeDecodeError, RuntimeError) as error:
-        raise ArchiveError(f"Could not read archive zip {zip_path}: {error}") from error
-    return tweet_files, account_file
-
-
-def _parse_ytd_array(archive_file: _ArchiveFile) -> list[dict[str, Any]]:
-    """`window.YTD.<name>.partN = [...]` の接頭辞を外して JSON 配列として読む。"""
-    prefix = YTD_PREFIX_PATTERN.match(archive_file.content)
+def _iter_ytd_array(archive_file: _ArchiveFile) -> Iterator[dict[str, Any]]:
+    """`window.YTD.<name>.partN = [...]` の接頭辞を外し、配列の要素を 1 件ずつ返す。"""
+    text = archive_file.content
+    prefix = YTD_PREFIX_PATTERN.match(text)
     if prefix is None:
         raise ArchiveError(f"Unexpected format in {archive_file.name}: missing window.YTD prefix")
-    try:
-        # raw_decode parses in place, so the (possibly large) text is not copied; a trailing ";" is ignored.
-        start = _skip_whitespace(archive_file.content, prefix.end())
-        data, _end = json.JSONDecoder().raw_decode(archive_file.content, start)
-    except json.JSONDecodeError as error:
-        raise ArchiveError(f"Malformed JSON in {archive_file.name}: {error}") from error
-    if not isinstance(data, list) or not all(isinstance(entry, dict) for entry in data):
+    decoder = json.JSONDecoder()
+    index = _skip_whitespace(text, prefix.end())
+    if not text.startswith("[", index):
         raise ArchiveError(f"Unexpected format in {archive_file.name}: expected an array of objects")
-    return data
+    index = _skip_whitespace(text, index + 1)
+    if text.startswith("]", index):
+        return
+    while True:
+        try:
+            # raw_decode parses in place, so the (possibly large) text is not copied.
+            entry, index = decoder.raw_decode(text, index)
+        except json.JSONDecodeError as error:
+            raise ArchiveError(f"Malformed JSON in {archive_file.name}: {error}") from error
+        if not isinstance(entry, dict):
+            raise ArchiveError(f"Unexpected format in {archive_file.name}: expected an array of objects")
+        yield entry
+        index = _skip_whitespace(text, index)
+        if text.startswith("]", index):
+            return
+        if not text.startswith(",", index):
+            raise ArchiveError(f"Malformed JSON in {archive_file.name}: expected ',' or ']' at char {index}")
+        index = _skip_whitespace(text, index + 1)
 
 
 def _skip_whitespace(text: str, index: int) -> int:
@@ -200,7 +216,7 @@ def _skip_whitespace(text: str, index: int) -> int:
 
 def _resolve_username(account_file: _ArchiveFile | None, fallback_username: str | None) -> str:
     if account_file is not None:
-        for entry in _parse_ytd_array(account_file):
+        for entry in _iter_ytd_array(account_file):
             account = entry.get("account")
             username = account.get("username") if isinstance(account, dict) else None
             if isinstance(username, str) and USERNAME_PATTERN.fullmatch(username):
