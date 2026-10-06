@@ -911,6 +911,32 @@ def test_import_archive_filters_and_skips_reposts(window, qtbot, monkeypatch, tm
     assert "リポスト 1 件" in window.status_label.text()
 
 
+def test_import_archive_skips_posts_deleted_earlier(window, qtbot, monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr("PySide6.QtWidgets.QMessageBox.information", lambda *a, **kw: None)
+    _write_archive(tmp_path)
+    window.username_input.setText("alice")
+    monkeypatch.setattr(
+        "kusamushiri.gui.QFileDialog.getOpenFileName",
+        lambda *args: (str(tmp_path / "data" / "tweets.js"), ""),
+    )
+    window.import_archive_button.click()
+    assert window.table.rowCount() == 2
+
+    window.on_delete_done([
+        PostActionResult(
+            target=PostActionTarget(url="https://x.com/alice/status/12", kind="post"),
+            action_label="削除",
+            success=True,
+            error_message=None,
+        ),
+    ])
+    window.import_archive_button.click()
+
+    assert window.table.rowCount() == 1
+    assert window.table.item(0, 2).text() == "https://x.com/alice/status/10"
+    assert "削除済み 1 件" in window.status_label.text()
+
+
 def test_import_archive_reports_unreadable_archive(window, qtbot, monkeypatch, tmp_path) -> None:
     window.username_input.setText("alice")
     broken = tmp_path / "broken.zip"

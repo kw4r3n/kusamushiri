@@ -28,7 +28,7 @@ Qt (PySide6) list before anything is deleted**.
 - Undo likes: collect the posts on your profile's Likes tab and remove your like from the ones you check
 - Preview the collected list and post text; run only the rows you check
 - Save the checked posts to CSV or JSON as a record before deleting them
-- Load posts from your X data archive to reach old posts that search misses
+- Load posts from your X data archive to reach old posts that search misses (posts already deleted with this app are skipped)
 - Adjustable interval between actions, stop at any time, retry only failed items
 - Multiple accounts via separate browser profiles
 - Export an account's following list to CSV (Excel-ready) or JSON

@@ -7,7 +7,8 @@ from typing import Any
 
 import pytest
 
-from kusamushiri.archive import ArchiveError, filter_archive_posts, load_archive_posts
+from kusamushiri.archive import ArchiveError, filter_archive_posts, load_archive_posts, select_archive_posts
+from kusamushiri.deleted_posts import DeletedPostStore
 from kusamushiri.models import CollectRequest
 
 
@@ -203,3 +204,31 @@ def test_filter_applies_collect_request(tmp_path: Path) -> None:
     assert ids(since_date=date(2019, 1, 1), until_date=date(2020, 12, 31)) == ["300", "200"]
     assert ids(include_keywords=("ＰＨＯＴＯ",)) == ["400"]
     assert ids(exclude_keywords=("Reply", "oldest")) == ["400", "300"]
+
+
+def test_select_skips_deleted_ids_before_limit(tmp_path: Path) -> None:
+    posts = load_archive_posts(write_folder(tmp_path, standard_files()))
+
+    selection = select_archive_posts(posts, make_request(max_posts=2), deleted_ids={"400", "999"})
+
+    # 300 is a repost; dropping deleted 400 lets older 100 fill the freed slot.
+    assert [post.id for post in selection.posts] == ["200", "100"]
+    assert selection.skipped_reposts == 1
+    assert selection.skipped_deleted == 1
+
+
+def test_deleted_post_store_round_trip(tmp_path: Path) -> None:
+    store = DeletedPostStore(tmp_path / "profile" / "deleted-posts.json")
+    assert store.load() == set()
+
+    assert store.record(["12", "3", ""]) == {"12", "3"}
+    assert store.record(["3", "40"]) == {"12", "3", "40"}
+    assert DeletedPostStore(store.path).load() == {"12", "3", "40"}
+
+
+@pytest.mark.parametrize("content", ["not json", "[]", '{"post_ids": "1"}', '{"post_ids": [1, "2"]}'])
+def test_deleted_post_store_ignores_unreadable_file(tmp_path: Path, content: str) -> None:
+    path = tmp_path / "deleted-posts.json"
+    path.write_text(content, encoding="utf-8")
+
+    assert DeletedPostStore(path).load() == ({"2"} if "[1" in content else set())

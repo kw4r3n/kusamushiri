@@ -33,6 +33,7 @@ from PySide6.QtWidgets import (
 )
 
 from kusamushiri.archive import ArchiveError, load_archive_posts, select_archive_posts
+from kusamushiri.deleted_posts import DeletedPostStore
 from kusamushiri.exporting import write_post_list
 from kusamushiri.follows import (
     DEFAULT_UNFOLLOW_INTERVAL_SECONDS,
@@ -55,7 +56,7 @@ from kusamushiri.models import (
     PostRecord,
     parse_keywords,
 )
-from kusamushiri.parsing import USERNAME_PATTERN
+from kusamushiri.parsing import USERNAME_PATTERN, extract_post_id
 from kusamushiri.paths import DEFAULT_ACCOUNT_NAME, get_account_profile_dir, normalize_account_name
 from kusamushiri.settings import AccountSettings, AccountSettingsManager
 
@@ -1198,16 +1199,17 @@ class XDeleterWindow(QMainWindow):
             )
             return
 
-        selection = select_archive_posts(posts, request)
+        selection = select_archive_posts(posts, request, self._deleted_post_store().load())
         self._last_collect_request = request
         self._save_settings()
         self.display_posts(selection.posts)
         self.update_status(
             tr(
-                "アーカイブから {count} 件を読み込みました（全 {total} 件、リポスト {reposts} 件は対象外）。",
+                "アーカイブから {count} 件を読み込みました（全 {total} 件、リポスト {reposts} 件と削除済み {deleted} 件は対象外）。",
                 count=len(selection.posts),
                 total=selection.total,
                 reposts=selection.skipped_reposts,
+                deleted=selection.skipped_deleted,
             )
         )
 
@@ -1309,6 +1311,9 @@ class XDeleterWindow(QMainWindow):
         dialog.show()
         dialog.raise_()
         dialog.activateWindow()
+
+    def _deleted_post_store(self) -> DeletedPostStore:
+        return DeletedPostStore.for_account(self._current_account)
 
     def _last_post_store(self) -> LastPostStore:
         return LastPostStore.for_account(self._current_account)
@@ -1576,6 +1581,7 @@ class XDeleterWindow(QMainWindow):
         success_count = sum(1 for result in results if result.success)
         failures = [result for result in results if not result.success]
         skipped = requested - len(results)
+        save_error = self._record_deleted_posts(results)
         remove_successful_rows(self.table, results)
         if self.table.rowCount() == 0 and success_count > 0:
             self._set_empty_copy(
@@ -1592,6 +1598,10 @@ class XDeleterWindow(QMainWindow):
         if notes:
             message += tr("（{notes}）", notes=tr("、").join(notes))
         self.update_status(message)
+        if save_error:
+            QMessageBox.warning(
+                self, tr("エラー"), tr("削除済みポストの記録を保存できませんでした: {message}", message=save_error)
+            )
         if stopped:
             # The stop dialog already had the user's attention; report in the status line.
             return
@@ -1611,6 +1621,22 @@ class XDeleterWindow(QMainWindow):
 
         if box.clickedButton() == retry_button:
             self._retry_failed(failures)
+
+    def _record_deleted_posts(self, results: list[PostActionResult]) -> str:
+        """Remember deleted post IDs so archive imports skip them; return the save error, if any."""
+        post_ids = [
+            extract_post_id(result.target.url)
+            for result in results
+            if result.success and result.target.kind == "post"
+        ]
+        if not post_ids:
+            return ""
+        try:
+            self._deleted_post_store().record(post_ids)
+        except OSError as error:
+            logger.exception("Failed to save deleted post IDs.")
+            return str(error)
+        return ""
 
     def _retry_failed(self, failures: list[PostActionResult]) -> None:
         # Same guards as the delete button: the target field may have changed

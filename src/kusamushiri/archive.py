@@ -6,7 +6,7 @@ GUI に依存しない純粋なモジュールで、収集結果と同じ PostRe
 import json
 import re
 import zipfile
-from collections.abc import Iterable, Sequence
+from collections.abc import Collection, Iterable, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
@@ -84,20 +84,26 @@ class ArchiveSelection:
     posts: list[PostRecord]
     total: int
     skipped_reposts: int
+    skipped_deleted: int = 0
 
 
-def select_archive_posts(posts: Sequence[PostRecord], request: CollectRequest) -> ArchiveSelection:
+def select_archive_posts(
+    posts: Sequence[PostRecord], request: CollectRequest, deleted_ids: Collection[str] = ()
+) -> ArchiveSelection:
     """アーカイブで扱えない条件を除いて絞り込み、新しい順に max_posts 件までを返す。
 
     アーカイブのリポストは元ポストではなくリポスト自体の ID を持つため URL から解除できず、対象外にする。
     アーカイブには返信数が無いので、最低返信数の条件は使わない。
+    deleted_ids (このアプリで削除済みのポスト ID) は件数上限より前に除き、空いた枠に古いポストが入るようにする。
     """
     originals = [post for post in posts if post.kind != "repost"]
-    matched = filter_archive_posts(originals, replace(request, min_replies=0))
+    remaining = [post for post in originals if post.id not in deleted_ids]
+    matched = filter_archive_posts(remaining, replace(request, min_replies=0))
     return ArchiveSelection(
         posts=matched[: request.max_posts],
         total=len(posts),
         skipped_reposts=len(posts) - len(originals),
+        skipped_deleted=len(originals) - len(remaining),
     )
 
 

@@ -304,9 +304,11 @@ ENGLISH: Final[dict[str, str]] = {
     "X のアーカイブ (*.zip tweets.js tweets-part*.js tweet.js)": "X archive (*.zip tweets.js tweets-part*.js tweet.js)",
     "読み込みエラー": "Load error",
     "アーカイブを読み込めませんでした: {error}": "Could not read the archive: {error}",
-    "アーカイブから {count} 件を読み込みました（全 {total} 件、リポスト {reposts} 件は対象外）。": (
-        "Loaded {count} posts from the archive ({total} in total; {reposts} reposts are not included)."
+    "アーカイブから {count} 件を読み込みました（全 {total} 件、リポスト {reposts} 件と削除済み {deleted} 件は対象外）。": (
+        "Loaded {count} posts from the archive ({total} in total; {reposts} reposts and {deleted} already "
+        "deleted posts are not included)."
     ),
+    "削除済みポストの記録を保存できませんでした: {message}": "Could not save the record of deleted posts: {message}",
     # Post export
     "選択項目を保存": "Save selected",
     "チェックした項目の本文や URL を CSV（または JSON）で保存します。削除前の控えに使えます。": (
