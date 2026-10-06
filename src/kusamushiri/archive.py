@@ -121,7 +121,10 @@ def select_archive_posts(
     remaining = [post for post in originals if post.id not in deleted_ids]
     matched = filter_archive_posts(remaining, replace(request, min_replies=0))
     if oldest_first:
-        matched.reverse()
+        # Posts without a date sort as oldest; keep them last so "oldest first" means the oldest dated posts.
+        matched = [post for post in reversed(matched) if post.date != UNKNOWN_DATE] + [
+            post for post in matched if post.date == UNKNOWN_DATE
+        ]
     return ArchiveSelection(
         posts=matched[: request.max_posts],
         total=len(posts),
