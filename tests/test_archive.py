@@ -203,6 +203,15 @@ def test_empty_part_and_trailing_semicolon_are_accepted(tmp_path: Path) -> None:
     assert progress == [(0, 2), (1, 2)]
 
 
+def test_select_oldest_first_takes_the_oldest_posts(tmp_path: Path) -> None:
+    posts = load_archive_posts(write_folder(tmp_path, standard_files()))
+    newest = select_archive_posts(posts, make_request(max_posts=100)).posts
+
+    selection = select_archive_posts(posts, make_request(max_posts=2), oldest_first=True)
+
+    assert [post.id for post in selection.posts] == [post.id for post in reversed(newest)][:2]
+
+
 def test_filter_applies_collect_request(tmp_path: Path) -> None:
     posts = load_archive_posts(write_folder(tmp_path, standard_files()))
 

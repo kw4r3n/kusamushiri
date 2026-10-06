@@ -304,6 +304,12 @@ ENGLISH: Final[dict[str, str]] = {
     "X のアーカイブ (*.zip tweets.js tweets-part*.js tweet.js)": "X archive (*.zip tweets.js tweets-part*.js tweet.js)",
     "読み込みエラー": "Load error",
     "アーカイブを読み込めませんでした: {error}": "Could not read the archive: {error}",
+    "アーカイブは古い順に読み込む": "Load archive oldest first",
+    "アーカイブから読み込むとき、最も古いポストから取得上限件数までを古い順に並べます。": (
+        "When loading an archive, list posts from the oldest, up to the maximum count."
+    ),
+    "アーカイブを読み込み中…": "Loading the archive…",
+    "アーカイブを読み込み中… ({done}/{total})": "Loading the archive… ({done}/{total})",
     "アーカイブから {count} 件を読み込みました（全 {total} 件、リポスト {reposts} 件と削除済み {deleted} 件は対象外）。": (
         "Loaded {count} posts from the archive ({total} in total; {reposts} reposts and {deleted} already "
         "deleted posts are not included)."

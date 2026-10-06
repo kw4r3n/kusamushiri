@@ -105,9 +105,13 @@ class ArchiveSelection:
 
 
 def select_archive_posts(
-    posts: Sequence[PostRecord], request: CollectRequest, deleted_ids: Collection[str] = ()
+    posts: Sequence[PostRecord],
+    request: CollectRequest,
+    deleted_ids: Collection[str] = (),
+    *,
+    oldest_first: bool = False,
 ) -> ArchiveSelection:
-    """アーカイブで扱えない条件を除いて絞り込み、新しい順に max_posts 件までを返す。
+    """アーカイブで扱えない条件を除いて絞り込み、新しい順 (oldest_first なら古い順) に max_posts 件までを返す。
 
     アーカイブのリポストは元ポストではなくリポスト自体の ID を持つため URL から解除できず、対象外にする。
     アーカイブには返信数が無いので、最低返信数の条件は使わない。
@@ -116,6 +120,8 @@ def select_archive_posts(
     originals = [post for post in posts if post.kind != "repost"]
     remaining = [post for post in originals if post.id not in deleted_ids]
     matched = filter_archive_posts(remaining, replace(request, min_replies=0))
+    if oldest_first:
+        matched.reverse()
     return ArchiveSelection(
         posts=matched[: request.max_posts],
         total=len(posts),

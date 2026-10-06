@@ -902,7 +902,8 @@ def test_import_archive_filters_and_skips_reposts(window, qtbot, monkeypatch, tm
     )
     assert window.import_archive_button.isEnabled()
 
-    window.import_archive_button.click()
+    with qtbot.waitSignal(window.archive_loaded):
+        window.import_archive_button.click()
 
     assert window.table.rowCount() == 1
     url_item = window.table.item(0, 2)
@@ -919,7 +920,8 @@ def test_import_archive_skips_posts_deleted_earlier(window, qtbot, monkeypatch, 
         "kusamushiri.gui.QFileDialog.getOpenFileName",
         lambda *args: (str(tmp_path / "data" / "tweets.js"), ""),
     )
-    window.import_archive_button.click()
+    with qtbot.waitSignal(window.archive_loaded):
+        window.import_archive_button.click()
     assert window.table.rowCount() == 2
 
     window.on_delete_done([
@@ -930,7 +932,8 @@ def test_import_archive_skips_posts_deleted_earlier(window, qtbot, monkeypatch, 
             error_message=None,
         ),
     ])
-    window.import_archive_button.click()
+    with qtbot.waitSignal(window.archive_loaded):
+        window.import_archive_button.click()
 
     assert window.table.rowCount() == 1
     assert window.table.item(0, 2).text() == "https://x.com/alice/status/10"
@@ -945,10 +948,42 @@ def test_import_archive_reports_unreadable_archive(window, qtbot, monkeypatch, t
     warnings: list[object] = []
     monkeypatch.setattr("kusamushiri.gui.QMessageBox.warning", lambda *args: warnings.append(args))
 
-    window.import_archive_button.click()
+    with qtbot.waitSignal(window.archive_failed):
+        window.import_archive_button.click()
 
     assert len(warnings) == 1
     assert window.table.rowCount() == 0
+    assert window.import_archive_button.isEnabled()
+
+
+def test_import_archive_oldest_first(window, qtbot, monkeypatch, tmp_path) -> None:
+    _write_archive(tmp_path)
+    window.username_input.setText("alice")
+    window.max_posts_input.setValue(1)
+    window.archive_oldest_first_checkbox.setChecked(True)
+    monkeypatch.setattr(
+        "kusamushiri.gui.QFileDialog.getOpenFileName",
+        lambda *args: (str(tmp_path / "data" / "tweets.js"), ""),
+    )
+
+    with qtbot.waitSignal(window.archive_loaded):
+        window.import_archive_button.click()
+
+    assert window.table.rowCount() == 1
+    assert window.table.item(0, 2).text() == "https://x.com/alice/status/10"
+
+    window.max_posts_input.setValue(5)
+    with qtbot.waitSignal(window.archive_loaded):
+        window.import_archive_button.click()
+
+    assert [window.table.item(row, 2).text() for row in range(window.table.rowCount())] == [
+        "https://x.com/alice/status/10",
+        "https://x.com/alice/status/12",
+    ]
+    assert [target.url for target in window.table_manager.selected_targets()][:2] == [
+        "https://x.com/alice/status/10",
+        "https://x.com/alice/status/12",
+    ]
 def test_likes_option_collects_from_profile_and_disables_mode(window: XDeleterWindow, qtbot) -> None:
     emitted_requests: list[object] = []
     window._commit_typed_account(load_settings=False)

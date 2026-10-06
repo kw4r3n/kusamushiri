@@ -1,3 +1,4 @@
+import threading
 from collections import Counter
 from datetime import date, datetime
 from pathlib import Path
@@ -32,7 +33,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from kusamushiri.archive import ArchiveError, load_archive_posts, select_archive_posts
+from kusamushiri.archive import ArchiveError, ArchiveSelection, load_archive_posts, select_archive_posts
 from kusamushiri.deleted_posts import DeletedPostStore
 from kusamushiri.exporting import write_post_list
 from kusamushiri.follows import (
@@ -179,9 +180,17 @@ class XDeleterWindow(QMainWindow):
     collect_following_requested = Signal(str)
     unfollow_requested = Signal(object)
     fetch_last_posts_requested = Signal(object)
+    # Emitted from the archive loader thread; Qt queues them onto the GUI thread.
+    archive_progress = Signal(int, int)
+    archive_loaded = Signal(object)  # ArchiveSelection
+    archive_failed = Signal(str)
 
     def __init__(self) -> None:
         super().__init__()
+        self._pending_archive_request: CollectRequest | None = None
+        self.archive_progress.connect(self._on_archive_progress)
+        self.archive_loaded.connect(self._on_archive_loaded)
+        self.archive_failed.connect(self._on_archive_failed)
         self._busy = False
         self._browser_running = False
         self._login_verified = False
@@ -477,6 +486,10 @@ class XDeleterWindow(QMainWindow):
             tr("X の「データのアーカイブ」(zip) からポストを読み込み、上の条件で絞り込みます。検索で見つからない古いポストも対象にできます。")
         )
         self.import_archive_button.clicked.connect(self._handle_import_archive)
+        self.archive_oldest_first_checkbox = QCheckBox(tr("アーカイブは古い順に読み込む"))
+        self.archive_oldest_first_checkbox.setToolTip(
+            tr("アーカイブから読み込むとき、最も古いポストから取得上限件数までを古い順に並べます。")
+        )
 
         layout.addWidget(QLabel(tr("メディア条件")), 0, 0, 1, 2)
         layout.addWidget(self.media_filter_combo, 1, 0, 1, 2)
@@ -497,6 +510,7 @@ class XDeleterWindow(QMainWindow):
         layout.addWidget(self.exclude_keywords_input, 12, 0, 1, 2)
         layout.addWidget(self.collect_button, 13, 0, 1, 2)
         layout.addWidget(self.import_archive_button, 14, 0, 1, 2)
+        layout.addWidget(self.archive_oldest_first_checkbox, 15, 0, 1, 2)
         layout.setContentsMargins(0, 12, 0, 0)
         layout.setColumnStretch(0, 1)
         layout.setColumnStretch(1, 1)
@@ -975,6 +989,7 @@ class XDeleterWindow(QMainWindow):
         self.auto_save_interval_input.setValue(settings.auto_save_interval_seconds)
         self.include_keywords_input.setText(settings.include_keywords)
         self.exclude_keywords_input.setText(settings.exclude_keywords)
+        self.archive_oldest_first_checkbox.setChecked(settings.archive_oldest_first)
 
         today = QDate.currentDate().toString(Qt.DateFormat.ISODate)
         since_date = QDate.fromString(
@@ -1019,6 +1034,7 @@ class XDeleterWindow(QMainWindow):
                 until_date_enabled=self.until_date_checkbox.isChecked(),
                 include_keywords=self.include_keywords_input.text().strip(),
                 exclude_keywords=self.exclude_keywords_input.text().strip(),
+                archive_oldest_first=self.archive_oldest_first_checkbox.isChecked(),
             ),
         )
 
@@ -1190,19 +1206,60 @@ class XDeleterWindow(QMainWindow):
         )
         if not path_text:
             return
+        self._pending_archive_request = request
+        self._save_settings()
+        self.set_busy(True)
+        self.update_status(tr("アーカイブを読み込み中…"))
+        self.show_progress(0, 0)
+        # Parsing a large archive takes seconds; keep the window responsive meanwhile.
+        threading.Thread(
+            target=self._load_archive,
+            args=(
+                path_text,
+                request,
+                self._deleted_post_store().load(),
+                self.archive_oldest_first_checkbox.isChecked(),
+            ),
+            name="archive-loader",
+            daemon=True,
+        ).start()
+
+    def _load_archive(
+        self, path_text: str, request: CollectRequest, deleted_ids: set[str], oldest_first: bool
+    ) -> None:
         try:
-            posts = load_archive_posts(path_text, fallback_username=request.username)
+            posts = load_archive_posts(
+                path_text, fallback_username=request.username, on_progress=self.archive_progress.emit
+            )
+            selection = select_archive_posts(posts, request, deleted_ids, oldest_first=oldest_first)
         except ArchiveError as error:
             logger.warning("Archive import failed: %s", error)
-            QMessageBox.warning(
-                self, tr("読み込みエラー"), tr("アーカイブを読み込めませんでした: {error}", error=error)
-            )
+            self.archive_failed.emit(str(error))
             return
+        except Exception as error:
+            logger.exception("Archive import failed unexpectedly.")
+            self.archive_failed.emit(str(error) or type(error).__name__)
+            return
+        self.archive_loaded.emit(selection)
 
-        selection = select_archive_posts(posts, request, self._deleted_post_store().load())
-        self._last_collect_request = request
-        self._save_settings()
+    def _on_archive_progress(self, done: int, total: int) -> None:
+        if total > 1:
+            self.update_status(tr("アーカイブを読み込み中… ({done}/{total})", done=done, total=total))
+            self.show_progress(done, total)
+
+    def _on_archive_failed(self, message: str) -> None:
+        self._pending_archive_request = None
+        self.hide_progress()
+        self.set_busy(False)
+        QMessageBox.warning(
+            self, tr("読み込みエラー"), tr("アーカイブを読み込めませんでした: {error}", error=message)
+        )
+
+    def _on_archive_loaded(self, selection: ArchiveSelection) -> None:
+        self._last_collect_request = self._pending_archive_request
+        self._pending_archive_request = None
         self.display_posts(selection.posts)
+        self.set_busy(False)
         self.update_status(
             tr(
                 "アーカイブから {count} 件を読み込みました（全 {total} 件、リポスト {reposts} 件と削除済み {deleted} 件は対象外）。",

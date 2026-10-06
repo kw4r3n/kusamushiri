@@ -36,6 +36,7 @@ class AccountSettings:
     auto_save_interval_seconds: int = 60
     include_keywords: str = ""
     exclude_keywords: str = ""
+    archive_oldest_first: bool = False
 
 
 LEGACY_SETTINGS_SCOPE = ("Unknown Organization", "xposdeleter")
@@ -76,6 +77,7 @@ class AccountSettingsManager:
         self._settings.setValue(f"{prefix}auto_save_interval_seconds", settings.auto_save_interval_seconds)
         self._settings.setValue(f"{prefix}include_keywords", settings.include_keywords)
         self._settings.setValue(f"{prefix}exclude_keywords", settings.exclude_keywords)
+        self._settings.setValue(f"{prefix}archive_oldest_first", settings.archive_oldest_first)
         for key, value in (("since_date", settings.since_date), ("until_date", settings.until_date)):
             if value is None:
                 self._settings.remove(f"{prefix}{key}")
@@ -107,6 +109,7 @@ class AccountSettingsManager:
             auto_save_interval_seconds=self._account_setting_value(prefix, "auto_save_interval_seconds", 60, int),
             include_keywords=self._account_setting_value(prefix, "include_keywords", "", str),
             exclude_keywords=self._account_setting_value(prefix, "exclude_keywords", "", str),
+            archive_oldest_first=self._account_setting_value(prefix, "archive_oldest_first", False, bool),
         )
 
     def list_accounts(self) -> list[str]:
