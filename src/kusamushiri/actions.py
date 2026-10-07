@@ -2,7 +2,7 @@ import re
 from collections.abc import Callable
 from urllib.parse import urljoin, urlparse
 
-from playwright.sync_api import Locator, Page, Request
+from playwright.sync_api import Locator, Page, Request, Response
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
 from kusamushiri.browser import BASE_X_URL, NAVIGATION_TIMEOUT_MS, find_first_visible_locator
@@ -173,6 +173,37 @@ def _target_article(page: Page, post_url: str) -> Locator:
     )
 
 
+class TargetPostUnavailableError(Exception):
+    """The post page never showed the target post; the message says why, for the user."""
+
+
+def _open_target_article(page: Page, post_url: str) -> Locator:
+    """Open the post page and wait for its own article."""
+    article = _target_article(page, post_url)
+    rate_limited: list[Response] = []
+
+    def record_rate_limit(response: Response) -> None:
+        if response.status == 429:
+            rate_limited.append(response)
+
+    page.on("response", record_rate_limit)
+    try:
+        page.goto(post_url, timeout=NAVIGATION_TIMEOUT_MS)
+        article.wait_for(state="visible", timeout=NAVIGATION_TIMEOUT_MS)
+    except PlaywrightTimeoutError as error:
+        # X stops showing posts after many actions in a short time; say so instead of dumping the locator.
+        if rate_limited:
+            raise TargetPostUnavailableError(
+                tr("X の利用制限 (HTTP 429) でポストを表示できませんでした。しばらく待ってから再試行してください。")
+            ) from error
+        raise TargetPostUnavailableError(
+            tr("ポストが表示されませんでした。削除済み・非公開か、X の利用制限の可能性があります。時間をおいて再試行してください。")
+        ) from error
+    finally:
+        page.remove_listener("response", record_rate_limit)
+    return article
+
+
 def execute_post_action(
     page: Page,
     target: PostActionTarget,
@@ -254,10 +285,7 @@ def _toggle_off_post(
 
     listening = False
     try:
-        main_tweet_article = _target_article(page, post_url)
-        page.goto(post_url, timeout=NAVIGATION_TIMEOUT_MS)
-
-        main_tweet_article.wait_for(state="visible", timeout=NAVIGATION_TIMEOUT_MS)
+        main_tweet_article = _open_target_article(page, post_url)
         undo_button = find_locator(main_tweet_article, (_own_control(undo_id),))
         if undo_button is None:
             logger.warning("%s URL=%s", button_missing, post_url)
@@ -294,6 +322,9 @@ def _toggle_off_post(
             return False, error_message
         logger.info("Completed %s: %s", action_name, post_url)
         return True, None
+    except TargetPostUnavailableError as error:
+        logger.warning("%s URL=%s", error, post_url)
+        return False, str(error)
     except Exception as error:
         logger.exception("Exception during %s for %s.", action_name, post_url)
         return False, f"{type(error).__name__}: {error}"
@@ -318,10 +349,7 @@ def delete_post(
 
     listening = False
     try:
-        main_tweet_article = _target_article(page, post_url)
-        page.goto(post_url, timeout=NAVIGATION_TIMEOUT_MS)
-
-        main_tweet_article.wait_for(state="visible", timeout=NAVIGATION_TIMEOUT_MS)
+        main_tweet_article = _open_target_article(page, post_url)
         stage = tr("「…」メニューボタンの表示待ち")
         main_tweet_article.locator(_own_control('caret')).wait_for(
             state="visible", timeout=ACTION_STATE_TIMEOUT_MS
@@ -395,6 +423,9 @@ def delete_post(
         logger.warning("%s URL=%s", message, post_url)
         return False, message
 
+    except TargetPostUnavailableError as error:
+        logger.warning("%s URL=%s", error, post_url)
+        return False, str(error)
     except Exception as error:
         logger.exception("Exception during deletion of post %s at %s.", post_url, stage)
         return False, f"{stage}: {type(error).__name__}: {error}"

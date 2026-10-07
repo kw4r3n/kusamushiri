@@ -724,3 +724,19 @@ def test_likes_collection_keeps_other_authors_posts_as_likes(local_page) -> None
         ("https://x.com/someone/status/456", "someone", "like", 7),
         ("https://x.com/target/status/123", "target", "like", 9),
     ]
+
+
+@pytest.mark.parametrize("action_name", ["delete", "undo", "unlike"])
+@pytest.mark.parametrize(("api_status", "expected"), [(200, "ポストが表示されませんでした"), (429, "HTTP 429")])
+def test_action_explains_a_post_that_never_appears(
+    local_page, monkeypatch, action_name: str, api_status: int, expected: str
+) -> None:
+    monkeypatch.setattr(x_deleter_actions, "NAVIGATION_TIMEOUT_MS", 500)
+    page, _navigations = local_page("<script>fetch('/i/api/graphql/abc/TweetDetail')</script>")
+    page.route("**/i/api/**", lambda route: route.fulfill(status=api_status, body="{}"))
+
+    success, error_message = _run_action(page, action_name)
+
+    assert success is False
+    assert error_message is not None and expected in error_message
+    assert "xpath" not in error_message

@@ -120,6 +120,8 @@ kusamushiri-cli unfollow follows.csv --profile main --headless
   if a headless run fails, try it without `--headless`.
 - `delete` and `unfollow` ask for confirmation; pass `--yes` for unattended runs. Ctrl+C stops
   after the current item, and a second Ctrl+C aborts. Messages are in Japanese; add `--lang en` for English.
+- Many actions in a short time make X rate limit you and stop showing posts; those items fail with a
+  rate-limit or "post did not appear" message. Use a longer `--interval` and retry the `--failed-output` list later.
 - Exit codes: 0 success, 1 some items failed, 2 invalid input, 130 interrupted.
   Run `kusamushiri-cli COMMAND --help` for every option.
 
