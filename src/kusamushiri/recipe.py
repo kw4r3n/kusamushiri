@@ -29,6 +29,7 @@ DEFAULT_MAX_POSTS: Final = 50
 POST_KIND_FILTERS: Final = ("posts", "reposts", "all", "likes")
 SEARCH_MODES: Final = ("profile", "search")
 MEDIA_FILTERS: Final = ("all", "with_media", "without_media")
+ARCHIVE_ORDERS: Final = ("newest", "oldest")
 
 _Value = TypeVar("_Value")
 
@@ -182,10 +183,15 @@ def _table(data: Mapping[str, object], key: str) -> Mapping[str, object] | None:
 def parse_recipe(data: Mapping[str, object], path: Path) -> Recipe:
     _reject_unknown(data, {"profile", "headless", "output_dir", "archive", "collect", "delete"}, "")
     collect_table = _table(data, "collect") or {}
-    _reject_unknown(collect_table, {name for name in CollectOptions.__dataclass_fields__}, "collect.")
+    # `oldest_first` is the older spelling of `order`, kept so saved recipes still load.
+    _reject_unknown(collect_table, {*CollectOptions.__dataclass_fields__, "order"}, "collect.")
     max_posts = _check(collect_table, "max_posts", int, "collect.")
     if max_posts is not None and max_posts < 1:
         raise RecipeError("collect.max_posts: must be 1 or greater")
+    legacy_oldest_first = _check(collect_table, "oldest_first", bool, "collect.")
+    order = _choice(collect_table, "order", ARCHIVE_ORDERS, "oldest" if legacy_oldest_first else "newest")
+    if legacy_oldest_first is not None and legacy_oldest_first != (order == "oldest"):
+        raise RecipeError("collect.order: conflicts with collect.oldest_first; keep only order")
     collect = CollectOptions(
         user=_check(collect_table, "user", str, "collect.") or None,
         kind=_choice(collect_table, "kind", POST_KIND_FILTERS, "posts"),  # type: ignore[arg-type]
@@ -202,7 +208,7 @@ def parse_recipe(data: Mapping[str, object], path: Path) -> Recipe:
         include=_keywords(collect_table, "include"),
         exclude=_keywords(collect_table, "exclude"),
         max_posts=max_posts or DEFAULT_MAX_POSTS,
-        oldest_first=bool(_check(collect_table, "oldest_first", bool, "collect.")),
+        oldest_first=order == "oldest",
     )
 
     delete: DeleteOptions | None = None
@@ -282,7 +288,7 @@ def format_recipe(recipe: Recipe) -> str:
         _line("include", list(collect.include)),
         _line("exclude", list(collect.exclude)),
         _line("max_posts", collect.max_posts),
-        _line("oldest_first", collect.oldest_first, "archive only"),
+        _line("order", "oldest" if collect.oldest_first else "newest", "newest / oldest (archive only)"),
     ]
     if recipe.delete is None:
         lines += ["", "# Add a [delete] table to delete the collected posts:", "# [delete]", "# interval = 1.0"]
@@ -364,9 +370,19 @@ def run_wizard(path: Path, ask: Ask = input) -> Recipe:
     )
     archive: str | None = None
     kind: PostKindFilter = "posts"
+    oldest_first = False
     if source == "archive":
         while not archive:
             archive = _ask_text(ask, tr("アーカイブ (.zip またはフォルダ) のパス")).strip("\"'") or None
+        oldest_first = (
+            _ask_choice(
+                ask,
+                tr("どの順に集めて削除しますか？"),
+                [("oldest", tr("古い順")), ("newest", tr("新しい順"))],
+                "oldest",
+            )
+            == "oldest"
+        )
     else:
         kind = _ask_choice(  # type: ignore[assignment]
             ask,
@@ -403,7 +419,7 @@ def run_wizard(path: Path, ask: Ask = input) -> Recipe:
             include=include,
             exclude=exclude,
             max_posts=max_posts,
-            oldest_first=source == "archive",
+            oldest_first=oldest_first,
         ),
         delete=delete,
     )

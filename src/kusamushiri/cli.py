@@ -47,6 +47,7 @@ from kusamushiri.models import (
 from kusamushiri.parsing import extract_post_id
 from kusamushiri.paths import configure_frozen_browser_path, migrate_legacy_app_data
 from kusamushiri.recipe import (
+    ARCHIVE_ORDERS,
     DEFAULT_MAX_POSTS,
     DEFAULT_RECIPE_NAME,
     CollectOptions,
@@ -209,7 +210,7 @@ def collect_options_from_args(args: argparse.Namespace) -> CollectOptions:
         include=parse_keywords(args.include),
         exclude=parse_keywords(args.exclude),
         max_posts=args.max_posts,
-        oldest_first=getattr(args, "oldest_first", False),
+        oldest_first=getattr(args, "order", "newest") == "oldest",
     )
 
 
@@ -473,7 +474,7 @@ def cmd_collect(args: argparse.Namespace) -> int:
 def cmd_archive(args: argparse.Namespace) -> int:
     request = build_collect_request(args, args.user or "")
     _validate_without_username(request)
-    posts = _select_archive_posts(args.archive, request, args.profile, oldest_first=args.oldest_first)
+    posts = _select_archive_posts(args.archive, request, args.profile, oldest_first=args.order == "oldest")
     write_post_list(args.output, posts)
     _info(tr("{count} 件を {path} に保存しました。", count=len(posts), path=args.output))
     return 0
@@ -750,7 +751,11 @@ def build_parser() -> argparse.ArgumentParser:
     archive.add_argument("archive", type=Path, help="archive .zip, extracted folder or tweets.js")
     _add_profile_arg(archive)
     _add_filter_args(archive)
-    archive.add_argument("--oldest-first", action="store_true", help="pick the oldest matching posts first")
+    archive.add_argument(
+        "--order", choices=ARCHIVE_ORDERS, default="newest", help="which matching posts to pick first (default: %(default)s)"
+    )
+    # Older spelling of --order oldest.
+    archive.add_argument("--oldest-first", dest="order", action="store_const", const="oldest", help=argparse.SUPPRESS)
     archive.add_argument("-o", "--output", type=_output_path, required=True, help="output .csv or .json")
     archive.set_defaults(handler=cmd_archive)
 

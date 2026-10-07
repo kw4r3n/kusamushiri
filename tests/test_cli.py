@@ -437,3 +437,22 @@ def test_run_from_archive_opens_the_browser_only_to_delete(fake_core, tmp_path, 
 
     assert len(fake_core.instances) == 1
     assert [target.url for target in fake_core.instances[0].actions] == ["https://x.com/i/status/7"]
+
+
+@pytest.mark.parametrize(
+    ("flags", "expected"),
+    [([], ["3"]), (["--order", "newest"], ["3"]), (["--order", "oldest"], ["1"]), (["--oldest-first"], ["1"])],
+)
+def test_archive_order_picks_newest_or_oldest(fake_core, tmp_path, flags: list[str], expected: list[str]) -> None:
+    tweets = tmp_path / "tweets.js"
+    entries = [
+        {"tweet": {"id_str": str(post_id), "created_at": created, "full_text": "text", "favorite_count": "0"}}
+        for post_id, created in [(1, "Wed Oct 10 20:19:24 +0000 2018"), (3, "Wed Oct 10 20:19:24 +0000 2020")]
+    ]
+    tweets.write_text(f"window.YTD.tweets.part0 = {json.dumps(entries)}", encoding="utf-8")
+    output = tmp_path / "selected.json"
+
+    code = cli.main(["archive", str(tweets), "--user", "alice", "--max-posts", "1", *flags, "-o", str(output)])
+
+    assert code == 0
+    assert [row["id"] for row in json.loads(output.read_text(encoding="utf-8"))] == expected

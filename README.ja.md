@@ -84,14 +84,14 @@ pip の場合は `pip install .` のあと `kusamushiri` で起動します。
 2. 条件に合うポストを集め、一覧を `kusamushiri-lists/posts-<日時>.csv` に保存
 3. 先頭数件を表示し、削除してよいか確認。答える前に CSV の行を消すと、その行は対象外になります（ファイルに残った行だけを実行）
 
-次回は起動すると保存済みの設定を使うか聞かれます。`kusamushiri-cli run kusamushiri.toml` でも実行できます。設定ファイルはコメント付きのテキストなので、エディタで条件を変えられます。`[delete]` を書かなければ一覧の保存だけを行い、`[delete]` に `confirm = false` を書くと確認なしで実行します（定期実行向け）。
+次回は起動すると保存済みの設定を使うか聞かれます。`kusamushiri-cli run kusamushiri.toml` でも実行できます。設定ファイルはコメント付きのテキストなので、エディタで条件を変えられます。`[delete]` を書かなければ一覧の保存だけを行い、`[delete]` に `confirm = false` を書くと確認なしで実行します（定期実行向け）。アーカイブから読むときは `[collect]` の `order = "oldest"`（古い順）または `"newest"`（新しい順）で順番を指定できます。
 
 ### 個別のコマンド
 
 ```bash
 kusamushiri-cli login --profile main                 # 開いたブラウザで一度だけ手動ログイン
 kusamushiri-cli collect --profile main --headless --older-than 30 --exclude 残す -o posts.json
-kusamushiri-cli archive twitter-archive.zip --profile main --oldest-first -o old.json
+kusamushiri-cli archive twitter-archive.zip --profile main --order oldest -o old.json
 kusamushiri-cli delete posts.json --profile main --headless --dry-run   # 対象の表示のみ
 kusamushiri-cli delete posts.json --profile main --headless --interval 3 --failed-output failed.json
 kusamushiri-cli following --profile main --skip-mutual -o follows.csv

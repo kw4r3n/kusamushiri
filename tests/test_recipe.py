@@ -131,3 +131,32 @@ def test_wizard_writes_a_runnable_recipe(tmp_path, monkeypatch) -> None:
     assert recipe.collect.exclude == ("残す", "keep")
     assert recipe.delete == DeleteOptions(interval=3.0)
     assert recipe.headless is False
+
+
+@pytest.mark.parametrize(
+    ("collect", "oldest_first"),
+    [("", False), ('order = "newest"', False), ('order = "oldest"', True), ("oldest_first = true", True)],
+)
+def test_order_is_explicit_and_old_oldest_first_still_loads(tmp_path, collect: str, oldest_first: bool) -> None:
+    loaded = load_recipe(write(tmp_path / "r.toml", f"[collect]\n{collect}\n"))
+
+    assert loaded.collect.oldest_first is oldest_first
+    expected = "oldest" if oldest_first else "newest"
+    assert f'order = "{expected}"' in format_recipe(loaded)
+
+
+@pytest.mark.parametrize("collect", ['order = "random"', 'order = "newest"\noldest_first = true'])
+def test_invalid_or_conflicting_order_is_rejected(tmp_path, collect: str) -> None:
+    with pytest.raises(RecipeError, match="collect.order"):
+        load_recipe(write(tmp_path / "r.toml", f"[collect]\n{collect}\n"))
+
+
+@pytest.mark.parametrize(("answer", "oldest_first"), [("", True), ("2", False)])
+def test_wizard_asks_the_archive_order(tmp_path, monkeypatch, answer: str, oldest_first: bool) -> None:
+    monkeypatch.setattr(recipe_module, "list_saved_accounts", lambda: [])
+    answers = iter(["", "2", "archive.zip", answer, "", "", "", "", "n", "n"])
+
+    recipe = run_wizard(tmp_path / "kusamushiri.toml", ask=lambda _prompt: next(answers))
+
+    assert recipe.archive == "archive.zip"
+    assert recipe.collect.oldest_first is oldest_first

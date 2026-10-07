@@ -99,14 +99,14 @@ saves them to `kusamushiri.toml`, and runs:
 
 Next time, starting it again offers to reuse `kusamushiri.toml`, or run `kusamushiri-cli run kusamushiri.toml`.
 The file is plain text with comments; edit it to change filters. Without a `[delete]` table
-a run only writes the list. `confirm = false` under `[delete]` skips the question for scheduled runs.
+a run only writes the list. `confirm = false` under `[delete]` skips the question for scheduled runs. When reading an archive, `order = "oldest"` or `"newest"` under `[collect]` picks which posts come first.
 
 ### Individual commands
 
 ```bash
 kusamushiri-cli login --profile main                 # sign in once in the opened window
 kusamushiri-cli collect --profile main --headless --older-than 30 --exclude keep -o posts.json
-kusamushiri-cli archive twitter-archive.zip --profile main --oldest-first -o old.json
+kusamushiri-cli archive twitter-archive.zip --profile main --order oldest -o old.json
 kusamushiri-cli delete posts.json --profile main --headless --dry-run   # list only
 kusamushiri-cli delete posts.json --profile main --headless --interval 3 --failed-output failed.json
 kusamushiri-cli following --profile main --skip-mutual -o follows.csv
