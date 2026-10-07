@@ -54,7 +54,8 @@ def install_chromium() -> None:
 
 
 class BrowserManager:
-    def __init__(self) -> None:
+    def __init__(self, *, headless: bool = False) -> None:
+        self.headless = headless
         self.playwright: Playwright | None = None
         self.browser: Browser | None = None
         self.context: BrowserContext | None = None
@@ -102,12 +103,12 @@ class BrowserManager:
                 self.playwright = sync_playwright().start()
 
             try:
-                self.context = self._launch_context(self.playwright, profile_dir)
+                self.context = self._launch_context(self.playwright, profile_dir, headless=self.headless)
             except PlaywrightError as error:
                 if MISSING_BROWSER_MESSAGE not in str(error):
                     raise
                 install_chromium()
-                self.context = self._launch_context(self.playwright, profile_dir)
+                self.context = self._launch_context(self.playwright, profile_dir, headless=self.headless)
             self.browser = self.context.browser
             self.page = self.context.pages[0] if self.context.pages else self.context.new_page()
             self.profile_dir = profile_dir
@@ -118,10 +119,10 @@ class BrowserManager:
             raise
 
     @staticmethod
-    def _launch_context(playwright: Playwright, profile_dir: Path) -> BrowserContext:
+    def _launch_context(playwright: Playwright, profile_dir: Path, *, headless: bool = False) -> BrowserContext:
         return playwright.chromium.launch_persistent_context(
             user_data_dir=str(profile_dir),
-            headless=False,
+            headless=headless,
             viewport={"width": VIEWPORT_WIDTH, "height": VIEWPORT_HEIGHT},
             args=["--disable-blink-features=AutomationControlled"],
         )

@@ -104,8 +104,8 @@ class EmptySearchState:
 
 
 class XDeleterCore:
-    def __init__(self) -> None:
-        self._browser = BrowserManager()
+    def __init__(self, *, headless: bool = False) -> None:
+        self._browser = BrowserManager(headless=headless)
         self._cancel_event = threading.Event()
         self.collection_limit_reached = False
 
@@ -117,6 +117,10 @@ class XDeleterCore:
 
     def is_cancel_requested(self) -> bool:
         return self._cancel_event.is_set()
+
+    def wait_for_cancel(self, seconds: float) -> bool:
+        """Sleep up to `seconds`; return True as soon as cancellation is requested."""
+        return self._cancel_event.wait(seconds)
 
     @property
     def page(self) -> Page | None:
