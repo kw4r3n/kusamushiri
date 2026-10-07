@@ -52,6 +52,7 @@ def _article(post_id: str, *, extra_content: str = "") -> str:
           {extra_content}
           <button data-testid="caret" onclick="openDelete('{post_id}')">more</button>
           <button data-testid="unretweet" onclick="openUndo('{post_id}')">undo repost</button>
+          <button data-testid="unlike" onclick="unlikePost('{post_id}')">undo like</button>
         </article>
     """
 
@@ -90,6 +91,12 @@ def _document(articles: list[str], *, leave_success_state_unchanged: bool = Fals
               window.selectedPostId = postId;
               document.querySelector('[data-testid="unretweetConfirm"]').hidden = false;
             }};
+            window.unlikePost = (postId) => {{
+              window.actionLog.push(`unlike:${{postId}}`);
+              if (!window.leaveSuccessStateUnchanged) {{
+                window.articleFor(postId).querySelector('[data-testid="unlike"]').dataset.testid = 'like';
+              }}
+            }};
             window.confirmUndo = () => {{
               window.actionLog.push(`undo-confirm:${{window.selectedPostId}}`);
               if (!window.leaveSuccessStateUnchanged) {{
@@ -102,9 +109,20 @@ def _document(articles: list[str], *, leave_success_state_unchanged: bool = Fals
     """
 
 
+ACTIONS = {
+    "delete": x_deleter_actions.delete_post,
+    "undo": x_deleter_actions.undo_repost,
+    "unlike": x_deleter_actions.unlike_post,
+}
+EXPECTED_ACTION_LOGS = {
+    "delete": [f"caret:{TARGET_ID}", f"delete-menu:{TARGET_ID}", f"delete-confirm:{TARGET_ID}"],
+    "undo": [f"unretweet:{TARGET_ID}", f"undo-confirm:{TARGET_ID}"],
+    "unlike": [f"unlike:{TARGET_ID}"],
+}
+
+
 def _run_action(page: Page, action_name: str) -> tuple[bool, str | None]:
-    action = x_deleter_actions.delete_post if action_name == "delete" else x_deleter_actions.undo_repost
-    return action(page, TARGET_URL)
+    return ACTIONS[action_name](page, TARGET_URL)
 
 
 def _action_log(page: Page) -> list[str]:
@@ -244,13 +262,13 @@ def test_collection_preserves_normal_and_repost_previews(local_page) -> None:
 
     posts = _collect_local_articles(page)
 
-    assert [(post.url, post.text, post.is_repost) for post in posts] == [
-        ("https://x.com/target/status/123", "normal post", False),
-        ("https://x.com/original/status/456", "repost preview", True),
+    assert [(post.url, post.text, post.kind) for post in posts] == [
+        ("https://x.com/target/status/123", "normal post", "post"),
+        ("https://x.com/original/status/456", "repost preview", "repost"),
     ]
 
 
-@pytest.mark.parametrize("action_name", ["delete", "undo"])
+@pytest.mark.parametrize("action_name", ["delete", "undo", "unlike"])
 def test_action_targets_primary_timestamp_article_not_preceding_article(
     local_page,
     monkeypatch,
@@ -262,22 +280,20 @@ def test_action_targets_primary_timestamp_article_not_preceding_article(
 
     success, error_message = _run_action(page, action_name)
 
-    expected_log = (
-        [f"caret:{TARGET_ID}", f"delete-menu:{TARGET_ID}", f"delete-confirm:{TARGET_ID}"]
-        if action_name == "delete"
-        else [f"unretweet:{TARGET_ID}", f"undo-confirm:{TARGET_ID}"]
-    )
+    expected_log = EXPECTED_ACTION_LOGS[action_name]
     assert (success, error_message) == (True, None)
     assert _action_log(page) == expected_log
     assert page.locator('article[data-post-id="999"]').count() == 1
     if action_name == "delete":
         assert page.locator(f'article[data-post-id="{TARGET_ID}"]').count() == 0
-    else:
+    elif action_name == "undo":
         assert page.locator(f'article[data-post-id="{TARGET_ID}"] [data-testid="retweet"]').count() == 1
+    else:
+        assert page.locator(f'article[data-post-id="{TARGET_ID}"] [data-testid="like"]').count() == 1
     assert navigations == [TARGET_URL]
 
 
-@pytest.mark.parametrize("action_name", ["delete", "undo"])
+@pytest.mark.parametrize("action_name", ["delete", "undo", "unlike"])
 @pytest.mark.parametrize(
     ("articles", "case_name"),
     [
@@ -324,7 +340,7 @@ def test_action_refuses_missing_or_non_primary_target_identity(
     assert navigations == [TARGET_URL]
 
 
-@pytest.mark.parametrize("action_name", ["delete", "undo"])
+@pytest.mark.parametrize("action_name", ["delete", "undo", "unlike"])
 def test_action_fails_when_target_success_state_does_not_change(local_page, monkeypatch, action_name: str) -> None:
     monkeypatch.setattr(x_deleter_actions, "ACTION_STATE_TIMEOUT_MS", 100)
     monkeypatch.setattr(x_deleter_actions, "NAVIGATION_TIMEOUT_MS", 100)
@@ -334,11 +350,7 @@ def test_action_fails_when_target_success_state_does_not_change(local_page, monk
 
     success, error_message = _run_action(page, action_name)
 
-    expected_log = (
-        [f"caret:{TARGET_ID}", f"delete-menu:{TARGET_ID}", f"delete-confirm:{TARGET_ID}"]
-        if action_name == "delete"
-        else [f"unretweet:{TARGET_ID}", f"undo-confirm:{TARGET_ID}"]
-    )
+    expected_log = EXPECTED_ACTION_LOGS[action_name]
     assert success is False
     assert error_message is not None
     assert _action_log(page) == expected_log
@@ -346,7 +358,7 @@ def test_action_fails_when_target_success_state_does_not_change(local_page, monk
     assert navigations == [TARGET_URL]
 
 
-@pytest.mark.parametrize("action_name", ["delete", "undo"])
+@pytest.mark.parametrize("action_name", ["delete", "undo", "unlike"])
 def test_quote_before_own_timestamp_does_not_hide_target(local_page, monkeypatch, action_name: str) -> None:
     monkeypatch.setattr(x_deleter_actions, "ACTION_STATE_TIMEOUT_MS", 100)
     monkeypatch.setattr(x_deleter_actions, "NAVIGATION_TIMEOUT_MS", 100)
@@ -361,7 +373,7 @@ def test_quote_before_own_timestamp_does_not_hide_target(local_page, monkeypatch
     assert all(entry.endswith(f":{TARGET_ID}") for entry in _action_log(page))
 
 
-@pytest.mark.parametrize("action_name", ["delete", "undo"])
+@pytest.mark.parametrize("action_name", ["delete", "undo", "unlike"])
 def test_conflicting_own_timestamp_after_target_refuses_action(local_page, monkeypatch, action_name: str) -> None:
     monkeypatch.setattr(x_deleter_actions, "ACTION_STATE_TIMEOUT_MS", 100)
     monkeypatch.setattr(x_deleter_actions, "NAVIGATION_TIMEOUT_MS", 100)
@@ -608,13 +620,16 @@ def _document_with_mutation(mutation: str) -> str:
           .catch(() => null);
         const originalDelete = window.confirmDelete;
         const originalUndo = window.confirmUndo;
+        const originalUnlike = window.unlikePost;
         window.confirmDelete = async () => {{ await sendMutation(); originalDelete(); }};
         window.confirmUndo = async () => {{ await sendMutation(); originalUndo(); }};
+        window.unlikePost = async (postId) => {{ await sendMutation(); originalUnlike(postId); }};
     </script>"""
 
 
 @pytest.mark.parametrize(
-    "action_name, mutation", [("delete", "DeleteTweet"), ("undo", "DeleteRetweet")]
+    "action_name, mutation",
+    [("delete", "DeleteTweet"), ("undo", "DeleteRetweet"), ("unlike", "UnfavoriteTweet")],
 )
 @pytest.mark.parametrize(
     "status, body",
@@ -644,7 +659,8 @@ def test_action_reports_failed_mutation_response_even_when_dom_updates(
 
 
 @pytest.mark.parametrize(
-    "action_name, mutation", [("delete", "DeleteTweet"), ("undo", "DeleteRetweet")]
+    "action_name, mutation",
+    [("delete", "DeleteTweet"), ("undo", "DeleteRetweet"), ("unlike", "UnfavoriteTweet")],
 )
 def test_action_accepts_successful_mutation_response(
     local_page, monkeypatch, action_name: str, mutation: str
@@ -657,3 +673,70 @@ def test_action_accepts_successful_mutation_response(
     )
 
     assert _run_action(page, action_name) == (True, None)
+
+
+def test_unlike_ignores_quoted_post_like_control(local_page, monkeypatch) -> None:
+    monkeypatch.setattr(x_deleter_actions, "ACTION_STATE_TIMEOUT_MS", 100)
+    monkeypatch.setattr(x_deleter_actions, "NAVIGATION_TIMEOUT_MS", 100)
+    article = _article(TARGET_ID).replace(
+        '<button data-testid="unlike" onclick="unlikePost(\'123\')">undo like</button>',
+        '<blockquote><button data-testid="unlike" onclick="unlikePost(\'quoted\')">quoted</button></blockquote>',
+    )
+    assert "quoted" in article
+    page, _ = local_page(_document([article]))
+
+    success, error = _run_action(page, "unlike")
+
+    assert success is False
+    assert error
+    assert _action_log(page) == []
+
+
+def test_likes_collection_keeps_other_authors_posts_as_likes(local_page) -> None:
+    from dataclasses import replace
+
+    liked = _collection_article(
+        _collection_permalink("/someone/status/456", "2026-09-11T00:00:00.000Z")
+        + _collection_text("liked post")
+        + '<button data-testid="unlike" aria-label="7 Likes">liked</button>'
+    )
+    own = _collection_article(
+        _collection_permalink("/target/status/123", "2026-09-10T00:00:00.000Z")
+        + _collection_text("own post I liked")
+        + '<button data-testid="unlike" aria-label="9 Likes">liked</button>'
+    )
+    below_minimum = _collection_article(
+        _collection_permalink("/other/status/789", "2026-09-09T00:00:00.000Z")
+        + '<button data-testid="unlike" aria-label="2 Likes">liked</button>'
+    )
+    page, _ = local_page(_document([liked, own, below_minimum]))
+    page.goto("https://x.com/target/likes")
+    collected: list[PostRecord] = []
+    XDeleterCore()._process_articles(
+        articles=page.locator(POST_ARTICLE_SELECTOR).all(),
+        request=replace(_collection_request(), post_kind_filter="likes", min_likes=5),
+        normalized_username="target",
+        collected_posts=collected,
+        seen_urls=set(),
+    )
+
+    assert [(post.url, post.author_username, post.kind, post.likes) for post in collected] == [
+        ("https://x.com/someone/status/456", "someone", "like", 7),
+        ("https://x.com/target/status/123", "target", "like", 9),
+    ]
+
+
+@pytest.mark.parametrize("action_name", ["delete", "undo", "unlike"])
+@pytest.mark.parametrize(("api_status", "expected"), [(200, "ポストが表示されませんでした"), (429, "HTTP 429")])
+def test_action_explains_a_post_that_never_appears(
+    local_page, monkeypatch, action_name: str, api_status: int, expected: str
+) -> None:
+    monkeypatch.setattr(x_deleter_actions, "NAVIGATION_TIMEOUT_MS", 500)
+    page, _navigations = local_page("<script>fetch('/i/api/graphql/abc/TweetDetail')</script>")
+    page.route("**/i/api/**", lambda route: route.fulfill(status=api_status, body="{}"))
+
+    success, error_message = _run_action(page, action_name)
+
+    assert success is False
+    assert error_message is not None and expected in error_message
+    assert "xpath" not in error_message

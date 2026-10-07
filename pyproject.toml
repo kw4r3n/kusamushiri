@@ -33,6 +33,9 @@ Homepage = "https://github.com/kw4r3n/kusamushiri"
 Issues = "https://github.com/kw4r3n/kusamushiri/issues"
 Changelog = "https://github.com/kw4r3n/kusamushiri/blob/main/CHANGELOG.md"
 
+[project.scripts]
+kusamushiri-cli = "kusamushiri.cli:main"
+
 [project.gui-scripts]
 kusamushiri = "kusamushiri.app:main"
 

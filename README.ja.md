@@ -18,10 +18,15 @@ X (Twitter) アカウントを手入れするデスクトップアプリです�
 
 - 期間・いいね数・返信数・メディア有無・リプライのみ・キーワード（含む/除外） などの条件でポストを絞り込み
 - 通常ポストの削除とリポストの解除に対応
+- いいねの取り消し: プロフィールのいいね欄から収集し、チェックしたポストのいいねを取り消し
 - 実行前に一覧・本文プレビューで確認し、チェックした項目だけを実行
+- チェックした項目を削除前の控えとして CSV / JSON に保存
+- X の「データのアーカイブ」からポストを読み込み、検索で見つからない古いポストも対象に（このアプリで削除済みのポストは除外、古い順にも対応）
 - 実行間隔の調整、途中停止、失敗分だけの再試行
 - 複数アカウント（プロファイル）の切り替え
 - フォローリストを CSV（Excel 対応）または JSON で書き出し
+- フォロー中のアカウントを一覧で確認し（相互フォローは除外可能）、チェックしたものだけフォロー解除
+- チェックしたフォロー中アカウントの最終ポスト日を取得し、取得日とともにプロファイルごとに記録・並べ替え
 
 ## インストール
 
@@ -66,6 +71,39 @@ pip の場合は `pip install .` のあと `kusamushiri` で起動します。
 9. 「削除/解除間隔」で各項目の実行間隔を秒単位で調整できます。`0 秒` にすると待機なしで連続実行します。
 10. リストから実行したい項目にチェックを入れ（または全選択し）、「選択項目を削除/解除」ボタンを押して実行してください。
 11. 一部の項目が失敗した場合は、詳細を確認したうえで失敗分だけ再試行できます。
+
+## コマンドライン版（半自動化）
+
+ダウンロードしたファイルには `kusamushiri-cli` も入っています（Windows: `kusamushiri-cli.exe`、macOS: `kusamushiri.app/Contents/MacOS/kusamushiri-cli`、ソースから: `uv run kusamushiri-cli`）。追加のインストールは不要です。
+
+### かんたんな使い方: 一度質問に答えれば、あとは繰り返すだけ
+
+`kusamushiri-cli` を引数なしで起動します（Windows では `kusamushiri-cli.exe` をダブルクリック）。プロファイル、条件（「30 日より前」「残したいキーワード」など）、削除まで行うかを質問形式で聞き、`kusamushiri.toml` に保存して次の流れで実行します。
+
+1. 必要ならログイン（初回はブラウザのウィンドウが開きます）
+2. 条件に合うポストを集め、一覧を `kusamushiri-lists/posts-<日時>.csv` に保存
+3. 先頭数件を表示し、削除してよいか確認。答える前に CSV の行を消すと、その行は対象外になります（ファイルに残った行だけを実行）
+
+次回は起動すると保存済みの設定を使うか聞かれます。`kusamushiri-cli run kusamushiri.toml` でも実行できます。設定を複数使い分けるとき（古いポスト用といいね用など）は「新しい設定を作る」を選んで `likes` のような名前を付けると `kusamushiri-likes.toml` に保存され、次回からは今のフォルダにある `kusamushiri*.toml` の一覧から選べます。`kusamushiri-cli run kusamushiri-likes.toml` で直接実行もできます。設定ファイルはコメント付きのテキストなので、エディタで条件を変えられます。`[delete]` を書かなければ一覧の保存だけを行い、`[delete]` に `confirm = false` を書くと確認なしで実行します（定期実行向け）。アーカイブから読むときは `[collect]` の `order = "oldest"`（古い順）または `"newest"`（新しい順）で順番を指定できます。
+
+### 個別のコマンド
+
+```bash
+kusamushiri-cli login --profile main                 # 開いたブラウザで一度だけ手動ログイン
+kusamushiri-cli collect --profile main --headless --older-than 30 --exclude 残す -o posts.json
+kusamushiri-cli archive twitter-archive.zip --profile main --order oldest -o old.json
+kusamushiri-cli delete posts.json --profile main --headless --dry-run   # 対象の表示のみ
+kusamushiri-cli delete posts.json --profile main --headless --interval 3 --failed-output failed.json
+kusamushiri-cli following --profile main --skip-mutual -o follows.csv
+kusamushiri-cli last-posts follows.csv --profile main -o follows.csv
+kusamushiri-cli unfollow follows.csv --profile main --headless
+```
+
+- 一覧はアプリが書き出すのと同じ CSV / JSON で、プロファイルもアプリと共通です。
+- `login` は常にウィンドウを表示します。ほかのコマンドは `--headless` でウィンドウなしで動き、未ログインなら中止します。ヘッドレスの Chromium は `HeadlessChrome` と名乗るため X に別扱いされることがあり、うまくいかない場合は `--headless` なしで試してください。
+- `delete` と `unfollow` は実行前に確認します。無人で実行するときは `--yes` を付けてください。Ctrl+C で現在の項目の後に停止し、もう一度押すと即中断します。
+- 短時間に大量に操作すると X の利用制限でポストが表示されなくなり、「X の利用制限…」「ポストが表示されませんでした…」という失敗になります。`--interval` を長めにし、`--failed-output` の一覧で時間をおいて再実行してください。
+- 終了コード: 0 成功、1 一部失敗、2 入力エラー、130 中断。各オプションは `kusamushiri-cli COMMAND --help` で確認できます。
 
 ## 開発
 

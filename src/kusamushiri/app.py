@@ -7,10 +7,12 @@ from PySide6.QtCore import QObject, Signal
 from PySide6.QtGui import QColor, QPalette
 from PySide6.QtWidgets import QApplication
 
+from kusamushiri.actions import action_label_for
 from kusamushiri.core import XDeleterCore
-from kusamushiri.follows import ExportFollowingRequest, write_follow_list
+from kusamushiri.follows import ExportFollowingRequest, UnfollowRequest, UnfollowResult, write_follow_list
 from kusamushiri.gui import XDeleterWindow
 from kusamushiri.i18n import set_language, tr
+from kusamushiri.last_posts import FetchLastPostsRequest, LastPostResult, apply_last_post_entries
 from kusamushiri.logger import logger
 from kusamushiri.models import CollectRequest, ExecuteActionsRequest, PostActionResult
 from kusamushiri.paths import configure_frozen_browser_path, migrate_legacy_app_data
@@ -77,6 +79,24 @@ class ExportFollowingCommand:
     action: str = "export_following"
 
 
+@dataclass(frozen=True, slots=True)
+class CollectFollowingCommand:
+    username: str
+    action: str = "collect_following"
+
+
+@dataclass(frozen=True, slots=True)
+class UnfollowCommand:
+    request: UnfollowRequest
+    action: str = "unfollow"
+
+
+@dataclass(frozen=True, slots=True)
+class FetchLastPostsCommand:
+    request: FetchLastPostsRequest
+    action: str = "fetch_last_posts"
+
+
 WorkerCommand = (
     StartBrowserCommand
     | StopBrowserCommand
@@ -84,6 +104,9 @@ WorkerCommand = (
     | CollectPostsCommand
     | DeletePostsCommand
     | ExportFollowingCommand
+    | CollectFollowingCommand
+    | UnfollowCommand
+    | FetchLastPostsCommand
 )
 
 
@@ -104,6 +127,11 @@ class XDeleterWorkerEvents(QObject):
     delete_completed = Signal(list)
     following_progress = Signal(int)
     following_export_finished = Signal(str, int)  # empty path: nothing was written
+    following_collected = Signal(str, list, bool)  # username, records, limit reached
+    unfollow_progress = Signal(str, int, int)
+    unfollow_completed = Signal(list)
+    last_post_progress = Signal(str, int, int)
+    last_posts_completed = Signal(list)
     error_occurred = Signal(str)
 
 
@@ -153,6 +181,15 @@ class XDeleterWorker:
 
     def enqueue_export_following(self, request: ExportFollowingRequest) -> None:
         self._enqueue(ExportFollowingCommand(request=request))
+
+    def enqueue_collect_following(self, username: str) -> None:
+        self._enqueue(CollectFollowingCommand(username=username))
+
+    def enqueue_unfollow(self, request: UnfollowRequest) -> None:
+        self._enqueue(UnfollowCommand(request=request))
+
+    def enqueue_fetch_last_posts(self, request: FetchLastPostsRequest) -> None:
+        self._enqueue(FetchLastPostsCommand(request=request))
 
     def _discard_pending_commands(self) -> None:
         while True:
@@ -267,7 +304,7 @@ class XDeleterWorker:
                     for index, target in enumerate(command.request.targets, start=1):
                         if self._cancel_event.is_set():
                             break
-                        action_label = tr("リポスト解除") if target.is_repost else tr("ポスト削除")
+                        action_label = action_label_for(target.kind)
                         self.events.delete_progress.emit(action_label, target.url, index, total)
                         result = active_core.execute_post_action(target)
                         results.append(result)
@@ -291,7 +328,10 @@ class XDeleterWorker:
                         self.events.following_export_finished.emit("", len(result.records))
                         self.events.status_changed.emit(tr("フォローリストの取得を中断しました。ファイルは保存していません。"))
                         continue
-                    write_follow_list(command.request.output_path, result.records)
+                    write_follow_list(
+                        command.request.output_path,
+                        apply_last_post_entries(result.records, command.request.last_posts),
+                    )
                     self.events.following_export_finished.emit(
                         str(command.request.output_path), len(result.records)
                     )
@@ -299,6 +339,65 @@ class XDeleterWorker:
                         self.events.status_changed.emit(
                             tr("取得の安全上限に到達したため、途中までのフォローリストを保存しました。")
                         )
+                    continue
+
+                if isinstance(command, CollectFollowingCommand):
+                    result = self._require_running_core(core).collect_following(
+                        command.username,
+                        on_progress=self.events.following_progress.emit,
+                    )
+                    if self._cancel_event.is_set():
+                        self.events.status_changed.emit(tr("フォローリストの取得を中断しました。"))
+                    self.events.following_collected.emit(
+                        command.username, result.records, result.limit_reached
+                    )
+                    continue
+
+                if isinstance(command, UnfollowCommand):
+                    command.request.validate()
+                    active_core = self._require_running_core(core)
+                    targets = command.request.targets
+                    interval_seconds = command.request.interval_seconds
+                    unfollow_results: list[UnfollowResult] = []
+                    for index, target in enumerate(targets, start=1):
+                        if self._cancel_event.is_set():
+                            break
+                        self.events.unfollow_progress.emit(target.username, index, len(targets))
+                        success, error_message = active_core.unfollow_account(target.username)
+                        unfollow_results.append(UnfollowResult(target, success, error_message))
+                        if interval_seconds > 0 and index < len(targets) and self._cancel_event.wait(interval_seconds):
+                            break
+                    logger.info(
+                        "Finished unfollow batch: %s/%s succeeded",
+                        sum(1 for result in unfollow_results if result.success),
+                        len(targets),
+                    )
+                    self.events.unfollow_completed.emit(unfollow_results)
+                    if self._cancel_event.is_set():
+                        self.events.status_changed.emit(tr("フォロー解除を中断しました。"))
+                    continue
+
+                if isinstance(command, FetchLastPostsCommand):
+                    command.request.validate()
+                    active_core = self._require_running_core(core)
+                    targets = command.request.targets
+                    interval_seconds = command.request.interval_seconds
+                    last_post_results: list[LastPostResult] = []
+                    for index, target in enumerate(targets, start=1):
+                        if self._cancel_event.is_set():
+                            break
+                        self.events.last_post_progress.emit(target.username, index, len(targets))
+                        last_post_results.append(active_core.fetch_last_post(target.username))
+                        if interval_seconds > 0 and index < len(targets) and self._cancel_event.wait(interval_seconds):
+                            break
+                    logger.info(
+                        "Finished last-post batch: %s/%s succeeded",
+                        sum(1 for result in last_post_results if result.success),
+                        len(targets),
+                    )
+                    self.events.last_posts_completed.emit(last_post_results)
+                    if self._cancel_event.is_set():
+                        self.events.status_changed.emit(tr("最終ポスト日の取得を中断しました。"))
                     continue
 
                 logger.warning("Unknown worker command received: %s", command)
@@ -340,6 +439,9 @@ def main() -> int:
     window.collect_requested.connect(worker.enqueue_collect_posts)
     window.delete_requested.connect(worker.enqueue_delete_posts)
     window.export_following_requested.connect(worker.enqueue_export_following)
+    window.collect_following_requested.connect(worker.enqueue_collect_following)
+    window.unfollow_requested.connect(worker.enqueue_unfollow)
+    window.fetch_last_posts_requested.connect(worker.enqueue_fetch_last_posts)
 
     worker.events.status_changed.connect(window.update_status)
     worker.events.browser_ready.connect(window.show_login_wait_dialog)
@@ -351,6 +453,11 @@ def main() -> int:
     worker.events.delete_completed.connect(window.on_delete_done)
     worker.events.following_progress.connect(window.on_following_progress)
     worker.events.following_export_finished.connect(window.on_following_export_finished)
+    worker.events.following_collected.connect(window.on_following_collected)
+    worker.events.unfollow_progress.connect(window.on_unfollow_progress)
+    worker.events.unfollow_completed.connect(window.on_unfollow_done)
+    worker.events.last_post_progress.connect(window.on_last_post_progress)
+    worker.events.last_posts_completed.connect(window.on_last_posts_done)
     worker.events.error_occurred.connect(window.show_error)
 
     window.show()

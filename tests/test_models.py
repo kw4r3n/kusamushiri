@@ -49,7 +49,7 @@ def test_collect_request_rejects_reversed_date_range() -> None:
 
 def test_execute_actions_request_rejects_negative_interval() -> None:
     request = ExecuteActionsRequest(
-        targets=[PostActionTarget(url="https://x.com/example/status/1", is_repost=False)],
+        targets=[PostActionTarget(url="https://x.com/example/status/1", kind="post")],
         interval_seconds=-0.5,
     )
 
@@ -72,3 +72,12 @@ def test_text_contains_any_keyword_ignores_case_and_width() -> None:
 def test_collect_request_rejects_blank_keyword() -> None:
     with pytest.raises(ValueError, match="空のキーワードは指定できません。"):
         build_request(exclude_keywords=(" ",)).validate()
+
+
+def test_collect_request_accepts_likes_in_profile_mode() -> None:
+    build_request(search_mode="profile", post_kind_filter="likes").validate()
+
+
+def test_collect_request_rejects_likes_in_search_mode() -> None:
+    with pytest.raises(ValueError, match="いいねはプロフィールのいいね欄からのみ収集できます。"):
+        build_request(search_mode="search", post_kind_filter="likes").validate()

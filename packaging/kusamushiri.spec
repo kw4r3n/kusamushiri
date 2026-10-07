@@ -1,4 +1,5 @@
 # PyInstaller spec: `uv run --group build pyinstaller --noconfirm --clean packaging/kusamushiri.spec` writes dist/kusamushiri/.
+# The folder holds the GUI app and the console `kusamushiri-cli`, sharing one set of libraries.
 # Chromium is not bundled; the app downloads it on first launch.
 import sys
 from pathlib import Path
@@ -32,7 +33,27 @@ exe = EXE(
     console=False,
     upx=False,
 )
-coll = COLLECT(exe, a.binaries, a.datas, name="kusamushiri", upx=False)
+
+cli_a = Analysis(
+    [str(root / "packaging" / "cli_launcher.py")],
+    pathex=[str(root / "src")],
+    datas=collect_data_files("playwright"),
+    # The CLI never imports Qt; keep a stray import from bundling it twice.
+    excludes=["tkinter", "PySide6", "shiboken6"],
+    noarchive=False,
+)
+cli_exe = EXE(
+    PYZ(cli_a.pure),
+    cli_a.scripts,
+    [],
+    exclude_binaries=True,
+    name="kusamushiri-cli",
+    console=True,
+    upx=False,
+)
+coll = COLLECT(
+    exe, cli_exe, a.binaries, a.datas, cli_a.binaries, cli_a.datas, name="kusamushiri", upx=False
+)
 
 if sys.platform == "darwin":
     app = BUNDLE(

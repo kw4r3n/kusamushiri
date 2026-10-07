@@ -1,3 +1,5 @@
+import threading
+from collections import Counter
 from datetime import date, datetime
 from pathlib import Path
 
@@ -31,9 +33,20 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from kusamushiri.follows import ExportFollowingRequest
-from kusamushiri.gui_table import URL_COLUMN_WIDTH, PostTableManager
+from kusamushiri.archive import ArchiveError, ArchiveSelection, load_archive_posts, select_archive_posts
+from kusamushiri.deleted_posts import DeletedPostStore
+from kusamushiri.exporting import write_post_list
+from kusamushiri.follows import (
+    DEFAULT_UNFOLLOW_INTERVAL_SECONDS,
+    ExportFollowingRequest,
+    FollowRecord,
+    UnfollowRequest,
+    UnfollowResult,
+)
+from kusamushiri.gui_follows import FollowListDialog, format_last_post_failures, format_unfollow_failures
+from kusamushiri.gui_table import URL_COLUMN_WIDTH, PostTableManager, ask_export_path, save_selected_with_dialog
 from kusamushiri.i18n import LANGUAGE_NAMES, get_language, tr, translate
+from kusamushiri.last_posts import FetchLastPostsRequest, LastPostEntry, LastPostResult, LastPostStore
 from kusamushiri.logger import logger
 from kusamushiri.models import (
     DEFAULT_ACTION_INTERVAL_SECONDS,
@@ -44,7 +57,7 @@ from kusamushiri.models import (
     PostRecord,
     parse_keywords,
 )
-from kusamushiri.parsing import USERNAME_PATTERN
+from kusamushiri.parsing import USERNAME_PATTERN, extract_post_id
 from kusamushiri.paths import DEFAULT_ACCOUNT_NAME, get_account_profile_dir, normalize_account_name
 from kusamushiri.settings import AccountSettings, AccountSettingsManager
 
@@ -139,7 +152,7 @@ def format_action_failures(failures: list[PostActionResult]) -> str:
 
 def remove_successful_rows(table: QTableWidget, results: list[PostActionResult]) -> None:
     succeeded = {
-        (result.target.url, result.target.is_repost)
+        (result.target.url, result.target.kind)
         for result in results
         if result.success
     }
@@ -153,7 +166,7 @@ def remove_successful_rows(table: QTableWidget, results: list[PostActionResult])
         target = item.data(Qt.ItemDataRole.UserRole)
         if not isinstance(target, PostActionTarget):
             continue
-        if (target.url, target.is_repost) in succeeded:
+        if (target.url, target.kind) in succeeded:
             table.removeRow(row_index)
 
 
@@ -164,14 +177,28 @@ class XDeleterWindow(QMainWindow):
     collect_requested = Signal(object)
     delete_requested = Signal(object)
     export_following_requested = Signal(object)
+    collect_following_requested = Signal(str)
+    unfollow_requested = Signal(object)
+    fetch_last_posts_requested = Signal(object)
+    # Emitted from the archive loader thread; Qt queues them onto the GUI thread.
+    archive_progress = Signal(int, int)
+    archive_loaded = Signal(object)  # ArchiveSelection
+    archive_failed = Signal(str)
 
     def __init__(self) -> None:
         super().__init__()
+        self._pending_archive_request: CollectRequest | None = None
+        self.archive_progress.connect(self._on_archive_progress)
+        self.archive_loaded.connect(self._on_archive_loaded)
+        self.archive_failed.connect(self._on_archive_failed)
         self._busy = False
         self._browser_running = False
         self._login_verified = False
         self._stop_pending = False
         self._requested_action_count = 0
+        self._requested_unfollow_count = 0
+        self._requested_last_post_count = 0
+        self.follow_dialog: FollowListDialog | None = None
         self._last_logged_in_username: str | None = None
         self._current_account: str | None = None
         self._last_collect_request: CollectRequest | None = None
@@ -355,6 +382,12 @@ class XDeleterWindow(QMainWindow):
             tr("X アカウントIDのフォロー一覧を CSV（または JSON）で保存します。")
         )
         self.export_following_button.clicked.connect(self._handle_export_following)
+        self.manage_following_button = QPushButton(tr("フォローを整理"))
+        self.manage_following_button.setObjectName("secondaryButton")
+        self.manage_following_button.setToolTip(
+            tr("フォロー一覧を取得して確認し、選んだアカウントだけフォローを解除します。")
+        )
+        self.manage_following_button.clicked.connect(self._handle_manage_following)
 
         layout.addWidget(QLabel(tr("プロファイル選択")), 0, 0, 1, 2)
         layout.addWidget(self.account_combo, 1, 0, 1, 2)
@@ -378,6 +411,7 @@ class XDeleterWindow(QMainWindow):
         layout.addWidget(self.login_account_label, 9, 0, 1, 2)
         layout.addWidget(self.start_button, 10, 0, 1, 2)
         layout.addWidget(self.export_following_button, 11, 0, 1, 2)
+        layout.addWidget(self.manage_following_button, 12, 0, 1, 2)
         layout.setContentsMargins(0, 12, 0, 0)
         layout.setColumnStretch(0, 1)
         layout.setColumnStretch(1, 1)
@@ -398,6 +432,13 @@ class XDeleterWindow(QMainWindow):
         self.post_kind_combo.addItem(tr("通常ポストのみ"), userData="posts")
         self.post_kind_combo.addItem(tr("リポストのみ"), userData="reposts")
         self.post_kind_combo.addItem(tr("通常ポスト + リポスト"), userData="all")
+        self.post_kind_combo.addItem(tr("いいねしたポスト（いいね取り消し）"), userData="likes")
+        self.post_kind_combo.setItemData(
+            self.post_kind_combo.findData("likes"),
+            tr("プロフィールのいいね欄を走査し、チェックしたポストのいいねを取り消します。"),
+            Qt.ItemDataRole.ToolTipRole,
+        )
+        self.post_kind_combo.currentIndexChanged.connect(self._update_mode_availability)
 
         self.reply_only_checkbox = QCheckBox(tr("リプライのみ"))
 
@@ -439,6 +480,16 @@ class XDeleterWindow(QMainWindow):
 
         self.collect_button = QPushButton(tr("ポストを収集＆プレビュー"))
         self.collect_button.clicked.connect(self._handle_collect)
+        self.import_archive_button = QPushButton(tr("X のアーカイブから読み込み"))
+        self.import_archive_button.setObjectName("secondaryButton")
+        self.import_archive_button.setToolTip(
+            tr("X の「データのアーカイブ」(zip) からポストを読み込み、上の条件で絞り込みます。検索で見つからない古いポストも対象にできます。")
+        )
+        self.import_archive_button.clicked.connect(self._handle_import_archive)
+        self.archive_oldest_first_checkbox = QCheckBox(tr("アーカイブは古い順に読み込む"))
+        self.archive_oldest_first_checkbox.setToolTip(
+            tr("アーカイブから読み込むとき、最も古いポストから取得上限件数までを古い順に並べます。")
+        )
 
         layout.addWidget(QLabel(tr("メディア条件")), 0, 0, 1, 2)
         layout.addWidget(self.media_filter_combo, 1, 0, 1, 2)
@@ -458,6 +509,8 @@ class XDeleterWindow(QMainWindow):
         layout.addWidget(QLabel(tr("除外キーワード")), 11, 0, 1, 2)
         layout.addWidget(self.exclude_keywords_input, 12, 0, 1, 2)
         layout.addWidget(self.collect_button, 13, 0, 1, 2)
+        layout.addWidget(self.import_archive_button, 14, 0, 1, 2)
+        layout.addWidget(self.archive_oldest_first_checkbox, 15, 0, 1, 2)
         layout.setContentsMargins(0, 12, 0, 0)
         layout.setColumnStretch(0, 1)
         layout.setColumnStretch(1, 1)
@@ -487,6 +540,11 @@ class XDeleterWindow(QMainWindow):
         interval_note = QLabel(tr("0 秒で連続実行"))
         action_options_layout.addWidget(interval_note)
         action_options_layout.addStretch(1)
+        self.export_posts_button = QPushButton(tr("選択項目を保存"))
+        self.export_posts_button.setObjectName("secondaryButton")
+        self.export_posts_button.setToolTip(tr("チェックした項目の本文や URL を CSV（または JSON）で保存します。削除前の控えに使えます。"))
+        self.export_posts_button.clicked.connect(self._handle_export_posts)
+        action_options_layout.addWidget(self.export_posts_button)
         layout.addLayout(action_options_layout)
 
         self.table = QTableWidget(0, 9)
@@ -630,11 +688,16 @@ class XDeleterWindow(QMainWindow):
         )
         self.start_button.setEnabled(enabled)
         self.collect_button.setEnabled(enabled and self._login_verified)
+        self.import_archive_button.setEnabled(enabled)
         self.export_following_button.setEnabled(enabled and self._login_verified)
+        self.manage_following_button.setEnabled(enabled and self._login_verified)
+        if self.follow_dialog is not None:
+            self.follow_dialog.set_busy(busy, can_run=self._login_verified)
         self.delete_button.setEnabled(enabled and self._login_verified and self.table.rowCount() > 0)
         self.delete_interval_input.setEnabled(enabled)
         self.table.setEnabled(enabled)
         self.select_all_button.setEnabled(enabled and self.table.rowCount() > 0)
+        self.export_posts_button.setEnabled(enabled and self.table.rowCount() > 0)
         self.stop_button.setEnabled(self._browser_running or busy)
         if not busy:
             self.hide_progress()
@@ -690,7 +753,7 @@ class XDeleterWindow(QMainWindow):
             return
         parts: list[str] = []
         media_map = {"all": tr("すべて"), "with_media": tr("画像/動画あり"), "without_media": tr("画像/動画なし")}
-        kind_map = {"posts": tr("ポストのみ"), "reposts": tr("リポストのみ"), "all": tr("すべて")}
+        kind_map = {"posts": tr("ポストのみ"), "reposts": tr("リポストのみ"), "all": tr("すべて"), "likes": tr("いいね")}
         parts.append(tr("メディア: {value}", value=media_map.get(request.media_filter, request.media_filter)))
         parts.append(tr("種別: {value}", value=kind_map.get(request.post_kind_filter, request.post_kind_filter)))
         parts.append(tr("最大: {count}件", count=request.max_posts))
@@ -794,6 +857,10 @@ class XDeleterWindow(QMainWindow):
         self._login_verified = False
         self._last_logged_in_username = None
         self._last_collect_request = None
+        if self.follow_dialog is not None:
+            # The follow list belongs to the previous account's session.
+            self.follow_dialog.close()
+            self.follow_dialog.set_records("", [], False)
         self._clear_posts()
         self.preview_text.clear()
         self._update_filter_summary()
@@ -922,6 +989,7 @@ class XDeleterWindow(QMainWindow):
         self.auto_save_interval_input.setValue(settings.auto_save_interval_seconds)
         self.include_keywords_input.setText(settings.include_keywords)
         self.exclude_keywords_input.setText(settings.exclude_keywords)
+        self.archive_oldest_first_checkbox.setChecked(settings.archive_oldest_first)
 
         today = QDate.currentDate().toString(Qt.DateFormat.ISODate)
         since_date = QDate.fromString(
@@ -966,17 +1034,18 @@ class XDeleterWindow(QMainWindow):
                 until_date_enabled=self.until_date_checkbox.isChecked(),
                 include_keywords=self.include_keywords_input.text().strip(),
                 exclude_keywords=self.exclude_keywords_input.text().strip(),
+                archive_oldest_first=self.archive_oldest_first_checkbox.isChecked(),
             ),
         )
 
     def _normalized_username_input(self) -> str:
         return self.username_input.text().strip().removeprefix("@")
 
-    def _confirm_account_match(self) -> bool:
+    def _confirm_account_match(self, target_username: str | None = None) -> bool:
         if not self._last_logged_in_username:
             return True
 
-        input_username = self._normalized_username_input()
+        input_username = self._normalized_username_input() if target_username is None else target_username
         if not input_username:
             return True
         if input_username.casefold() == self._last_logged_in_username.casefold():
@@ -1036,6 +1105,13 @@ class XDeleterWindow(QMainWindow):
                 ),
             )
 
+    def _update_mode_availability(self) -> None:
+        likes_selected = self.post_kind_combo.currentData() == "likes"
+        self.mode_combo.setEnabled(not likes_selected)
+        self.mode_combo.setToolTip(
+            tr("いいねはプロフィールのいいね欄から収集するため、収集モードは使いません。") if likes_selected else ""
+        )
+
     def _toggle_since_date(self, checked: bool) -> None:
         self.since_date_input.setEnabled(checked)
 
@@ -1052,6 +1128,21 @@ class XDeleterWindow(QMainWindow):
             QMessageBox.information(self, tr("ログイン確認が必要"), tr("先にブラウザを起動してログインを確認してください。"))
             return
 
+        request = self._build_collect_request()
+        if request is None:
+            return
+
+        self._clear_posts()
+        self.set_busy(True)
+        self.show_progress(0, 0)
+        self.update_status(tr("対象を収集しています..."))
+        self._last_collect_request = request
+        self._update_filter_summary(request)
+        self._save_settings()
+        self.collect_requested.emit(request)
+
+    def _build_collect_request(self) -> CollectRequest | None:
+        """Read the filter inputs; show a warning and return None when they are invalid."""
         if self.since_date_checkbox.isChecked() and self.until_date_checkbox.isChecked():
             since_qdate = self.since_date_input.date()
             until_qdate = self.until_date_input.date()
@@ -1063,7 +1154,7 @@ class XDeleterWindow(QMainWindow):
                     tr("日付範囲エラー"),
                     tr("開始日が終了日より後の日付になっています。\n正しい範囲を指定してください。"),
                 )
-                return
+                return None
 
         since_date: date | None = None
         if self.since_date_checkbox.isChecked():
@@ -1082,7 +1173,8 @@ class XDeleterWindow(QMainWindow):
             is_reply=self.reply_only_checkbox.isChecked(),
             min_likes=self.min_likes_input.value(),
             min_replies=self.min_replies_input.value(),
-            search_mode=self.mode_combo.currentData(),
+            # Likes are listed only on the profile's likes timeline, never via search.
+            search_mode="profile" if self.post_kind_combo.currentData() == "likes" else self.mode_combo.currentData(),
             post_kind_filter=self.post_kind_combo.currentData(),
             since_date=since_date,
             until_date=until_date,
@@ -1095,16 +1187,88 @@ class XDeleterWindow(QMainWindow):
         except ValueError as error:
             logger.warning("Collect request validation failed: %s", error)
             QMessageBox.warning(self, tr("入力エラー"), str(error))
-            return
+            return None
+        return request
 
-        self._clear_posts()
-        self.set_busy(True)
-        self.show_progress(0, 0)
-        self.update_status(tr("対象を収集しています..."))
-        self._last_collect_request = request
-        self._update_filter_summary(request)
+    def _handle_import_archive(self) -> None:
+        if self._busy:
+            return
+        logger.info("GUI: Import archive button clicked.")
+        self._commit_typed_account(load_settings=False)
+        request = self._build_collect_request()
+        if request is None:
+            return
+        path_text, _selected_filter = QFileDialog.getOpenFileName(
+            self,
+            tr("X のアーカイブを選択"),
+            str(Path.home()),
+            tr("X のアーカイブ (*.zip tweets.js tweets-part*.js tweet.js)"),
+        )
+        if not path_text:
+            return
+        self._pending_archive_request = request
         self._save_settings()
-        self.collect_requested.emit(request)
+        self.set_busy(True)
+        self.update_status(tr("アーカイブを読み込み中…"))
+        self.show_progress(0, 0)
+        # Parsing a large archive takes seconds; keep the window responsive meanwhile.
+        threading.Thread(
+            target=self._load_archive,
+            args=(
+                path_text,
+                request,
+                self._deleted_post_store().load(),
+                self.archive_oldest_first_checkbox.isChecked(),
+            ),
+            name="archive-loader",
+            daemon=True,
+        ).start()
+
+    def _load_archive(
+        self, path_text: str, request: CollectRequest, deleted_ids: set[str], oldest_first: bool
+    ) -> None:
+        try:
+            posts = load_archive_posts(
+                path_text, fallback_username=request.username, on_progress=self.archive_progress.emit
+            )
+            selection = select_archive_posts(posts, request, deleted_ids, oldest_first=oldest_first)
+        except ArchiveError as error:
+            logger.warning("Archive import failed: %s", error)
+            self.archive_failed.emit(str(error))
+            return
+        except Exception as error:
+            logger.exception("Archive import failed unexpectedly.")
+            self.archive_failed.emit(str(error) or type(error).__name__)
+            return
+        self.archive_loaded.emit(selection)
+
+    def _on_archive_progress(self, done: int, total: int) -> None:
+        if total > 1:
+            self.update_status(tr("アーカイブを読み込み中… ({done}/{total})", done=done, total=total))
+            self.show_progress(done, total)
+
+    def _on_archive_failed(self, message: str) -> None:
+        self._pending_archive_request = None
+        self.hide_progress()
+        self.set_busy(False)
+        QMessageBox.warning(
+            self, tr("読み込みエラー"), tr("アーカイブを読み込めませんでした: {error}", error=message)
+        )
+
+    def _on_archive_loaded(self, selection: ArchiveSelection) -> None:
+        self._last_collect_request = self._pending_archive_request
+        self._pending_archive_request = None
+        self.display_posts(selection.posts)
+        self.set_busy(False)
+        self.update_status(
+            tr(
+                "アーカイブから {count} 件を読み込みました（全 {total} 件、リポスト {reposts} 件と削除済み {deleted} 件は対象外）。",
+                count=len(selection.posts),
+                total=selection.total,
+                reposts=selection.skipped_reposts,
+                deleted=selection.skipped_deleted,
+            )
+        )
 
     def _start_search(self) -> None:
         if self._busy:
@@ -1140,19 +1304,13 @@ class XDeleterWindow(QMainWindow):
             QMessageBox.warning(self, tr("入力エラー"), tr("X アカウントIDを入力してください（英数字とアンダースコア、15文字まで）。"))
             return
         default_path = Path.home() / f"following-{username}-{date.today():%Y%m%d}.csv"
-        path_text, _selected_filter = QFileDialog.getSaveFileName(
-            self,
-            tr("フォローリストの保存先"),
-            str(default_path),
-            "CSV (*.csv);;JSON (*.json)",
-        )
-        if not path_text:
+        output_path = ask_export_path(self, tr("フォローリストの保存先"), default_path)
+        if output_path is None:
             return
-        output_path = Path(path_text)
-        if output_path.suffix.lower() not in {".csv", ".json"}:
-            output_path = output_path.with_name(f"{output_path.name}.csv")
 
-        request = ExportFollowingRequest(username=username, output_path=output_path)
+        request = ExportFollowingRequest(
+            username=username, output_path=output_path, last_posts=self._load_last_posts()
+        )
         try:
             request.validate()
         except ValueError as error:
@@ -1173,6 +1331,236 @@ class XDeleterWindow(QMainWindow):
             return
         self.update_status(tr("フォローリスト {count} 件を保存しました: {path}", count=count, path=path))
         QMessageBox.information(self, tr("エクスポート完了"), tr("{count} 件のフォローを保存しました。\n{path}", count=count, path=path))
+
+    def _handle_manage_following(self) -> None:
+        if self._busy:
+            return
+        self._commit_typed_account(load_settings=False)
+        if not self._login_verified:
+            QMessageBox.information(self, tr("ログイン確認が必要"), tr("先にブラウザを起動してログインを確認してください。"))
+            return
+        username = self._normalized_username_input()
+        if not USERNAME_PATTERN.fullmatch(username):
+            QMessageBox.warning(self, tr("入力エラー"), tr("X アカウントIDを入力してください（英数字とアンダースコア、15文字まで）。"))
+            return
+        self.set_busy(True)
+        self.show_progress(0, 0)
+        self.update_status(tr("@{username} のフォローリストを取得しています...", username=username))
+        self.collect_following_requested.emit(username)
+
+    def _ensure_follow_dialog(self) -> FollowListDialog:
+        if self.follow_dialog is None:
+            self.follow_dialog = FollowListDialog(self)
+            self.follow_dialog.unfollow_requested.connect(self._handle_unfollow)
+            self.follow_dialog.last_posts_requested.connect(self._handle_fetch_last_posts)
+            self.follow_dialog.stop_requested.connect(self._on_stop_browser_clicked)
+        return self.follow_dialog
+
+    def on_following_collected(self, username: str, records: list[FollowRecord], limit_reached: bool) -> None:
+        stopped = self._stop_pending
+        dialog = self._ensure_follow_dialog()
+        dialog.set_records(username, records, limit_reached)
+        dialog.apply_last_posts(self._load_last_posts())
+        self.set_busy(False)
+        if stopped:
+            return
+        self.update_status(tr("フォロー {count} 件を取得しました。", count=len(records)))
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
+    def _deleted_post_store(self) -> DeletedPostStore:
+        return DeletedPostStore.for_account(self._current_account)
+
+    def _last_post_store(self) -> LastPostStore:
+        return LastPostStore.for_account(self._current_account)
+
+    def _load_last_posts(self) -> dict[str, LastPostEntry]:
+        try:
+            return self._last_post_store().load()
+        except OSError:
+            logger.exception("Failed to open the last-post store.")
+            return {}
+
+    def _handle_fetch_last_posts(self, records: list[FollowRecord], interval_seconds: float) -> None:
+        logger.info("GUI: Last-post fetch requested for %s accounts.", len(records))
+        if self._busy:
+            return
+        if not self._login_verified:
+            QMessageBox.information(self, tr("ログイン確認が必要"), tr("現在のアカウントでログインを確認してください。"))
+            return
+        request = FetchLastPostsRequest(targets=list(records), interval_seconds=interval_seconds)
+        try:
+            request.validate()
+        except ValueError as error:
+            QMessageBox.warning(self, tr("入力エラー"), str(error))
+            return
+        self._requested_last_post_count = len(request.targets)
+        self.set_busy(True)
+        self.update_status(tr("最終ポスト日を取得しています..."))
+        self.fetch_last_posts_requested.emit(request)
+
+    def on_last_post_progress(self, username: str, current: int, total: int) -> None:
+        self.update_status(
+            tr("最終ポスト日を取得中 ({current}/{total}): @{username}", current=current, total=total, username=username)
+        )
+        self.show_progress(current, total)
+
+    def on_last_posts_done(self, results: list[LastPostResult]) -> None:
+        requested = max(self._requested_last_post_count, len(results))
+        failures = [result for result in results if not result.success]
+        succeeded = len(results) - len(failures)
+        skipped = requested - len(results)
+        save_error = ""
+        try:
+            entries = self._last_post_store().record(results)
+        except OSError as error:
+            logger.exception("Failed to save last-post results.")
+            save_error = str(error)
+            entries = {
+                result.username.casefold(): LastPostEntry(result.checked_at, result.last_post_at, result.note)
+                for result in results
+                if result.success
+            }
+        if self.follow_dialog is not None:
+            self.follow_dialog.apply_last_posts(entries)
+        stopped = self._stop_pending
+        self.set_busy(False)
+        heading = tr("最終ポスト日の取得を中止") if stopped else tr("最終ポスト日の取得完了")
+        message = tr("{heading}: {success} / {requested} 件成功", heading=heading, success=succeeded, requested=requested)
+        notes = [tr("{count} 件失敗", count=len(failures))] if failures else []
+        if skipped > 0:
+            notes.append(tr("{count} 件未処理", count=skipped))
+        if notes:
+            message += tr("（{notes}）", notes=tr("、").join(notes))
+        self.update_status(message)
+        if save_error:
+            QMessageBox.warning(
+                self.follow_dialog or self,
+                tr("エラー"),
+                tr("取得結果を保存できませんでした: {message}", message=save_error),
+            )
+        if stopped or not failures:
+            return
+        box = QMessageBox(self.follow_dialog or self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle(tr("一部失敗"))
+        box.setText(message)
+        box.setDetailedText(format_last_post_failures(failures))
+        box.addButton(QMessageBox.StandardButton.Close)
+        box.exec()
+
+    def _handle_unfollow(self, records: list[FollowRecord], interval_seconds: float) -> None:
+        logger.info("GUI: Unfollow requested for %s accounts.", len(records))
+        if self._busy:
+            return
+        if not self._login_verified:
+            QMessageBox.information(self, tr("ログイン確認が必要"), tr("現在のアカウントでログインを確認してください。"))
+            return
+        source_username = self.follow_dialog.source_username if self.follow_dialog is not None else None
+        if not self._confirm_account_match(source_username):
+            logger.info("GUI: Unfollow cancelled due to account mismatch warning.")
+            return
+        request = UnfollowRequest(targets=list(records), interval_seconds=interval_seconds)
+        try:
+            request.validate()
+        except ValueError as error:
+            QMessageBox.warning(self, tr("入力エラー"), str(error))
+            return
+        result = QMessageBox.question(
+            self.follow_dialog or self,
+            tr("確認"),
+            tr(
+                "{count} 件のフォローを解除します。\n（この操作は元に戻せません）\n"
+                "各アカウントの間に {interval} 秒待機します。続行しますか？",
+                count=len(records),
+                interval=f"{interval_seconds:g}",
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if result != QMessageBox.StandardButton.Yes:
+            logger.info("GUI: Unfollow cancelled by user.")
+            return
+        self._submit_unfollow(request, tr("フォロー解除を実行しています..."))
+
+    def _submit_unfollow(self, request: UnfollowRequest, status: str) -> None:
+        self._requested_unfollow_count = len(request.targets)
+        self.set_busy(True)
+        self.update_status(status)
+        self.unfollow_requested.emit(request)
+
+    def on_unfollow_progress(self, username: str, current: int, total: int) -> None:
+        self.update_status(
+            tr("フォロー解除中 ({current}/{total}): @{username}", current=current, total=total, username=username)
+        )
+        self.show_progress(current, total)
+
+    def on_unfollow_done(self, results: list[UnfollowResult]) -> None:
+        requested = max(self._requested_unfollow_count, len(results))
+        succeeded = {result.target.username for result in results if result.success}
+        failures = [result for result in results if not result.success]
+        skipped = requested - len(results)
+        if self.follow_dialog is not None:
+            self.follow_dialog.remove_usernames(succeeded)
+        stopped = self._stop_pending
+        self.set_busy(False)
+        heading = tr("フォロー解除を中止") if stopped else tr("フォロー解除完了")
+        message = tr("{heading}: {success} / {requested} 件成功", heading=heading, success=len(succeeded), requested=requested)
+        notes = [tr("{count} 件失敗", count=len(failures))] if failures else []
+        if skipped > 0:
+            notes.append(tr("{count} 件未処理", count=skipped))
+        if notes:
+            message += tr("（{notes}）", notes=tr("、").join(notes))
+        self.update_status(message)
+        if stopped:
+            return
+        parent = self.follow_dialog or self
+        if not failures:
+            QMessageBox.information(parent, tr("完了"), message)
+            return
+
+        box = QMessageBox(parent)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle(tr("一部失敗"))
+        box.setText(message)
+        box.setInformativeText(tr("失敗した項目の詳細を確認し、失敗分だけ再試行できます。"))
+        box.setDetailedText(format_unfollow_failures(failures))
+        retry_button = box.addButton(tr("失敗分だけ再試行"), QMessageBox.ButtonRole.AcceptRole)
+        box.addButton(QMessageBox.StandardButton.Close)
+        box.exec()
+
+        if box.clickedButton() == retry_button:
+            self._retry_failed_unfollows(failures)
+
+    def _retry_failed_unfollows(self, failures: list[UnfollowResult]) -> None:
+        if self._busy or not self._login_verified:
+            QMessageBox.information(self, tr("ログイン確認が必要"), tr("現在のアカウントでログインを確認してください。"))
+            return
+        source_username = self.follow_dialog.source_username if self.follow_dialog is not None else None
+        if not self._confirm_account_match(source_username):
+            logger.info("GUI: Unfollow retry cancelled due to account mismatch warning.")
+            return
+        logger.info("GUI: Retrying %s failed unfollows.", len(failures))
+        interval_seconds = (
+            self.follow_dialog.interval_input.value()
+            if self.follow_dialog is not None
+            else DEFAULT_UNFOLLOW_INTERVAL_SECONDS
+        )
+        self._submit_unfollow(
+            UnfollowRequest(targets=[result.target for result in failures], interval_seconds=interval_seconds),
+            tr("失敗分を再試行しています..."),
+        )
+
+    def _handle_export_posts(self) -> None:
+        if self._busy:
+            return
+        posts = self.table_manager.selected_posts()
+        username = self._normalized_username_input() or "posts"
+        default_path = Path.home() / f"posts-{username}-{date.today():%Y%m%d}.csv"
+        output_path = save_selected_with_dialog(self, default_path, len(posts), lambda path: write_post_list(path, posts))
+        if output_path is not None:
+            self.update_status(tr("選択項目 {count} 件を保存しました: {path}", count=len(posts), path=output_path))
 
     def _clear_posts(self) -> None:
         self.table_manager.clear()
@@ -1198,15 +1586,13 @@ class XDeleterWindow(QMainWindow):
             logger.info("GUI: Execution cancelled due to account mismatch warning.")
             return
 
-        delete_count = sum(1 for target in targets if not target.is_repost)
-        unrepost_count = sum(1 for target in targets if target.is_repost)
-        operations: list[str] = []
-        if delete_count > 0:
-            operations.append(tr("ポスト削除 {count} 件", count=delete_count))
-        if unrepost_count > 0:
-            operations.append(tr("リポスト解除 {count} 件", count=unrepost_count))
-
-        summary = " / ".join(operations)
+        counts = Counter(target.kind for target in targets)
+        operations = {
+            "post": tr("ポスト削除 {count} 件", count=counts["post"]),
+            "repost": tr("リポスト解除 {count} 件", count=counts["repost"]),
+            "like": tr("いいね取り消し {count} 件", count=counts["like"]),
+        }
+        summary = " / ".join(text for kind, text in operations.items() if counts[kind])
 
         result = QMessageBox.question(
             self,
@@ -1252,6 +1638,7 @@ class XDeleterWindow(QMainWindow):
         success_count = sum(1 for result in results if result.success)
         failures = [result for result in results if not result.success]
         skipped = requested - len(results)
+        save_error = self._record_deleted_posts(results)
         remove_successful_rows(self.table, results)
         if self.table.rowCount() == 0 and success_count > 0:
             self._set_empty_copy(
@@ -1268,6 +1655,10 @@ class XDeleterWindow(QMainWindow):
         if notes:
             message += tr("（{notes}）", notes=tr("、").join(notes))
         self.update_status(message)
+        if save_error:
+            QMessageBox.warning(
+                self, tr("エラー"), tr("削除済みポストの記録を保存できませんでした: {message}", message=save_error)
+            )
         if stopped:
             # The stop dialog already had the user's attention; report in the status line.
             return
@@ -1287,6 +1678,22 @@ class XDeleterWindow(QMainWindow):
 
         if box.clickedButton() == retry_button:
             self._retry_failed(failures)
+
+    def _record_deleted_posts(self, results: list[PostActionResult]) -> str:
+        """Remember deleted post IDs so archive imports skip them; return the save error, if any."""
+        post_ids = [
+            extract_post_id(result.target.url)
+            for result in results
+            if result.success and result.target.kind == "post"
+        ]
+        if not post_ids:
+            return ""
+        try:
+            self._deleted_post_store().record(post_ids)
+        except OSError as error:
+            logger.exception("Failed to save deleted post IDs.")
+            return str(error)
+        return ""
 
     def _retry_failed(self, failures: list[PostActionResult]) -> None:
         # Same guards as the delete button: the target field may have changed

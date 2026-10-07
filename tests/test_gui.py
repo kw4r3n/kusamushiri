@@ -7,6 +7,7 @@ use qtbot.add_widget() due to PySide6 6.9.x offscreen teardown hangs.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -14,8 +15,11 @@ from PySide6.QtCore import QSettings, Qt
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import QApplication, QMessageBox
 
+from kusamushiri.follows import FollowRecord, UnfollowRequest, UnfollowResult
 from kusamushiri.gui import XDeleterWindow, format_action_failures, remove_successful_rows
-from kusamushiri.models import ExecuteActionsRequest, PostActionResult, PostActionTarget, PostRecord
+from kusamushiri.gui_follows import CHECKED_AT_COLUMN, LAST_POST_COLUMN, FollowListDialog
+from kusamushiri.last_posts import FetchLastPostsRequest, LastPostResult, LastPostStore
+from kusamushiri.models import CollectRequest, ExecuteActionsRequest, PostActionResult, PostActionTarget, PostRecord
 from kusamushiri.paths import list_saved_accounts
 from kusamushiri.settings import AccountSettingsManager
 
@@ -39,7 +43,7 @@ def _sample(**kw: object) -> PostRecord:
         "replies": 0,
         "has_media": False,
         "is_reply": False,
-        "is_repost": False,
+        "kind": "post",
     }
     kwargs.update(kw)
     return PostRecord(**kwargs)
@@ -107,7 +111,7 @@ def test_display_posts_columns(window: XDeleterWindow, qtbot) -> None:
     window.display_posts([
         _sample(url="https://x.com/user/status/42", text="Hello World", has_media=True),
         _sample(id="99", url="https://x.com/user/status/99", text="Repost",
-                is_repost=True, is_reply=True, has_media=False),
+                kind="repost", is_reply=True, has_media=False),
     ])
     assert window.table.rowCount() == 2
     assert window.table.item(0, 1).text() == "Hello World"
@@ -157,7 +161,7 @@ def test_handle_delete_confirmation_emits_request(
 
     assert len(emitted_requests) == 1
     request = emitted_requests[0]
-    assert request.targets == [PostActionTarget(url="https://x.com/user/status/42", is_repost=False)]
+    assert request.targets == [PostActionTarget(url="https://x.com/user/status/42", kind="post")]
 
 
 def test_ctrl_return_shortcut_triggers_delete(
@@ -344,7 +348,7 @@ def test_on_delete_done_removes_successful_rows_without_dialog_hang(
 
     window.on_delete_done([
         PostActionResult(
-            target=PostActionTarget(url="https://x.com/user/status/1", is_repost=False),
+            target=PostActionTarget(url="https://x.com/user/status/1", kind="post"),
             action_label="削除",
             success=True,
             error_message=None,
@@ -358,13 +362,13 @@ def test_on_delete_done_removes_successful_rows_without_dialog_hang(
 def test_format_action_failures_returns_labels_urls_and_error_messages() -> None:
     failures = [
         PostActionResult(
-            target=PostActionTarget(url="https://x.com/user/status/1", is_repost=False),
+            target=PostActionTarget(url="https://x.com/user/status/1", kind="post"),
             action_label="削除",
             success=False,
             error_message="failed",
         ),
         PostActionResult(
-            target=PostActionTarget(url="https://x.com/user/status/2", is_repost=True),
+            target=PostActionTarget(url="https://x.com/user/status/2", kind="repost"),
             action_label="リポスト解除",
             success=False,
             error_message=None,
@@ -382,7 +386,7 @@ def test_format_action_failures_returns_labels_urls_and_error_messages() -> None
 def test_remove_successful_rows_removes_matching_targets(window: XDeleterWindow, qtbot) -> None:
     window.display_posts([
         _sample(url="https://x.com/user/status/1"),
-        _sample(id="2", url="https://x.com/user/status/2", is_repost=True),
+        _sample(id="2", url="https://x.com/user/status/2", kind="repost"),
         _sample(id="3", url="https://x.com/user/status/3"),
     ])
 
@@ -390,13 +394,13 @@ def test_remove_successful_rows_removes_matching_targets(window: XDeleterWindow,
         window.table,
         [
             PostActionResult(
-                target=PostActionTarget(url="https://x.com/user/status/2", is_repost=True),
+                target=PostActionTarget(url="https://x.com/user/status/2", kind="repost"),
                 action_label="リポスト解除",
                 success=True,
                 error_message=None,
             ),
             PostActionResult(
-                target=PostActionTarget(url="https://x.com/user/status/3", is_repost=False),
+                target=PostActionTarget(url="https://x.com/user/status/3", kind="post"),
                 action_label="削除",
                 success=False,
                 error_message="failed",
@@ -681,7 +685,7 @@ def test_empty_state_explains_no_match_and_all_processed(window, qtbot, monkeypa
     window._requested_action_count = 1
     window.on_delete_done([
         PostActionResult(
-            target=PostActionTarget(url="https://x.com/user/status/1", is_repost=False),
+            target=PostActionTarget(url="https://x.com/user/status/1", kind="post"),
             action_label="削除",
             success=True,
             error_message=None,
@@ -716,7 +720,7 @@ def test_stop_keeps_controls_locked_until_browser_stopped(window, monkeypatch) -
 
     window.on_delete_done([
         PostActionResult(
-            target=PostActionTarget(url="https://x.com/user/status/1", is_repost=False),
+            target=PostActionTarget(url="https://x.com/user/status/1", kind="post"),
             action_label="削除",
             success=True,
             error_message=None,
@@ -741,7 +745,7 @@ def test_retry_failed_rechecks_account_match(window, monkeypatch) -> None:
         "PySide6.QtWidgets.QMessageBox.question", lambda *a, **kw: QMessageBox.StandardButton.No
     )
     failure = PostActionResult(
-        target=PostActionTarget(url="https://x.com/user/status/1", is_repost=False),
+        target=PostActionTarget(url="https://x.com/user/status/1", kind="post"),
         action_label="削除",
         success=False,
         error_message="failed",
@@ -838,3 +842,435 @@ def test_collect_request_carries_keywords_and_they_persist(window: XDeleterWindo
     window._load_account_settings(window._current_account)
     assert window.include_keywords_input.text() == "懸賞、キャンペーン"
     assert window.exclude_keywords_input.text() == "大事"
+
+
+def test_export_posts_saves_only_checked_rows(window, qtbot, monkeypatch, tmp_path) -> None:
+    assert not window.export_posts_button.isEnabled()
+    window.display_posts([_sample(), _sample(id="2", url="https://x.com/user/status/2", text="second")])
+    assert window.export_posts_button.isEnabled()
+    item = window.table.item(0, 0)
+    assert item is not None
+    item.setCheckState(Qt.CheckState.Unchecked)
+
+    chosen = tmp_path / "backup"
+    monkeypatch.setattr(
+        "kusamushiri.gui.QFileDialog.getSaveFileName",
+        lambda *args: (str(chosen), "JSON (*.json)"),
+    )
+    monkeypatch.setattr("kusamushiri.gui.QMessageBox.information", lambda *args: None)
+    window.export_posts_button.click()
+
+    saved = tmp_path / "backup.csv"
+    assert saved.exists()
+    text = saved.read_text(encoding="utf-8-sig")
+    assert "second" in text
+    assert "hello" not in text
+    assert "1 件" in window.status_label.text()
+
+
+def test_export_posts_cancelled_dialog_writes_nothing(window, qtbot, monkeypatch, tmp_path) -> None:
+    window.display_posts([_sample()])
+    monkeypatch.setattr("kusamushiri.gui.QFileDialog.getSaveFileName", lambda *args: ("", ""))
+
+    window.export_posts_button.click()
+
+    assert list(tmp_path.glob("*.csv")) == []
+
+
+def _write_archive(folder: Path) -> None:
+    data = folder / "data"
+    data.mkdir(parents=True)
+    tweets = [
+        {"tweet": {"id_str": "10", "created_at": "Wed Oct 10 20:19:24 +0000 2018", "full_text": "old post",
+                   "favorite_count": "2", "retweet_count": "0"}},
+        {"tweet": {"id_str": "11", "created_at": "Thu Oct 11 20:19:24 +0000 2018", "full_text": "RT @bob: hi",
+                   "favorite_count": "0", "retweet_count": "0"}},
+        {"tweet": {"id_str": "12", "created_at": "Fri Oct 12 20:19:24 +0000 2018", "full_text": "keep me",
+                   "favorite_count": "0", "retweet_count": "0"}},
+    ]
+    (data / "tweets.js").write_text("window.YTD.tweets.part0 = " + json.dumps(tweets), encoding="utf-8")
+
+
+def test_import_archive_filters_and_skips_reposts(window, qtbot, monkeypatch, tmp_path) -> None:
+    _write_archive(tmp_path)
+    window.username_input.setText("alice")
+    window.exclude_keywords_input.setText("keep")
+    window.min_replies_input.setValue(5)
+    monkeypatch.setattr(
+        "kusamushiri.gui.QFileDialog.getOpenFileName",
+        lambda *args: (str(tmp_path / "data" / "tweets.js"), ""),
+    )
+    assert window.import_archive_button.isEnabled()
+
+    with qtbot.waitSignal(window.archive_loaded):
+        window.import_archive_button.click()
+
+    assert window.table.rowCount() == 1
+    url_item = window.table.item(0, 2)
+    assert url_item is not None
+    assert url_item.text() == "https://x.com/alice/status/10"
+    assert "リポスト 1 件" in window.status_label.text()
+
+
+def test_import_archive_skips_posts_deleted_earlier(window, qtbot, monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr("PySide6.QtWidgets.QMessageBox.information", lambda *a, **kw: None)
+    _write_archive(tmp_path)
+    window.username_input.setText("alice")
+    monkeypatch.setattr(
+        "kusamushiri.gui.QFileDialog.getOpenFileName",
+        lambda *args: (str(tmp_path / "data" / "tweets.js"), ""),
+    )
+    with qtbot.waitSignal(window.archive_loaded):
+        window.import_archive_button.click()
+    assert window.table.rowCount() == 2
+
+    window.on_delete_done([
+        PostActionResult(
+            target=PostActionTarget(url="https://x.com/alice/status/12", kind="post"),
+            action_label="削除",
+            success=True,
+            error_message=None,
+        ),
+    ])
+    with qtbot.waitSignal(window.archive_loaded):
+        window.import_archive_button.click()
+
+    assert window.table.rowCount() == 1
+    assert window.table.item(0, 2).text() == "https://x.com/alice/status/10"
+    assert "削除済み 1 件" in window.status_label.text()
+
+
+def test_import_archive_reports_unreadable_archive(window, qtbot, monkeypatch, tmp_path) -> None:
+    window.username_input.setText("alice")
+    broken = tmp_path / "broken.zip"
+    broken.write_bytes(b"not a zip")
+    monkeypatch.setattr("kusamushiri.gui.QFileDialog.getOpenFileName", lambda *args: (str(broken), ""))
+    warnings: list[object] = []
+    monkeypatch.setattr("kusamushiri.gui.QMessageBox.warning", lambda *args: warnings.append(args))
+
+    with qtbot.waitSignal(window.archive_failed):
+        window.import_archive_button.click()
+
+    assert len(warnings) == 1
+    assert window.table.rowCount() == 0
+    assert window.import_archive_button.isEnabled()
+
+
+def test_import_archive_oldest_first(window, qtbot, monkeypatch, tmp_path) -> None:
+    _write_archive(tmp_path)
+    window.username_input.setText("alice")
+    window.max_posts_input.setValue(1)
+    window.archive_oldest_first_checkbox.setChecked(True)
+    monkeypatch.setattr(
+        "kusamushiri.gui.QFileDialog.getOpenFileName",
+        lambda *args: (str(tmp_path / "data" / "tweets.js"), ""),
+    )
+
+    with qtbot.waitSignal(window.archive_loaded):
+        window.import_archive_button.click()
+
+    assert window.table.rowCount() == 1
+    assert window.table.item(0, 2).text() == "https://x.com/alice/status/10"
+
+    window.max_posts_input.setValue(5)
+    with qtbot.waitSignal(window.archive_loaded):
+        window.import_archive_button.click()
+
+    assert [window.table.item(row, 2).text() for row in range(window.table.rowCount())] == [
+        "https://x.com/alice/status/10",
+        "https://x.com/alice/status/12",
+    ]
+    assert [target.url for target in window.table_manager.selected_targets()][:2] == [
+        "https://x.com/alice/status/10",
+        "https://x.com/alice/status/12",
+    ]
+def test_likes_option_collects_from_profile_and_disables_mode(window: XDeleterWindow, qtbot) -> None:
+    emitted_requests: list[object] = []
+    window._commit_typed_account(load_settings=False)
+    window.username_input.setText("test_user")
+    window.on_login_checked(True, "test_user")
+    window.collect_requested.connect(emitted_requests.append)
+    window._set_combo_current_data(window.mode_combo, "search")
+    window._set_combo_current_data(window.post_kind_combo, "likes")
+
+    assert not window.mode_combo.isEnabled()
+    window._handle_collect()
+
+    assert len(emitted_requests) == 1
+    request = emitted_requests[0]
+    assert isinstance(request, CollectRequest)
+    assert (request.post_kind_filter, request.search_mode) == ("likes", "profile")
+    assert "種別: いいね" in window.filter_summary.text()
+
+    window._set_combo_current_data(window.post_kind_combo, "posts")
+    assert window.mode_combo.isEnabled()
+
+
+def test_liked_posts_show_kind_and_unlike_summary(
+    window: XDeleterWindow,
+    qtbot,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    questions: list[str] = []
+    emitted_requests: list[ExecuteActionsRequest] = []
+    window.username_input.setText("user")
+    window.on_login_checked(True, "user")
+    window.display_posts([
+        _sample(url="https://x.com/someone/status/42", author_username="someone", kind="like"),
+        _sample(id="43", url="https://x.com/other/status/43", author_username="other", kind="like"),
+    ])
+    window.delete_requested.connect(emitted_requests.append)
+
+    def answer(_parent, _title, text, *args, **kwargs):
+        questions.append(text)
+        return QMessageBox.StandardButton.Yes
+
+    monkeypatch.setattr("PySide6.QtWidgets.QMessageBox.question", answer)
+
+    window._handle_delete()
+
+    assert window.table.item(0, 4).text() == "いいね済み"
+    assert len(questions) == 1
+    assert "いいね取り消し 2 件" in questions[0]
+    assert "ポスト削除" not in questions[0]
+    assert emitted_requests[0].targets == [
+        PostActionTarget(url="https://x.com/someone/status/42", kind="like"),
+        PostActionTarget(url="https://x.com/other/status/43", kind="like"),
+    ]
+
+    remove_successful_rows(
+        window.table,
+        [PostActionResult(emitted_requests[0].targets[0], "いいね取り消し", True, None)],
+    )
+    assert window.table.rowCount() == 1
+def _follows() -> list[FollowRecord]:
+    return [
+        FollowRecord("mutual", "Mutual", "https://x.com/mutual", True),
+        FollowRecord("one_way", "One way", "https://x.com/one_way", False),
+        FollowRecord("quiet", "Quiet", "https://x.com/quiet", False),
+    ]
+
+
+def _open_follow_dialog(window: XDeleterWindow) -> FollowListDialog:
+    window.on_login_checked(True, "alice")
+    window.on_following_collected("alice", _follows(), False)
+    dialog = window.follow_dialog
+    assert dialog is not None
+    return dialog
+
+
+def _usernames(records: list[FollowRecord]) -> list[str]:
+    return [record.username for record in records]
+
+
+def test_manage_following_requires_login_and_emits_username(window, qtbot) -> None:
+    assert not window.manage_following_button.isEnabled()
+    window.on_login_checked(True, "alice")
+    emitted: list[str] = []
+    window.collect_following_requested.connect(emitted.append)
+
+    window.manage_following_button.click()
+
+    assert emitted == ["alice"]
+    assert not window.manage_following_button.isEnabled()
+
+
+def test_follow_dialog_hides_mutuals_and_starts_unchecked(window, qtbot) -> None:
+    dialog = _open_follow_dialog(window)
+    try:
+        assert dialog.selected_records() == []
+        dialog.toggle_all()
+        assert _usernames(dialog.selected_records()) == ["one_way", "quiet"]
+
+        dialog.hide_mutual_checkbox.setChecked(False)
+        dialog.toggle_all()
+        assert len(dialog.selected_records()) == 3
+        dialog.hide_mutual_checkbox.setChecked(True)
+        assert _usernames(dialog.selected_records()) == ["one_way", "quiet"]
+    finally:
+        dialog.close()
+
+
+def test_unfollow_confirmation_emits_only_checked_rows(window, qtbot, monkeypatch) -> None:
+    dialog = _open_follow_dialog(window)
+    emitted: list[UnfollowRequest] = []
+    window.unfollow_requested.connect(emitted.append)
+    answers = [QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes]
+    monkeypatch.setattr("PySide6.QtWidgets.QMessageBox.question", lambda *a, **kw: answers.pop(0))
+    try:
+        dialog.toggle_all()
+        quiet_row = next(row for row in range(dialog.table.rowCount()) if dialog._record(row).username == "quiet")
+        dialog.table.item(quiet_row, 0).setCheckState(Qt.CheckState.Unchecked)
+        dialog.unfollow_button.click()
+        assert emitted == []
+
+        dialog.unfollow_button.click()
+        assert len(emitted) == 1
+        assert _usernames(emitted[0].targets) == ["one_way"]
+        assert emitted[0].interval_seconds == 10.0
+        assert not dialog.unfollow_button.isEnabled()
+    finally:
+        dialog.close()
+
+
+def test_unfollow_rechecks_account_match(window, qtbot, monkeypatch) -> None:
+    dialog = _open_follow_dialog(window)
+    window._last_logged_in_username = "someone_else"
+    emitted: list[UnfollowRequest] = []
+    window.unfollow_requested.connect(emitted.append)
+    titles: list[str] = []
+
+    def answer(_parent, title, *_args, **_kwargs):
+        titles.append(title)
+        return QMessageBox.StandardButton.No
+
+    monkeypatch.setattr("PySide6.QtWidgets.QMessageBox.question", answer)
+    try:
+        dialog.toggle_all()
+        dialog.unfollow_button.click()
+        assert emitted == []
+        assert titles == ["アカウント不一致"]
+    finally:
+        dialog.close()
+
+
+def test_unfollow_done_removes_successes_and_offers_retry(window, qtbot, monkeypatch) -> None:
+    dialog = _open_follow_dialog(window)
+    records = _follows()
+    window._requested_unfollow_count = 2
+    retried: list[list[UnfollowResult]] = []
+    monkeypatch.setattr(window, "_retry_failed_unfollows", retried.append)
+    monkeypatch.setattr("PySide6.QtWidgets.QMessageBox.exec", lambda box: 0)
+    monkeypatch.setattr("PySide6.QtWidgets.QMessageBox.clickedButton", lambda box: box.buttons()[0])
+    try:
+        window.on_unfollow_done([
+            UnfollowResult(records[1], True),
+            UnfollowResult(records[2], False, "rate limited"),
+        ])
+        remaining = {dialog._record(row).username for row in range(dialog.table.rowCount())}
+        assert remaining == {"mutual", "quiet"}
+        assert "1 / 2" in window.status_label.text()
+        assert [_usernames([result.target for result in batch]) for batch in retried] == [["quiet"]]
+    finally:
+        dialog.close()
+
+
+def test_retry_failed_unfollows_uses_dialog_interval(window, qtbot) -> None:
+    dialog = _open_follow_dialog(window)
+    emitted: list[UnfollowRequest] = []
+    window.unfollow_requested.connect(emitted.append)
+    dialog.interval_input.setValue(30)
+    try:
+        window._retry_failed_unfollows([UnfollowResult(_follows()[1], False, "failed")])
+        assert len(emitted) == 1
+        assert emitted[0].interval_seconds == 30
+        assert _usernames(emitted[0].targets) == ["one_way"]
+    finally:
+        dialog.close()
+
+
+def test_follow_dialog_save_writes_checked_rows(window, qtbot, monkeypatch, tmp_path) -> None:
+    dialog = _open_follow_dialog(window)
+    monkeypatch.setattr(
+        "kusamushiri.gui_table.QFileDialog.getSaveFileName", lambda *args: (str(tmp_path / "picked"), "")
+    )
+    monkeypatch.setattr("kusamushiri.gui_follows.QMessageBox.information", lambda *args: None)
+    try:
+        dialog.toggle_all()
+        dialog.save_button.click()
+        text = (tmp_path / "picked.csv").read_text(encoding="utf-8-sig")
+        assert "one_way" in text and "quiet" in text and "mutual" not in text
+    finally:
+        dialog.close()
+
+
+def _row_of(dialog: FollowListDialog, username: str) -> int:
+    return next(row for row in range(dialog.table.rowCount()) if dialog._record(row).username == username)
+
+
+def _visible_order(dialog: FollowListDialog) -> list[str]:
+    return [dialog._record(row).username for row in range(dialog.table.rowCount()) if not dialog.table.isRowHidden(row)]
+
+
+def test_follow_dialog_shows_stored_last_posts_and_sorts_chronologically(window, qtbot) -> None:
+    LastPostStore.for_account(window._current_account).record([
+        LastPostResult("ONE_WAY", "2026-10-01T09:30:00+00:00", last_post_at="2026-09-30T08:00:00+00:00"),
+        LastPostResult("quiet", "2026-10-02T09:30:00+00:00", note="These posts are protected"),
+    ])
+    dialog = _open_follow_dialog(window)
+    try:
+        dialog.hide_mutual_checkbox.setChecked(False)
+        headers = [dialog.table.horizontalHeaderItem(column).text() for column in (LAST_POST_COLUMN, CHECKED_AT_COLUMN)]
+        assert headers == ["最終ポスト", "取得日"]
+        one_way = _row_of(dialog, "one_way")
+        assert dialog.table.item(one_way, LAST_POST_COLUMN).text() == "2026-09-30"
+        assert len(dialog.table.item(one_way, CHECKED_AT_COLUMN).text()) == len("2026-10-01 09:30")
+        quiet = _row_of(dialog, "quiet")
+        assert dialog.table.item(quiet, LAST_POST_COLUMN).text() == "不明"
+        assert dialog.table.item(quiet, LAST_POST_COLUMN).toolTip() == "These posts are protected"
+        assert dialog.table.item(_row_of(dialog, "mutual"), LAST_POST_COLUMN).text() == ""
+
+        # Text order would put "不明" after the date; chronological order puts unknown first.
+        dialog.table.sortByColumn(LAST_POST_COLUMN, Qt.SortOrder.AscendingOrder)
+        assert _visible_order(dialog) == ["mutual", "quiet", "one_way"]
+        dialog.table.sortByColumn(CHECKED_AT_COLUMN, Qt.SortOrder.DescendingOrder)
+        assert _visible_order(dialog) == ["quiet", "one_way", "mutual"]
+    finally:
+        dialog.close()
+
+
+def test_fetch_last_posts_emits_only_checked_rows(window, qtbot) -> None:
+    dialog = _open_follow_dialog(window)
+    emitted: list[FetchLastPostsRequest] = []
+    window.fetch_last_posts_requested.connect(emitted.append)
+    try:
+        dialog.interval_input.setValue(3)
+        dialog.table.item(_row_of(dialog, "quiet"), 0).setCheckState(Qt.CheckState.Checked)
+        dialog.last_posts_button.click()
+        assert len(emitted) == 1
+        assert _usernames(emitted[0].targets) == ["quiet"]
+        assert emitted[0].interval_seconds == 3
+        assert not dialog.last_posts_button.isEnabled()
+    finally:
+        dialog.close()
+
+
+def test_fetch_last_posts_without_checked_rows_emits_nothing(window, qtbot, monkeypatch) -> None:
+    dialog = _open_follow_dialog(window)
+    emitted: list[FetchLastPostsRequest] = []
+    window.fetch_last_posts_requested.connect(emitted.append)
+    shown: list[str] = []
+    monkeypatch.setattr(
+        "kusamushiri.gui_follows.QMessageBox.information", lambda _parent, _title, text: shown.append(text)
+    )
+    try:
+        dialog.last_posts_button.click()
+        assert emitted == []
+        assert shown == ["最終ポスト日を取得するアカウントが選択されていません。"]
+    finally:
+        dialog.close()
+
+
+def test_last_posts_done_updates_rows_and_survives_recollecting(window, qtbot, monkeypatch) -> None:
+    dialog = _open_follow_dialog(window)
+    monkeypatch.setattr("PySide6.QtWidgets.QMessageBox.exec", lambda box: 0)
+    try:
+        dialog.table.sortByColumn(LAST_POST_COLUMN, Qt.SortOrder.AscendingOrder)
+        window._requested_last_post_count = 2
+        window.on_last_posts_done([
+            LastPostResult("quiet", "2026-10-01T09:30:00+00:00", last_post_at="2026-09-30T08:00:00+00:00"),
+            LastPostResult("one_way", "2026-10-01T09:31:00+00:00", error_message="timeline did not load"),
+        ])
+        assert "1 / 2" in window.status_label.text()
+        assert dialog.table.item(_row_of(dialog, "quiet"), LAST_POST_COLUMN).text() == "2026-09-30"
+        assert dialog.table.item(_row_of(dialog, "one_way"), LAST_POST_COLUMN).text() == ""
+        assert _visible_order(dialog) == ["one_way", "quiet"]
+
+        window.on_following_collected("alice", _follows(), False)
+        assert dialog.table.item(_row_of(dialog, "quiet"), LAST_POST_COLUMN).text() == "2026-09-30"
+        dialog.table.item(_row_of(dialog, "quiet"), 0).setCheckState(Qt.CheckState.Checked)
+        assert [(record.last_post_at, record.checked_at) for record in dialog.selected_records()] == [
+            ("2026-09-30T08:00:00+00:00", "2026-10-01T09:30:00+00:00")
+        ]
+    finally:
+        dialog.close()

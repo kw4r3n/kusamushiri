@@ -1,16 +1,58 @@
 from collections.abc import Callable
 from datetime import datetime
+from pathlib import Path
 
 from PySide6.QtCore import QEvent, QObject, Qt
-from PySide6.QtWidgets import QPushButton, QTableWidget, QTableWidgetItem
+from PySide6.QtWidgets import QFileDialog, QMessageBox, QPushButton, QTableWidget, QTableWidgetItem, QWidget
 
+from kusamushiri.exporting import EXPORT_SUFFIXES
 from kusamushiri.i18n import tr
+from kusamushiri.logger import logger
 from kusamushiri.models import PostActionTarget, PostRecord
 
 TEXT_COLUMN = 1
 URL_COLUMN = 2
 TEXT_COLUMN_MIN_WIDTH = 240
 URL_COLUMN_WIDTH = 180
+# The check item keeps the full record so checked rows can be exported.
+POST_RECORD_ROLE = Qt.ItemDataRole.UserRole + 1
+
+
+def ask_export_path(parent: QWidget, title: str, default_path: Path) -> Path | None:
+    """Ask where to save a CSV/JSON export; a name without either suffix gets .csv."""
+    path_text, _selected_filter = QFileDialog.getSaveFileName(
+        parent, title, str(default_path), "CSV (*.csv);;JSON (*.json)"
+    )
+    if not path_text:
+        return None
+    output_path = Path(path_text)
+    if output_path.suffix.lower() not in EXPORT_SUFFIXES:
+        output_path = output_path.with_name(f"{output_path.name}.csv")
+    return output_path
+
+
+def save_selected_with_dialog(
+    parent: QWidget, default_path: Path, count: int, write: Callable[[Path], None]
+) -> Path | None:
+    """Ask for a path, write the checked items and report the result; return the saved path."""
+    if count == 0:
+        QMessageBox.information(parent, tr("情報"), tr("保存する項目が選択されていません。"))
+        return None
+    output_path = ask_export_path(parent, tr("選択項目の保存先"), default_path)
+    if output_path is None:
+        return None
+    try:
+        write(output_path)
+    except OSError as error:
+        logger.warning("Export failed: %s", error)
+        QMessageBox.warning(parent, tr("保存エラー"), tr("ファイルを保存できませんでした: {error}", error=error))
+        return None
+    QMessageBox.information(
+        parent,
+        tr("エクスポート完了"),
+        tr("{count} 件の項目を保存しました。\n{path}", count=count, path=output_path),
+    )
+    return output_path
 
 
 class PostTableManager(QObject):
@@ -68,6 +110,7 @@ class PostTableManager(QObject):
         """Display posts in the table."""
         self.clear()
 
+        kind_labels = {"post": tr("ポスト"), "repost": tr("リポスト"), "like": tr("いいね済み")}
         for row_index, post in enumerate(posts):
             self.table.insertRow(row_index)
 
@@ -80,8 +123,9 @@ class PostTableManager(QObject):
             check_item.setCheckState(Qt.CheckState.Checked)
             check_item.setData(
                 Qt.ItemDataRole.UserRole,
-                PostActionTarget(url=post.url, is_repost=post.is_repost),
+                PostActionTarget(url=post.url, kind=post.kind),
             )
+            check_item.setData(POST_RECORD_ROLE, post)
             self.table.setItem(row_index, 0, check_item)
 
             text_item = QTableWidgetItem(post.text.replace("\n", " "))
@@ -100,7 +144,7 @@ class PostTableManager(QObject):
             date_item = QTableWidgetItem(formatted)
             self.table.setItem(row_index, 3, date_item)
 
-            kind_item = QTableWidgetItem(tr("リポスト") if post.is_repost else tr("ポスト"))
+            kind_item = QTableWidgetItem(kind_labels[post.kind])
             kind_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             self.table.setItem(row_index, 4, kind_item)
 
@@ -151,6 +195,18 @@ class PostTableManager(QObject):
                 if isinstance(target, PostActionTarget):
                     targets.append(target)
         return targets
+
+    def selected_posts(self) -> list[PostRecord]:
+        """Get the PostRecord of every checked row, in table order."""
+        posts: list[PostRecord] = []
+        for row_index in range(self.table.rowCount()):
+            item = self.table.item(row_index, 0)
+            if item is None or item.checkState() != Qt.CheckState.Checked:
+                continue
+            post = item.data(POST_RECORD_ROLE)
+            if isinstance(post, PostRecord):
+                posts.append(post)
+        return posts
 
     def toggle_all(self) -> None:
         """Toggle all checkboxes between checked and unchecked."""

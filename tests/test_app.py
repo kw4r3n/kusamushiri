@@ -7,7 +7,15 @@ from collections.abc import Callable
 import pytest
 
 from kusamushiri.app import DeletePostsCommand, XDeleterWorker
-from kusamushiri.follows import ExportFollowingRequest, FollowCollectionResult, FollowRecord
+from kusamushiri.follows import (
+    ExportFollowingRequest,
+    FollowCollectionResult,
+    FollowRecord,
+    LastPostEntry,
+    UnfollowRequest,
+    UnfollowResult,
+)
+from kusamushiri.last_posts import FetchLastPostsRequest, LastPostResult
 from kusamushiri.models import CollectRequest, ExecuteActionsRequest, PostActionResult, PostActionTarget, PostRecord
 
 
@@ -29,11 +37,11 @@ class FakeCore:
                 replies=0,
                 has_media=False,
                 is_reply=False,
-                is_repost=False,
+                kind="post",
             )
         ]
         self.action_result = PostActionResult(
-            target=PostActionTarget(url="https://x.com/tester/status/1", is_repost=False),
+            target=PostActionTarget(url="https://x.com/tester/status/1", kind="post"),
             action_label="ポスト削除",
             success=True,
             error_message=None,
@@ -95,6 +103,20 @@ class FakeCore:
         self.executed_targets.append(target)
         return self.action_result
 
+    def unfollow_account(self, username: str) -> tuple[bool, str | None]:
+        self._raise_if_configured("unfollow_account")
+        self.calls.append(f"unfollow_account:{username}")
+        if username == "rate_limited":
+            return False, "friendships/destroy.json がエラーを返しました: Rate limit"
+        return True, None
+
+    def fetch_last_post(self, username: str) -> LastPostResult:
+        self._raise_if_configured("fetch_last_post")
+        self.calls.append(f"fetch_last_post:{username}")
+        if username == "broken":
+            return LastPostResult(username, "2026-10-01T00:00:00+00:00", error_message="timeline did not load")
+        return LastPostResult(username, "2026-10-01T00:00:00+00:00", last_post_at="2026-09-30T00:00:00+00:00")
+
     def stop_browser(self) -> None:
         self.calls.append("stop_browser")
 
@@ -113,7 +135,7 @@ def build_collect_request() -> CollectRequest:
 
 def build_delete_request() -> ExecuteActionsRequest:
     return ExecuteActionsRequest(
-        targets=[PostActionTarget(url="https://x.com/tester/status/1", is_repost=False)],
+        targets=[PostActionTarget(url="https://x.com/tester/status/1", kind="post")],
         interval_seconds=0,
     )
 
@@ -177,7 +199,7 @@ def test_worker_dispatches_delete_posts_when_enqueued(qtbot: object) -> None:
 
     wait_until(qtbot, lambda: completed_events == [[core.action_result]])
     assert core.calls == ["execute_post_action:https://x.com/tester/status/1"]
-    assert core.executed_targets == [PostActionTarget(url="https://x.com/tester/status/1", is_repost=False)]
+    assert core.executed_targets == [PostActionTarget(url="https://x.com/tester/status/1", kind="post")]
     worker.shutdown()
 
 
@@ -190,12 +212,17 @@ def test_worker_exports_following_to_file(qtbot: object, tmp_path) -> None:
     worker.events.following_export_finished.connect(lambda path, count: finished.append((path, count)))
     output_path = tmp_path / "following.csv"
 
-    worker.enqueue_export_following(ExportFollowingRequest(username="tester", output_path=output_path))
+    entry = LastPostEntry("2026-10-01T09:30:00+00:00", "2026-09-30T08:00:00+00:00")
+
+    worker.enqueue_export_following(
+        ExportFollowingRequest(username="tester", output_path=output_path, last_posts={"alice": entry})
+    )
 
     wait_until(qtbot, lambda: finished == [(str(output_path), 1)])
     assert core.calls == ["collect_following:tester"]
     assert progress == [1]
-    assert "alice" in output_path.read_text(encoding="utf-8-sig")
+    text = output_path.read_text(encoding="utf-8-sig")
+    assert "alice" in text and "2026-09-30T08:00:00+00:00,2026-10-01T09:30:00+00:00" in text
     worker.shutdown()
 
 
@@ -251,8 +278,8 @@ def test_worker_cancels_delete_batch_during_interval(qtbot: object) -> None:
     worker.events.delete_completed.connect(completed_events.append)
     request = ExecuteActionsRequest(
         targets=[
-            PostActionTarget(url="https://x.com/user/status/1", is_repost=False),
-            PostActionTarget(url="https://x.com/user/status/2", is_repost=False),
+            PostActionTarget(url="https://x.com/user/status/1", kind="post"),
+            PostActionTarget(url="https://x.com/user/status/2", kind="post"),
         ],
         interval_seconds=10,
     )
@@ -316,7 +343,7 @@ def test_worker_cancellation_after_dequeue_skips_old_commands(
     worker.events.error_occurred.connect(errors.append)
     shutdown_thread = None
     future_request = ExecuteActionsRequest(
-        targets=[PostActionTarget(url="https://x.com/tester/status/3", is_repost=False)],
+        targets=[PostActionTarget(url="https://x.com/tester/status/3", kind="post")],
         interval_seconds=0,
     )
 
@@ -377,13 +404,13 @@ def test_worker_active_batch_cancellation_survives_future_submission(
     worker.events.delete_completed.connect(completed.append)
     request = ExecuteActionsRequest(
         targets=[
-            PostActionTarget(url="https://x.com/tester/status/1", is_repost=False),
-            PostActionTarget(url="https://x.com/tester/status/2", is_repost=False),
+            PostActionTarget(url="https://x.com/tester/status/1", kind="post"),
+            PostActionTarget(url="https://x.com/tester/status/2", kind="post"),
         ],
         interval_seconds=10,
     )
     future_request = ExecuteActionsRequest(
-        targets=[PostActionTarget(url="https://x.com/tester/status/3", is_repost=False)],
+        targets=[PostActionTarget(url="https://x.com/tester/status/3", kind="post")],
         interval_seconds=0,
     )
 
@@ -410,3 +437,111 @@ def test_worker_active_batch_cancellation_survives_future_submission(
         if cancellation_thread.ident is not None:
             cancellation_thread.join(timeout=3)
         worker.shutdown()
+
+
+def _follow(username: str, follows_you: bool = False) -> FollowRecord:
+    return FollowRecord(username, username.title(), f"https://x.com/{username}", follows_you)
+
+
+def test_worker_collects_following_for_review(qtbot: object) -> None:
+    core = FakeCore()
+    worker = XDeleterWorker(core=core)
+    collected: list[tuple[str, list[FollowRecord], bool]] = []
+    worker.events.following_collected.connect(lambda name, records, limit: collected.append((name, records, limit)))
+
+    worker.enqueue_collect_following("tester")
+
+    wait_until(qtbot, lambda: len(collected) == 1)
+    assert collected[0] == ("tester", [FollowRecord("alice", "Alice", "https://x.com/alice", True)], False)
+    assert core.calls == ["collect_following:tester"]
+    worker.shutdown()
+
+
+def test_worker_unfollows_each_target_and_reports_results(qtbot: object) -> None:
+    core = FakeCore()
+    worker = XDeleterWorker(core=core)
+    progress: list[tuple[str, int, int]] = []
+    completed: list[list[UnfollowResult]] = []
+    worker.events.unfollow_progress.connect(lambda name, current, total: progress.append((name, current, total)))
+    worker.events.unfollow_completed.connect(completed.append)
+    targets = [_follow("alice"), _follow("rate_limited")]
+
+    worker.enqueue_unfollow(UnfollowRequest(targets=targets, interval_seconds=0))
+
+    wait_until(qtbot, lambda: len(completed) == 1)
+    assert core.calls == ["unfollow_account:alice", "unfollow_account:rate_limited"]
+    assert progress == [("alice", 1, 2), ("rate_limited", 2, 2)]
+    assert [(result.target.username, result.success) for result in completed[0]] == [
+        ("alice", True),
+        ("rate_limited", False),
+    ]
+    assert "Rate limit" in (completed[0][1].error_message or "")
+    worker.shutdown()
+
+
+def test_worker_cancels_unfollow_batch_during_interval(qtbot: object) -> None:
+    core = FakeCore()
+    worker = XDeleterWorker(core=core)
+    completed: list[list[UnfollowResult]] = []
+    worker.events.unfollow_progress.connect(lambda *args: worker.cancel_current_operation())
+    worker.events.unfollow_completed.connect(completed.append)
+
+    worker.enqueue_unfollow(UnfollowRequest(targets=[_follow("alice"), _follow("bob")], interval_seconds=30))
+
+    wait_until(qtbot, lambda: len(completed) == 1)
+    worker.shutdown()
+    assert len(completed[0]) <= 1
+    assert "unfollow_account:bob" not in core.calls
+
+
+def test_unfollow_request_rejects_empty_targets_and_negative_interval() -> None:
+    with pytest.raises(ValueError):
+        UnfollowRequest(targets=[]).validate()
+    with pytest.raises(ValueError):
+        UnfollowRequest(targets=[_follow("alice")], interval_seconds=-1).validate()
+
+
+def test_worker_fetches_last_posts_for_each_target(qtbot: object) -> None:
+    core = FakeCore()
+    worker = XDeleterWorker(core=core)
+    progress: list[tuple[str, int, int]] = []
+    completed: list[list[LastPostResult]] = []
+    worker.events.last_post_progress.connect(lambda name, current, total: progress.append((name, current, total)))
+    worker.events.last_posts_completed.connect(completed.append)
+
+    worker.enqueue_fetch_last_posts(
+        FetchLastPostsRequest(targets=[_follow("alice"), _follow("broken")], interval_seconds=0)
+    )
+
+    wait_until(qtbot, lambda: len(completed) == 1)
+    assert core.calls == ["fetch_last_post:alice", "fetch_last_post:broken"]
+    assert progress == [("alice", 1, 2), ("broken", 2, 2)]
+    assert [(result.username, result.success, result.last_post_at) for result in completed[0]] == [
+        ("alice", True, "2026-09-30T00:00:00+00:00"),
+        ("broken", False, None),
+    ]
+    worker.shutdown()
+
+
+def test_worker_cancels_last_post_batch_during_interval(qtbot: object) -> None:
+    core = FakeCore()
+    worker = XDeleterWorker(core=core)
+    completed: list[list[LastPostResult]] = []
+    worker.events.last_post_progress.connect(lambda *args: worker.cancel_current_operation())
+    worker.events.last_posts_completed.connect(completed.append)
+
+    worker.enqueue_fetch_last_posts(
+        FetchLastPostsRequest(targets=[_follow("alice"), _follow("bob")], interval_seconds=30)
+    )
+
+    wait_until(qtbot, lambda: len(completed) == 1)
+    worker.shutdown()
+    assert len(completed[0]) <= 1
+    assert "fetch_last_post:bob" not in core.calls
+
+
+def test_fetch_last_posts_request_rejects_empty_targets_and_negative_interval() -> None:
+    with pytest.raises(ValueError):
+        FetchLastPostsRequest(targets=[]).validate()
+    with pytest.raises(ValueError):
+        FetchLastPostsRequest(targets=[_follow("alice")], interval_seconds=-1).validate()

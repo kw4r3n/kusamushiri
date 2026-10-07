@@ -10,9 +10,12 @@ from urllib.parse import quote, urljoin, urlparse
 from playwright.sync_api import Browser, BrowserContext, Locator, Page, Playwright
 
 from kusamushiri import actions
+from kusamushiri.actions import OWNED_TIMESTAMP_LINK_SELECTOR, POST_ARTICLE_SELECTOR
 from kusamushiri.actions import delete_post as _delete_post
 from kusamushiri.actions import execute_post_action as _execute_post_action
 from kusamushiri.actions import undo_repost as _undo_repost
+from kusamushiri.actions import unfollow_account as _unfollow_account
+from kusamushiri.actions import unlike_post as _unlike_post
 from kusamushiri.browser import (
     BASE_X_URL,
     NAVIGATION_TIMEOUT_MS,
@@ -21,13 +24,16 @@ from kusamushiri.browser import (
 )
 from kusamushiri.follows import FollowCollectionResult, collect_following
 from kusamushiri.i18n import tr
+from kusamushiri.last_posts import LastPostResult, fetch_last_post
 from kusamushiri.logger import logger
 from kusamushiri.models import (
     CollectRequest,
     PostActionResult,
     PostActionTarget,
+    PostKind,
     PostRecord,
-    text_contains_any_keyword,
+    is_within_date_range,
+    post_skip_reason,
 )
 from kusamushiri.parsing import (
     TEXT_PREVIEW_LENGTH,
@@ -47,7 +53,8 @@ COLLECTION_SCROLL_Y = 1_500  # Scroll distance during active collection (trigger
 MAX_STABLE_SCROLL_CYCLES = 3
 VALID_MEDIA_FILTERS = {"all", "with_media", "without_media"}
 VALID_SEARCH_MODES = {"profile", "search"}
-VALID_POST_KIND_FILTERS = {"posts", "reposts", "all"}
+VALID_POST_KIND_FILTERS = {"posts", "reposts", "all", "likes"}
+LIKES_PATH = "likes"
 SEARCH_EMPTY_STATE_MARKERS = (
     "No results for",
     "Try searching for something else",
@@ -58,11 +65,7 @@ SEARCH_EMPTY_STATE_MARKERS = (
 )
 EMPTY_SEARCH_TIMEOUT_SECONDS = 15.0
 MAX_ARTICLE_PARSE_ATTEMPTS = 3
-POST_ARTICLE_SELECTOR = "xpath=//article[@data-testid='tweet'][not(ancestor::article)]"
 POST_TIME_SELECTOR = "time"
-OWNED_TIMESTAMP_LINK_SELECTOR = (
-    f"xpath=.//a[.//time][{actions.OWNED_NODE_XPATH}]"
-)
 OWNED_TEXT_SELECTOR = f"xpath=.//*[@data-testid='tweetText'][{actions.OWNED_NODE_XPATH}]"
 SUPPORTED_POST_PATH_PATTERN = re.compile(
     r"/[A-Za-z0-9_]+/status/([0-9]+)(?:/[^?#]*)?"
@@ -101,8 +104,8 @@ class EmptySearchState:
 
 
 class XDeleterCore:
-    def __init__(self) -> None:
-        self._browser = BrowserManager()
+    def __init__(self, *, headless: bool = False) -> None:
+        self._browser = BrowserManager(headless=headless)
         self._cancel_event = threading.Event()
         self.collection_limit_reached = False
 
@@ -114,6 +117,10 @@ class XDeleterCore:
 
     def is_cancel_requested(self) -> bool:
         return self._cancel_event.is_set()
+
+    def wait_for_cancel(self, seconds: float) -> bool:
+        """Sleep up to `seconds`; return True as soon as cancellation is requested."""
+        return self._cancel_event.wait(seconds)
 
     @property
     def page(self) -> Page | None:
@@ -162,9 +169,7 @@ class XDeleterCore:
             logger.debug("Timeline height did not change before timeout: %s", error)
 
     def _is_post_within_date_range(self, post_date: date | None, request: CollectRequest) -> bool:
-        if request.since_date is not None and (post_date is None or post_date < request.since_date):
-            return False
-        return not (request.until_date is not None and (post_date is None or post_date > request.until_date))
+        return is_within_date_range(post_date, request)
 
     def _find_first_visible_locator(
         self,
@@ -227,9 +232,12 @@ class XDeleterCore:
         if request.search_mode not in VALID_SEARCH_MODES:
             raise ValueError(tr("search_mode は profile / search のいずれかで指定してください。"))
         if request.post_kind_filter not in VALID_POST_KIND_FILTERS:
-            raise ValueError(tr("post_kind_filter は posts / reposts / all のいずれかで指定してください。"))
+            raise ValueError(tr("post_kind_filter は posts / reposts / all / likes のいずれかで指定してください。"))
 
     def _build_collection_url(self, normalized_username: str, request: CollectRequest) -> str:
+        if request.post_kind_filter == "likes":
+            # Liked posts are listed only on the account's own likes timeline.
+            return urljoin(BASE_X_URL, f"{normalized_username}/{LIKES_PATH}")
         if request.search_mode == "search":
             query = self._build_search_query(normalized_username, request)
             encoded_query = quote(query)
@@ -335,7 +343,7 @@ class XDeleterCore:
         replies_count: int,
         has_media: bool,
         is_reply: bool,
-        is_repost: bool,
+        kind: PostKind,
     ) -> PostRecord:
         return PostRecord(
             id=post_id,
@@ -351,7 +359,7 @@ class XDeleterCore:
             replies=replies_count,
             has_media=has_media,
             is_reply=is_reply,
-            is_repost=is_repost,
+            kind=kind,
         )
 
     def _post_matches_filters(
@@ -360,81 +368,25 @@ class XDeleterCore:
         request: CollectRequest,
         has_media: bool,
         is_reply: bool,
-        is_repost: bool,
+        kind: PostKind,
         likes_count: int,
         replies_count: int,
         post_date: date | None,
         article_index: int,
         text_content: str = "",
     ) -> bool:
-        if request.media_filter == "with_media" and not has_media:
-            logger.debug(
-                "Article %s: Skipped (has_media=%s but required=%s)",
-                article_index,
-                has_media,
-                request.media_filter,
-            )
-            return False
-        if request.media_filter == "without_media" and has_media:
-            logger.debug(
-                "Article %s: Skipped (has_media=%s but required=%s)",
-                article_index,
-                has_media,
-                request.media_filter,
-            )
-            return False
-        if request.is_reply and not is_reply:
-            logger.debug(
-                "Article %s: Skipped (is_reply=%s but required=%s)",
-                article_index,
-                is_reply,
-                request.is_reply,
-            )
-            return False
-        if request.post_kind_filter == "posts" and is_repost:
-            logger.debug(
-                "Article %s: Skipped repost while filter=%s",
-                article_index,
-                request.post_kind_filter,
-            )
-            return False
-        if request.post_kind_filter == "reposts" and not is_repost:
-            logger.debug(
-                "Article %s: Skipped non-repost while filter=%s",
-                article_index,
-                request.post_kind_filter,
-            )
-            return False
-        if request.min_likes > 0 and likes_count < request.min_likes:
-            logger.debug(
-                "Article %s: Skipped (likes=%s < min=%s)",
-                article_index,
-                likes_count,
-                request.min_likes,
-            )
-            return False
-        if request.min_replies > 0 and replies_count < request.min_replies:
-            logger.debug(
-                "Article %s: Skipped (replies=%s < min=%s)",
-                article_index,
-                replies_count,
-                request.min_replies,
-            )
-            return False
-        if not self._is_post_within_date_range(post_date, request):
-            logger.debug(
-                "Article %s: Skipped by date range (date=%s, since=%s, until=%s)",
-                article_index,
-                post_date.isoformat() if post_date is not None else "unknown",
-                request.since_date.isoformat() if request.since_date is not None else "none",
-                request.until_date.isoformat() if request.until_date is not None else "none",
-            )
-            return False
-        if request.include_keywords and not text_contains_any_keyword(text_content, request.include_keywords):
-            logger.debug("Article %s: Skipped (no include keyword matched)", article_index)
-            return False
-        if request.exclude_keywords and text_contains_any_keyword(text_content, request.exclude_keywords):
-            logger.debug("Article %s: Skipped (exclude keyword matched)", article_index)
+        reason = post_skip_reason(
+            request,
+            has_media=has_media,
+            is_reply=is_reply,
+            kind=kind,
+            likes_count=likes_count,
+            replies_count=replies_count,
+            post_date=post_date,
+            text=text_content,
+        )
+        if reason is not None:
+            logger.debug("Article %s: Skipped (%s)", article_index, reason)
             return False
         return True
 
@@ -537,7 +489,14 @@ class XDeleterCore:
     ) -> PostRecord | None:
         post_id = extract_post_id(post_url)
         author_username = extract_post_author_username(post_url) or normalized_username
-        is_repost_post = author_username.casefold() != normalized_username.casefold()
+        kind: PostKind
+        if request.post_kind_filter == "likes":
+            # The likes timeline lists other accounts' posts; none of them is a repost.
+            kind = "like"
+        elif author_username.casefold() != normalized_username.casefold():
+            kind = "repost"
+        else:
+            kind = "post"
         logger.debug("Article %s: Found new URL: %s", article_index, post_url)
 
         text_content = self._get_article_text(article)
@@ -551,7 +510,7 @@ class XDeleterCore:
             request=request,
             has_media=has_media_post,
             is_reply=is_reply_post,
-            is_repost=is_repost_post,
+            kind=kind,
             likes_count=likes_count,
             replies_count=replies_count,
             post_date=post_date,
@@ -570,12 +529,12 @@ class XDeleterCore:
             replies_count=replies_count,
             has_media=has_media_post,
             is_reply=is_reply_post,
-            is_repost=is_repost_post,
+            kind=kind,
         )
         logger.debug(
             "Collected post: %s - Kind: %s, Likes: %s, Replies: %s, Media: %s, Reply: %s",
             post_url,
-            "repost" if is_repost_post else "post",
+            kind,
             likes_count,
             replies_count,
             has_media_post,
@@ -736,6 +695,14 @@ class XDeleterCore:
         page = self._require_page()
         return collect_following(page, self._normalize_username(username), self._cancel_event, on_progress)
 
+    def unfollow_account(self, username: str) -> tuple[bool, str | None]:
+        page = self._require_page()
+        return _unfollow_account(page, username, find_locator=self._find_first_visible_locator)
+
+    def fetch_last_post(self, username: str) -> LastPostResult:
+        page = self._require_page()
+        return fetch_last_post(page, username, self._cancel_event)
+
     def execute_post_action(self, target: PostActionTarget) -> PostActionResult:
         page = self._browser._require_page()
         return _execute_post_action(page, target, find_locator=self._find_first_visible_locator)
@@ -743,6 +710,10 @@ class XDeleterCore:
     def undo_repost(self, post_url: str) -> tuple[bool, str | None]:
         page = self._browser._require_page()
         return _undo_repost(page, post_url, find_locator=self._find_first_visible_locator)
+
+    def unlike_post(self, post_url: str) -> tuple[bool, str | None]:
+        page = self._browser._require_page()
+        return _unlike_post(page, post_url, find_locator=self._find_first_visible_locator)
 
     def delete_post(self, post_url: str) -> tuple[bool, str | None]:
         page = self._browser._require_page()

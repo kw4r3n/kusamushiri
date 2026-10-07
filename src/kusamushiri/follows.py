@@ -1,16 +1,15 @@
 """Collect an account's following list from X and export it to CSV or JSON."""
 
-import csv
-import json
 import threading
-from collections.abc import Callable
-from dataclasses import asdict, dataclass
+from collections.abc import Callable, Mapping
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
 
 from playwright.sync_api import Page
 
 from kusamushiri.browser import BASE_X_URL, NAVIGATION_TIMEOUT_MS
+from kusamushiri.exporting import write_records
 from kusamushiri.i18n import tr
 from kusamushiri.logger import logger
 from kusamushiri.parsing import USERNAME_PATTERN
@@ -25,9 +24,9 @@ MAX_FOLLOW_COLLECTION_CYCLES = 500
 MAX_STABLE_CYCLES = 5
 INITIAL_LOAD_TIMEOUT_SECONDS = 15.0
 RESERVED_PATHS = frozenset({"home", "explore", "i", "messages", "notifications", "search", "settings"})
-CSV_FIELDS = ("username", "display_name", "profile_url", "follows_you")
-# Leading characters that make spreadsheet apps evaluate a cell as a formula.
-FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+# X throttles unfollows much harder than deletes; pace them well apart by default.
+DEFAULT_UNFOLLOW_INTERVAL_SECONDS = 10.0
+CSV_FIELDS = ("username", "display_name", "profile_url", "follows_you", "last_post_at", "checked_at")
 
 # Emoji in names render as <img alt="…">; innerText would drop them.
 _READ_CELLS_JS = """
@@ -57,12 +56,27 @@ class FollowRecord:
     display_name: str
     profile_url: str
     follows_you: bool
+    # ISO timestamps from the last-post check; None until the account is checked.
+    last_post_at: str | None = None
+    checked_at: str | None = None
+    last_post_note: str | None = None  # why no date was found; shown in the dialog, not exported
+
+
+@dataclass(frozen=True, slots=True)
+class LastPostEntry:
+    """A stored last-post check (see last_posts.py), kept here so export requests can carry it."""
+
+    checked_at: str
+    last_post_at: str | None = None
+    note: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class ExportFollowingRequest:
     username: str
     output_path: Path
+    # Stored last-post results by lowercase username, written alongside the collected list.
+    last_posts: Mapping[str, LastPostEntry] = field(default_factory=dict)
 
     def validate(self) -> None:
         if not USERNAME_PATTERN.fullmatch(self.username.strip().removeprefix("@")):
@@ -75,6 +89,25 @@ class ExportFollowingRequest:
 class FollowCollectionResult:
     records: list[FollowRecord]
     limit_reached: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class UnfollowRequest:
+    targets: list[FollowRecord]
+    interval_seconds: float = DEFAULT_UNFOLLOW_INTERVAL_SECONDS
+
+    def validate(self) -> None:
+        if not self.targets:
+            raise ValueError(tr("フォロー解除するアカウントが選択されていません。"))
+        if self.interval_seconds < 0:
+            raise ValueError(tr("フォロー解除の間隔は0秒以上で指定してください。"))
+
+
+@dataclass(frozen=True, slots=True)
+class UnfollowResult:
+    target: FollowRecord
+    success: bool
+    error_message: str | None = None
 
 
 def parse_profile_href(href: str | None) -> str | None:
@@ -173,27 +206,6 @@ def collect_following(
     return result
 
 
-def _spreadsheet_safe(value: str) -> str:
-    return f"'{value}" if value.startswith(FORMULA_PREFIXES) else value
-
-
 def write_follow_list(path: Path, records: list[FollowRecord]) -> None:
     """Write CSV (UTF-8 with BOM, for Excel) or JSON, chosen by the file extension."""
-    if path.suffix.lower() == ".json":
-        path.write_text(
-            json.dumps([asdict(record) for record in records], ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
-        )
-        return
-    with path.open("w", encoding="utf-8-sig", newline="") as file:
-        writer = csv.writer(file)
-        writer.writerow(CSV_FIELDS)
-        for record in records:
-            writer.writerow(
-                (
-                    record.username,
-                    _spreadsheet_safe(record.display_name),
-                    record.profile_url,
-                    "true" if record.follows_you else "false",
-                )
-            )
+    write_records(path, CSV_FIELDS, [asdict(record) for record in records])

@@ -22,7 +22,9 @@ from kusamushiri.follows import (
 )
 
 RECORDS = [
-    FollowRecord("alice", "Alice 🌱", "https://x.com/alice", True),
+    FollowRecord(
+        "alice", "Alice 🌱", "https://x.com/alice", True, "2026-09-30T08:00:00+00:00", "2026-10-01T09:30:00+00:00"
+    ),
     FollowRecord("bob_2", "=HYPERLINK(\"x\")", "https://x.com/bob_2", False),
 ]
 
@@ -53,9 +55,9 @@ def test_write_follow_list_csv_is_excel_friendly(tmp_path: Path) -> None:
     with path.open(encoding="utf-8-sig", newline="") as file:
         rows = list(csv.reader(file))
     assert rows == [
-        ["username", "display_name", "profile_url", "follows_you"],
-        ["alice", "Alice 🌱", "https://x.com/alice", "true"],
-        ["bob_2", "'=HYPERLINK(\"x\")", "https://x.com/bob_2", "false"],
+        ["username", "display_name", "profile_url", "follows_you", "last_post_at", "checked_at"],
+        ["alice", "Alice 🌱", "https://x.com/alice", "true", "2026-09-30T08:00:00+00:00", "2026-10-01T09:30:00+00:00"],
+        ["bob_2", "'=HYPERLINK(\"x\")", "https://x.com/bob_2", "false", "", ""],
     ]
 
 
@@ -69,7 +71,10 @@ def test_write_follow_list_json_keeps_raw_values(tmp_path: Path) -> None:
         "display_name": "Alice 🌱",
         "profile_url": "https://x.com/alice",
         "follows_you": True,
+        "last_post_at": "2026-09-30T08:00:00+00:00",
+        "checked_at": "2026-10-01T09:30:00+00:00",
     }
+    assert data[1]["last_post_at"] is None and data[1]["checked_at"] is None
     assert data[1]["display_name"] == "=HYPERLINK(\"x\")"
 
 
