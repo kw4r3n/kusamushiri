@@ -80,6 +80,32 @@ With pip: `pip install .`, then run `kusamushiri`.
 Settings, filters, and login state are saved per profile. Profiles and logs live in your
 user data directory (e.g. `%LOCALAPPDATA%\kusamushiri` on Windows, `~/.local/share/kusamushiri` on Linux).
 
+## Command line (semi-automation)
+
+When run from source (or installed with pip), `kusamushiri-cli` does the same work without the
+window. Lists travel as the same CSV / JSON files the app exports, so you can collect, review or
+edit the file, and then run it. The prebuilt app does not include the CLI.
+
+```bash
+uv run kusamushiri-cli login --profile main                 # sign in once in the opened window
+uv run kusamushiri-cli collect --profile main --headless \
+    --since 2020-01-01 --until 2020-12-31 --exclude keep -o posts.json
+uv run kusamushiri-cli archive twitter-archive.zip --profile main --oldest-first -o old.json
+uv run kusamushiri-cli delete posts.json --profile main --headless --dry-run   # list only
+uv run kusamushiri-cli delete posts.json --profile main --headless --interval 3 --failed-output failed.json
+uv run kusamushiri-cli following --profile main --skip-mutual -o follows.csv
+uv run kusamushiri-cli last-posts follows.csv --profile main -o follows.csv
+uv run kusamushiri-cli unfollow follows.csv --profile main --headless
+```
+
+- Profiles are shared with the app. `login` always opens a window; other commands accept
+  `--headless` and stop if the profile is not signed in. Headless Chromium reports itself as `HeadlessChrome`,
+  so X may treat it differently; if a headless run fails, try it without `--headless`.
+- `delete` and `unfollow` ask for confirmation; pass `--yes` for unattended runs. Ctrl+C stops
+  after the current item, and a second Ctrl+C aborts.
+- Exit codes: 0 success, 1 some items failed, 2 invalid input, 130 interrupted.
+  Run `kusamushiri-cli COMMAND --help` for every option.
+
 ## Limitations
 
 - Changes to X's web UI can break the tool. Please open an issue if it stops working.

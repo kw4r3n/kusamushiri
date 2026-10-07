@@ -6,6 +6,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- `kusamushiri-cli` command for semi-automated runs without the window (when run from source):
+  `login`, `collect`, `archive`, `delete`, `following`, `unfollow` and `last-posts` pass the same
+  CSV / JSON lists the app exports, and `--headless` runs Chromium without a window after signing in.
 - Export an account's following list to CSV (UTF-8 with BOM for Excel) or JSON.
 - Include and exclude keyword filters. Posts are matched against their visible text, ignoring
   case and full-width/half-width differences; keywords are saved per profile.

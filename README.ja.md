@@ -72,6 +72,27 @@ pip の場合は `pip install .` のあと `kusamushiri` で起動します。
 10. リストから実行したい項目にチェックを入れ（または全選択し）、「選択項目を削除/解除」ボタンを押して実行してください。
 11. 一部の項目が失敗した場合は、詳細を確認したうえで失敗分だけ再試行できます。
 
+## コマンドライン版（半自動化）
+
+ソースから実行する場合（または pip でインストールした場合）は、`kusamushiri-cli` で同じ処理をウィンドウなしで実行できます。
+一覧はアプリが書き出すのと同じ CSV / JSON でやり取りするので、収集 → ファイルを確認・編集 → 実行 の流れで使えます。ビルド済みアプリには含まれません。
+
+```bash
+uv run kusamushiri-cli login --profile main                 # 開いたブラウザで一度だけ手動ログイン
+uv run kusamushiri-cli collect --profile main --headless \
+    --since 2020-01-01 --until 2020-12-31 --exclude 残す -o posts.json
+uv run kusamushiri-cli archive twitter-archive.zip --profile main --oldest-first -o old.json
+uv run kusamushiri-cli delete posts.json --profile main --headless --dry-run   # 対象の表示のみ
+uv run kusamushiri-cli delete posts.json --profile main --headless --interval 3 --failed-output failed.json
+uv run kusamushiri-cli following --profile main --skip-mutual -o follows.csv
+uv run kusamushiri-cli last-posts follows.csv --profile main -o follows.csv
+uv run kusamushiri-cli unfollow follows.csv --profile main --headless
+```
+
+- プロファイルはアプリと共通です。`login` は常にウィンドウを表示します。ほかのコマンドは `--headless` でウィンドウなしで動き、未ログインなら中止します。ヘッドレスの Chromium は `HeadlessChrome` と名乗るため X に別扱いされることがあり、うまくいかない場合は `--headless` なしで試してください。
+- `delete` と `unfollow` は実行前に確認します。無人で実行するときは `--yes` を付けてください。Ctrl+C で現在の項目の後に停止し、もう一度押すと即中断します。
+- 終了コード: 0 成功、1 一部失敗、2 入力エラー、130 中断。各オプションは `kusamushiri-cli COMMAND --help` で確認できます。
+
 ## 開発
 
 テスト・ビルド方法は [CONTRIBUTING.md](CONTRIBUTING.md) を参照してください。
