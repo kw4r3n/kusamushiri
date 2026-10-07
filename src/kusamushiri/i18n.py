@@ -395,6 +395,90 @@ ENGLISH: Final[dict[str, str]] = {
     "最終ポスト日の取得を中止": "Last post fetch stopped",
     "最終ポスト日の取得完了": "Last post fetch finished",
     "取得結果を保存できませんでした: {message}": "Could not save the fetched results: {message}",
+    # Command line
+    "X にログインしていません。先に `kusamushiri-cli login{hint}` を実行してください。": (
+        "Not logged in to X. Run `kusamushiri-cli login{hint}` first."
+    ),
+    "開いたブラウザで X にログインしてください（最大 {minutes} 分待ちます）。": (
+        "Sign in to X in the opened browser (waiting up to {minutes} minutes)."
+    ),
+    "ログインを確認できませんでした。": "No sign-in was detected.",
+    "{seconds} 秒以内にログインを確認できませんでした。": "No sign-in was detected within {seconds} seconds.",
+    "@{username} でログインしています。": "Logged in as @{username}.",
+    "ログインしています。": "Logged in.",
+    "ログイン中のアカウントを判別できませんでした。--user を指定してください。": (
+        "Could not tell the logged-in account; pass --user."
+    ),
+    "現在の項目が終わったら停止します（もう一度 Ctrl+C で即中断）。": (
+        "Stopping after the current item (press Ctrl+C again to abort)."
+    ),
+    "中断しました。": "Interrupted.",
+    "kusamushiri-cli: 中断しました。": "kusamushiri-cli: aborted.",
+    "kusamushiri-cli: {error}（詳細は -v を付けて実行）": "kusamushiri-cli: {error} (run with -v for details)",
+    "確認なしでは実行しません。--yes を付けてください。": "Refusing to run without confirmation; pass --yes.",
+    "{prompt} 続ける場合は yes と入力してください: ": "{prompt} Type 'yes' to continue: ",
+    "キャンセルしました。": "Cancelled.",
+    "{succeeded}/{total} 件成功。": "{succeeded}/{total} succeeded.",
+    "{succeeded}/{total} 件成功（途中で停止）。": "{succeeded}/{total} succeeded (stopped early).",
+    "失敗: {target}: {error}": "failed: {target}: {error}",
+    "失敗した {count} 件を {path} に保存しました。": "Wrote {count} failed rows to {path}.",
+    "{count} 件を {path} に保存しました。": "Wrote {count} items to {path}.",
+    "{count} 件（確認のみ、何も変更していません）。": "{count} items (dry run, nothing changed).",
+    "{path} の {count} 件を削除/解除しますか？元に戻せません。": (
+        "Delete or undo {count} items listed in {path}? This cannot be undone."
+    ),
+    "{path} の {count} 件をフォロー解除しますか？": "Unfollow {count} accounts listed in {path}?",
+    "中断したため、ファイルは保存していません。": "Stopped; no file was written.",
+    "対象のアカウントがありません。": "No accounts to process.",
+    "走査 {scanned} 件、該当 {current}/{total} 件": "scanned {scanned}, matched {current}/{total}",
+    "アーカイブを読み込み中… {done}/{total}": "Reading the archive… {done}/{total}",
+    "{count} 件取得": "collected {count}",
+    "アーカイブの {total} 件から {count} 件を選びました（リポスト {reposts} 件、削除済み {deleted} 件は対象外）。": (
+        "Selected {count} of {total} archived posts (skipped {reposts} reposts, {deleted} already deleted)."
+    ),
+    "削除済みポスト ID を保存できませんでした: {error}": "Could not save the deleted post IDs: {error}",
+    "  …ほか {count} 件": "  …and {count} more",
+    "confirm = true のため、対話できない環境では実行できません。": (
+        "confirm = true needs an interactive terminal; set confirm = false for unattended runs."
+    ),
+    "一覧のファイルを編集すると、残した行だけを実行します（行を消すと対象外）。": (
+        "Edit the list file now to change the targets: only the rows left in it are run."
+    ),
+    "{count} 件を削除/解除しますか？元に戻せません。": "Delete or undo {count} items? This cannot be undone.",
+    "削除/解除は行いませんでした。": "Nothing was deleted.",
+    "一覧が空になったため、何もしませんでした。": "The list is empty; nothing was done.",
+    "保存済みの設定があります: {path}": "Found saved settings: {path}",
+    "この設定で実行しますか？（n で設定を作り直します）": "Run with these settings? (n to set them up again)",
+    "今すぐ実行しますか？": "Run it now?",
+    "次回からは kusamushiri-cli run {path} でも実行できます。": "Next time you can also run: kusamushiri-cli run {path}",
+    "Enter キーで終了します…": "Press Enter to close…",
+    # Command-line wizard
+    "質問に答えると、掃除の設定ファイルを作ります。空欄で Enter を押すと [ ] 内の値を使います。": (
+        "Answer a few questions to create a cleanup settings file. Press Enter to accept the value in [ ]."
+    ),
+    "保存済みのプロファイル: {names}": "Saved profiles: {names}",
+    "プロファイル名": "Profile name",
+    "番号": "Number",
+    "ポストをどこから集めますか？": "Where should posts come from?",
+    "X で検索する": "Search on X",
+    "X のデータのアーカイブから読む": "Read an X data archive",
+    "アーカイブ (.zip またはフォルダ) のパス": "Path to the archive (.zip or folder)",
+    "対象": "Target",
+    "通常ポスト": "Posts",
+    "何日より前のポストを対象にしますか（0 で期間指定なし）": "Only posts older than how many days? (0 for any date)",
+    "含むキーワード（カンマ区切り、空欄で指定なし）": "Keywords to include (comma-separated, empty for none)",
+    "除外キーワード（残したいポストを守ります）": "Keywords to exclude (protects posts you want to keep)",
+    "1 回に集める上限件数": "Maximum posts per run",
+    "集めたポストを削除/解除まで行いますか？（実行前に毎回確認します）": (
+        "Also delete/undo the collected posts? (you are asked before every run)"
+    ),
+    "削除/解除の間隔（秒）": "Seconds between deletions",
+    "ブラウザのウィンドウを表示せずに実行しますか？": "Run without showing the browser window?",
+    "設定を {path} に保存しました。テキストエディタで編集できます。": (
+        "Saved the settings to {path}. You can edit it in a text editor."
+    ),
+    "数値を入力してください。": "Enter a number.",
+    "0 以上で入力してください。": "Enter 0 or greater.",
 }
 
 TRANSLATIONS: Final[dict[str, dict[str, str]]] = {"en": ENGLISH}

@@ -180,7 +180,7 @@ def test_login_timeout_reports_the_timeout(fake_core, monkeypatch, capsys) -> No
     monkeypatch.setattr(FakeCore, "is_logged_in", lambda self: False)
 
     assert cli.main(["login", "--timeout", "0"]) == cli.EXIT_FAILURE
-    assert "within 0 seconds" in capsys.readouterr().err
+    assert "0 秒以内" in capsys.readouterr().err
 
 
 def test_unexpected_errors_print_one_line(fake_core, tmp_path, monkeypatch, capsys) -> None:
@@ -305,3 +305,135 @@ def test_browser_manager_launches_headless(monkeypatch, tmp_path: Path) -> None:
 
     launch = starter.start.return_value.chromium.launch_persistent_context
     assert launch.call_args.kwargs["headless"] is True
+
+
+class SignInCore(FakeCore):
+    """Signed out until a window opens, as on a fresh profile."""
+
+    signed_in = False
+
+    def is_logged_in(self) -> bool:
+        if not self.headless:
+            SignInCore.signed_in = True
+        return SignInCore.signed_in
+
+
+def write_recipe(tmp_path: Path, text: str) -> Path:
+    path = tmp_path / "kusamushiri.toml"
+    path.write_text('profile = "work"\noutput_dir = "lists"\n' + text, encoding="utf-8")
+    return path
+
+
+def interactive(monkeypatch, answers: list[str] | None = None, on_ask=None) -> list[str]:
+    prompts: list[str] = []
+    replies = iter(answers or [])
+
+    def ask(prompt: str) -> str:
+        prompts.append(prompt)
+        if on_ask is not None:
+            on_ask()
+        return next(replies)
+
+    monkeypatch.setattr("sys.stdin", Mock(isatty=lambda: True))
+    monkeypatch.setattr("builtins.input", ask)
+    return prompts
+
+
+def test_run_deletes_only_rows_left_in_the_edited_list(fake_core, tmp_path, monkeypatch) -> None:
+    recipe = write_recipe(tmp_path, "[collect]\nkind = 'all'\n[delete]\ninterval = 0\n")
+
+    def drop_repost_row() -> None:
+        (list_path,) = (tmp_path / "lists").glob("posts-*.csv")
+        lines = list_path.read_text(encoding="utf-8-sig").splitlines()
+        list_path.write_text("\n".join(line for line in lines if ",repost," not in line) + "\n", encoding="utf-8-sig")
+
+    prompts = interactive(monkeypatch, ["y"], on_ask=drop_repost_row)
+
+    assert cli.main(["run", str(recipe)]) == 0
+
+    core = fake_core.instances[0]
+    assert core.started_profile == "work"
+    assert core.actions == [PostActionTarget("https://x.com/alice/status/1", "post")]
+    assert len(prompts) == 1
+    assert DeletedPostStore(tmp_path / "deleted.json").load() == {"1"}
+
+
+def test_run_without_delete_table_only_writes_the_list(fake_core, tmp_path, monkeypatch) -> None:
+    prompts = interactive(monkeypatch)
+
+    assert cli.main(["run", str(write_recipe(tmp_path, ""))]) == 0
+
+    assert prompts == []
+    assert fake_core.instances[0].actions == []
+    assert len(list((tmp_path / "lists").glob("posts-*.csv"))) == 1
+
+
+def test_run_with_confirm_false_needs_no_terminal(fake_core, tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr("sys.stdin", Mock(isatty=lambda: False))
+    recipe = write_recipe(tmp_path, "headless = true\n[delete]\ninterval = 0\nconfirm = false\n")
+
+    assert cli.main(["run", str(recipe)]) == 0
+
+    assert fake_core.instances[0].headless is True
+    assert len(fake_core.instances[0].actions) == 2
+
+
+def test_run_refuses_confirmation_without_terminal(fake_core, tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr("sys.stdin", Mock(isatty=lambda: False))
+
+    assert cli.main(["run", str(write_recipe(tmp_path, "[delete]\n"))]) == cli.EXIT_USAGE
+    assert fake_core.instances == []
+
+
+def test_run_answering_no_deletes_nothing(fake_core, tmp_path, monkeypatch) -> None:
+    interactive(monkeypatch, [""])
+
+    assert cli.main(["run", str(write_recipe(tmp_path, "[delete]\n"))]) == 0
+    assert fake_core.instances[0].actions == []
+
+
+def test_run_signs_in_with_a_window_before_running_headless(fake_core, tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(cli, "XDeleterCore", SignInCore)
+    monkeypatch.setattr(cli, "LOGIN_SETTLE_SECONDS", 0)
+    SignInCore.signed_in = False
+    interactive(monkeypatch)
+
+    assert cli.main(["run", str(write_recipe(tmp_path, "headless = true\n"))]) == 0
+
+    assert [core.headless for core in fake_core.instances] == [True, False, True]
+    assert all(core.stopped for core in fake_core.instances)
+
+
+def test_run_reports_invalid_recipe(fake_core, tmp_path, capsys) -> None:
+    assert cli.main(["run", str(write_recipe(tmp_path, "[collect]\nexlude = []\n"))]) == cli.EXIT_USAGE
+    assert "collect.exlude" in capsys.readouterr().err
+
+
+def test_no_arguments_without_terminal_prints_help(fake_core, monkeypatch, capsys) -> None:
+    monkeypatch.setattr("sys.stdin", Mock(isatty=lambda: False))
+
+    assert cli.main([]) == cli.EXIT_USAGE
+    assert "usage: kusamushiri-cli" in capsys.readouterr().err
+
+
+def test_no_arguments_reuses_the_saved_recipe(fake_core, tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    write_recipe(tmp_path, "")
+    # Run the saved recipe, then the closing "press Enter" prompt.
+    prompts = interactive(monkeypatch, ["y", ""])
+
+    assert cli.main([]) == 0
+
+    assert len(prompts) == 2
+    assert len(list((tmp_path / "lists").glob("posts-*.csv"))) == 1
+
+
+def test_run_from_archive_opens_the_browser_only_to_delete(fake_core, tmp_path, monkeypatch) -> None:
+    entries = [{"tweet": {"id_str": "7", "created_at": "Wed Oct 10 20:19:24 +0000 2018", "full_text": "old"}}]
+    (tmp_path / "tweets.js").write_text(f"window.YTD.tweets.part0 = {json.dumps(entries)}", encoding="utf-8")
+    interactive(monkeypatch, ["y"])
+
+    assert cli.main(["run", str(write_recipe(tmp_path, 'archive = "tweets.js"\n[delete]\ninterval = 0\n'))]) == 0
+
+    assert len(fake_core.instances) == 1
+    assert [target.url for target in fake_core.instances[0].actions] == ["https://x.com/i/status/7"]
