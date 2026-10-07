@@ -458,6 +458,9 @@ ENGLISH: Final[dict[str, str]] = {
     "新しい設定の名前（例: likes → kusamushiri-likes.toml）": "Name for the new settings (e.g. likes → kusamushiri-likes.toml)",
     "ファイル名に使える名前を入力してください。": "Enter a name that can be used as a file name.",
     "{name} は既にあります。別の名前を入力してください。": "{name} already exists. Enter another name.",
+    "質問に答えて {name} を作り直しますか？（今の内容は上書きされます）": (
+        "Set up {name} again by answering questions? (its current contents are replaced)"
+    ),
     "保存済みの設定があります: {path}": "Found saved settings: {path}",
     "この設定で実行しますか？（n で設定を作り直します）": "Run with these settings? (n to set them up again)",
     "今すぐ実行しますか？": "Run it now?",

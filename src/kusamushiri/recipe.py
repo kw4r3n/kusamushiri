@@ -365,8 +365,11 @@ _INVALID_NAME_CHARACTERS: Final = set('<>:"/\\|?*')
 
 def recipe_path_for(directory: Path, name: str) -> Path | None:
     """Map a short name like "likes" to kusamushiri-likes.toml; None if it cannot be a file name."""
-    name = name.strip().removesuffix(".toml").strip()
-    if not name or name.startswith(".") or _INVALID_NAME_CHARACTERS & set(name):
+    name = name.strip()
+    if name.casefold().endswith(".toml"):
+        name = name[: -len(".toml")].strip()
+    invalid = _INVALID_NAME_CHARACTERS & set(name) or not name.isprintable()
+    if not name or name.startswith(".") or invalid:
         return None
     if name == DEFAULT_RECIPE_NAME.removesuffix(".toml") or name.startswith("kusamushiri-"):
         return directory / f"{name}.toml"

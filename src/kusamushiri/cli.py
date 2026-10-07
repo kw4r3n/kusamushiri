@@ -667,6 +667,9 @@ def cmd_wizard(directory: Path) -> int:
             recipe = load_recipe(path)
         except RecipeError as error:
             _info(str(error))
+            # The file may not be a recipe at all; never replace it without asking.
+            if not _ask_yes_no(tr("質問に答えて {name} を作り直しますか？（今の内容は上書きされます）", name=path.name)):
+                return 0
         else:
             _info(tr("保存済みの設定があります: {path}", path=path.resolve()))
             if not _ask_yes_no(tr("この設定で実行しますか？（n で設定を作り直します）")):

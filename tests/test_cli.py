@@ -428,6 +428,18 @@ def test_no_arguments_reuses_the_saved_recipe(fake_core, tmp_path, monkeypatch) 
     assert len(list((tmp_path / "lists").glob("posts-*.csv"))) == 1
 
 
+def test_no_arguments_keeps_an_unreadable_recipe_unless_asked(fake_core, tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    notes = tmp_path / "kusamushiri-notes.toml"
+    notes.write_text("title = 'not a recipe'\n", encoding="utf-8")
+    # Pick it, decline rebuilding it, then the closing "press Enter" prompt.
+    interactive(monkeypatch, ["", "n", ""])
+
+    assert cli.main([]) == 0
+
+    assert notes.read_text(encoding="utf-8") == "title = 'not a recipe'\n"
+
+
 def test_run_from_archive_opens_the_browser_only_to_delete(fake_core, tmp_path, monkeypatch) -> None:
     entries = [{"tweet": {"id_str": "7", "created_at": "Wed Oct 10 20:19:24 +0000 2018", "full_text": "old"}}]
     (tmp_path / "tweets.js").write_text(f"window.YTD.tweets.part0 = {json.dumps(entries)}", encoding="utf-8")

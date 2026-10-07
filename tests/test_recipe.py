@@ -187,6 +187,9 @@ def test_find_recipes_lists_the_default_first(tmp_path) -> None:
         ("", None),
         ("../x", None),
         ("a:b", None),
+        ("Likes.TOML", "kusamushiri-Likes.toml"),
+        ("a\x00b", None),
+        ("a\tb", None),
         (".hidden", None),
     ],
 )
