@@ -84,7 +84,7 @@ pip の場合は `pip install .` のあと `kusamushiri` で起動します。
 2. 条件に合うポストを集め、一覧を `kusamushiri-lists/posts-<日時>.csv` に保存
 3. 先頭数件を表示し、削除してよいか確認。答える前に CSV の行を消すと、その行は対象外になります（ファイルに残った行だけを実行）
 
-次回は起動すると保存済みの設定を使うか聞かれます。`kusamushiri-cli run kusamushiri.toml` でも実行できます。設定ファイルはコメント付きのテキストなので、エディタで条件を変えられます。`[delete]` を書かなければ一覧の保存だけを行い、`[delete]` に `confirm = false` を書くと確認なしで実行します（定期実行向け）。アーカイブから読むときは `[collect]` の `order = "oldest"`（古い順）または `"newest"`（新しい順）で順番を指定できます。
+次回は起動すると保存済みの設定を使うか聞かれます。`kusamushiri-cli run kusamushiri.toml` でも実行できます。設定を複数使い分けるとき（古いポスト用といいね用など）は「新しい設定を作る」を選んで `likes` のような名前を付けると `kusamushiri-likes.toml` に保存され、次回からは今のフォルダにある `kusamushiri*.toml` の一覧から選べます。`kusamushiri-cli run kusamushiri-likes.toml` で直接実行もできます。設定ファイルはコメント付きのテキストなので、エディタで条件を変えられます。`[delete]` を書かなければ一覧の保存だけを行い、`[delete]` に `confirm = false` を書くと確認なしで実行します（定期実行向け）。アーカイブから読むときは `[collect]` の `order = "oldest"`（古い順）または `"newest"`（新しい順）で順番を指定できます。
 
 ### 個別のコマンド
 

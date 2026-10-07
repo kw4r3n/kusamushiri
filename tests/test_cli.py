@@ -419,12 +419,12 @@ def test_no_arguments_without_terminal_prints_help(fake_core, monkeypatch, capsy
 def test_no_arguments_reuses_the_saved_recipe(fake_core, tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     write_recipe(tmp_path, "")
-    # Run the saved recipe, then the closing "press Enter" prompt.
-    prompts = interactive(monkeypatch, ["y", ""])
+    # Pick the saved recipe (default), run it, then the closing "press Enter" prompt.
+    prompts = interactive(monkeypatch, ["", "y", ""])
 
     assert cli.main([]) == 0
 
-    assert len(prompts) == 2
+    assert len(prompts) == 3
     assert len(list((tmp_path / "lists").glob("posts-*.csv"))) == 1
 
 

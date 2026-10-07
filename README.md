@@ -98,6 +98,10 @@ saves them to `kusamushiri.toml`, and runs:
    to change what runs; only the rows left in the file are processed.
 
 Next time, starting it again offers to reuse `kusamushiri.toml`, or run `kusamushiri-cli run kusamushiri.toml`.
+To keep several setups (for example one for old posts and one for likes), choose "Create new settings"
+and give it a name such as `likes`; it is saved as `kusamushiri-likes.toml` next to the others.
+Each start lists every `kusamushiri*.toml` in the current folder to pick from, and
+`kusamushiri-cli run kusamushiri-likes.toml` runs one directly.
 The file is plain text with comments; edit it to change filters. Without a `[delete]` table
 a run only writes the list. `confirm = false` under `[delete]` skips the question for scheduled runs. When reading an archive, `order = "oldest"` or `"newest"` under `[collect]` picks which posts come first.
 

@@ -9,8 +9,11 @@ from kusamushiri.recipe import (
     DeleteOptions,
     Recipe,
     RecipeError,
+    choose_recipe_path,
+    find_recipes,
     format_recipe,
     load_recipe,
+    recipe_path_for,
     run_wizard,
     save_recipe,
 )
@@ -160,3 +163,57 @@ def test_wizard_asks_the_archive_order(tmp_path, monkeypatch, answer: str, oldes
 
     assert recipe.archive == "archive.zip"
     assert recipe.collect.oldest_first is oldest_first
+
+
+def test_find_recipes_lists_the_default_first(tmp_path) -> None:
+    for name in ("kusamushiri-likes.toml", "kusamushiri.toml", "kusamushiri-a.toml", "pyproject.toml"):
+        (tmp_path / name).write_text("", encoding="utf-8")
+
+    assert [path.name for path in find_recipes(tmp_path)] == [
+        "kusamushiri.toml",
+        "kusamushiri-a.toml",
+        "kusamushiri-likes.toml",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        ("likes", "kusamushiri-likes.toml"),
+        (" likes.toml ", "kusamushiri-likes.toml"),
+        ("kusamushiri-likes", "kusamushiri-likes.toml"),
+        ("kusamushiri", "kusamushiri.toml"),
+        ("古いポスト", "kusamushiri-古いポスト.toml"),
+        ("", None),
+        ("../x", None),
+        ("a:b", None),
+        (".hidden", None),
+    ],
+)
+def test_recipe_path_for_names(tmp_path, name: str, expected: str | None) -> None:
+    path = recipe_path_for(tmp_path, name)
+    assert (path.name if path else None) == expected
+    assert path is None or path.parent == tmp_path
+
+
+def test_choose_recipe_path_defaults_without_saved_recipes(tmp_path) -> None:
+    def ask(_prompt: str) -> str:
+        raise AssertionError("no question expected")
+
+    assert choose_recipe_path(tmp_path, ask=ask) == tmp_path / "kusamushiri.toml"
+
+
+def test_choose_recipe_path_picks_a_saved_recipe(tmp_path) -> None:
+    (tmp_path / "kusamushiri.toml").write_text("", encoding="utf-8")
+    (tmp_path / "kusamushiri-likes.toml").write_text("", encoding="utf-8")
+    answers = iter(["2"])
+
+    assert choose_recipe_path(tmp_path, ask=lambda _prompt: next(answers)) == tmp_path / "kusamushiri-likes.toml"
+
+
+def test_choose_recipe_path_names_a_new_recipe(tmp_path) -> None:
+    (tmp_path / "kusamushiri.toml").write_text("", encoding="utf-8")
+    (tmp_path / "kusamushiri-likes.toml").write_text("", encoding="utf-8")
+    answers = iter(["3", "", "a/b", "likes", "old"])  # new; empty, invalid and taken names are asked again
+
+    assert choose_recipe_path(tmp_path, ask=lambda _prompt: next(answers)) == tmp_path / "kusamushiri-old.toml"

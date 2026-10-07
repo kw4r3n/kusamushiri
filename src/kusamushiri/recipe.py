@@ -354,6 +354,52 @@ def _ask_choice(ask: Ask, prompt: str, choices: list[tuple[str, str]], default: 
             return choices[int(answer) - 1][0]
 
 
+def find_recipes(directory: Path) -> list[Path]:
+    """Return the saved recipes (kusamushiri*.toml) in `directory`, the default one first."""
+    paths = sorted(path for path in directory.glob("kusamushiri*.toml") if path.is_file())
+    return sorted(paths, key=lambda path: path.name != DEFAULT_RECIPE_NAME)
+
+
+_INVALID_NAME_CHARACTERS: Final = set('<>:"/\\|?*')
+
+
+def recipe_path_for(directory: Path, name: str) -> Path | None:
+    """Map a short name like "likes" to kusamushiri-likes.toml; None if it cannot be a file name."""
+    name = name.strip().removesuffix(".toml").strip()
+    if not name or name.startswith(".") or _INVALID_NAME_CHARACTERS & set(name):
+        return None
+    if name == DEFAULT_RECIPE_NAME.removesuffix(".toml") or name.startswith("kusamushiri-"):
+        return directory / f"{name}.toml"
+    return directory / f"kusamushiri-{name}.toml"
+
+
+def _ask_new_recipe_path(directory: Path, ask: Ask) -> Path:
+    while True:
+        name = _ask_text(ask, tr("新しい設定の名前（例: likes → kusamushiri-likes.toml）"))
+        path = recipe_path_for(directory, name)
+        if path is None:
+            print(tr("ファイル名に使える名前を入力してください。"))
+        elif path.exists():
+            print(tr("{name} は既にあります。別の名前を入力してください。", name=path.name))
+        else:
+            return path
+
+
+def choose_recipe_path(directory: Path, ask: Ask = input) -> Path:
+    """Let the user pick a saved recipe or name a new one; the path does not exist for a new one."""
+    paths = find_recipes(directory)
+    if not paths:
+        return directory / DEFAULT_RECIPE_NAME
+    new = ""
+    choice = _ask_choice(
+        ask,
+        tr("どの設定を使いますか？"),
+        [*((str(path), path.name) for path in paths), (new, tr("新しい設定を作る"))],
+        str(paths[0]),
+    )
+    return Path(choice) if choice != new else _ask_new_recipe_path(directory, ask)
+
+
 def run_wizard(path: Path, ask: Ask = input) -> Recipe:
     """Ask for the usual settings, save them to `path`, and return the recipe."""
     print(tr("質問に答えると、掃除の設定ファイルを作ります。空欄で Enter を押すと [ ] 内の値を使います。"))

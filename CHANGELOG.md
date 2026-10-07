@@ -9,6 +9,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `kusamushiri-cli`, included in the downloads, for semi-automated runs without the window.
   Started without arguments it asks for the filters once, saves them to `kusamushiri.toml`, and
   then signs in, collects, saves the list for review and asks before deleting; `run FILE` repeats it.
+  Several named setups (`kusamushiri-<name>.toml`) can be kept side by side and picked at start.
   The subcommands `login`, `collect`, `archive`, `delete`, `following`, `unfollow` and `last-posts`
   pass the same CSV / JSON lists the app exports, and `--headless` runs Chromium without a window.
 - Export an account's following list to CSV (UTF-8 with BOM for Excel) or JSON.

@@ -53,6 +53,7 @@ from kusamushiri.recipe import (
     CollectOptions,
     Recipe,
     RecipeError,
+    choose_recipe_path,
     load_recipe,
     run_wizard,
 )
@@ -657,8 +658,9 @@ def cmd_run(args: argparse.Namespace) -> int:
     return run_recipe(recipe, interactive=sys.stdin.isatty())
 
 
-def cmd_wizard(path: Path) -> int:
-    """Reuse the saved recipe or build one with questions, then run it."""
+def cmd_wizard(directory: Path) -> int:
+    """Pick a saved recipe in `directory` or build one with questions, then run it."""
+    path = choose_recipe_path(directory, ask=_ask)
     recipe: Recipe | None = None
     if path.exists():
         try:
@@ -826,7 +828,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     configure_frozen_browser_path()
     try:
         if wizard:
-            return cmd_wizard(Path(DEFAULT_RECIPE_NAME))
+            return cmd_wizard(Path())
         handler: Callable[[argparse.Namespace], int] = args.handler
         return handler(args)
     except CliError as error:
