@@ -74,22 +74,33 @@ pip の場合は `pip install .` のあと `kusamushiri` で起動します。
 
 ## コマンドライン版（半自動化）
 
-ソースから実行する場合（または pip でインストールした場合）は、`kusamushiri-cli` で同じ処理をウィンドウなしで実行できます。
-一覧はアプリが書き出すのと同じ CSV / JSON でやり取りするので、収集 → ファイルを確認・編集 → 実行 の流れで使えます。ビルド済みアプリには含まれません。
+ダウンロードしたファイルには `kusamushiri-cli` も入っています（Windows: `kusamushiri-cli.exe`、macOS: `kusamushiri.app/Contents/MacOS/kusamushiri-cli`、ソースから: `uv run kusamushiri-cli`）。追加のインストールは不要です。
+
+### かんたんな使い方: 一度質問に答えれば、あとは繰り返すだけ
+
+`kusamushiri-cli` を引数なしで起動します（Windows では `kusamushiri-cli.exe` をダブルクリック）。プロファイル、条件（「30 日より前」「残したいキーワード」など）、削除まで行うかを質問形式で聞き、`kusamushiri.toml` に保存して次の流れで実行します。
+
+1. 必要ならログイン（初回はブラウザのウィンドウが開きます）
+2. 条件に合うポストを集め、一覧を `kusamushiri-lists/posts-<日時>.csv` に保存
+3. 先頭数件を表示し、削除してよいか確認。答える前に CSV の行を消すと、その行は対象外になります（ファイルに残った行だけを実行）
+
+次回は起動すると保存済みの設定を使うか聞かれます。`kusamushiri-cli run kusamushiri.toml` でも実行できます。設定ファイルはコメント付きのテキストなので、エディタで条件を変えられます。`[delete]` を書かなければ一覧の保存だけを行い、`[delete]` に `confirm = false` を書くと確認なしで実行します（定期実行向け）。
+
+### 個別のコマンド
 
 ```bash
-uv run kusamushiri-cli login --profile main                 # 開いたブラウザで一度だけ手動ログイン
-uv run kusamushiri-cli collect --profile main --headless \
-    --since 2020-01-01 --until 2020-12-31 --exclude 残す -o posts.json
-uv run kusamushiri-cli archive twitter-archive.zip --profile main --oldest-first -o old.json
-uv run kusamushiri-cli delete posts.json --profile main --headless --dry-run   # 対象の表示のみ
-uv run kusamushiri-cli delete posts.json --profile main --headless --interval 3 --failed-output failed.json
-uv run kusamushiri-cli following --profile main --skip-mutual -o follows.csv
-uv run kusamushiri-cli last-posts follows.csv --profile main -o follows.csv
-uv run kusamushiri-cli unfollow follows.csv --profile main --headless
+kusamushiri-cli login --profile main                 # 開いたブラウザで一度だけ手動ログイン
+kusamushiri-cli collect --profile main --headless --older-than 30 --exclude 残す -o posts.json
+kusamushiri-cli archive twitter-archive.zip --profile main --oldest-first -o old.json
+kusamushiri-cli delete posts.json --profile main --headless --dry-run   # 対象の表示のみ
+kusamushiri-cli delete posts.json --profile main --headless --interval 3 --failed-output failed.json
+kusamushiri-cli following --profile main --skip-mutual -o follows.csv
+kusamushiri-cli last-posts follows.csv --profile main -o follows.csv
+kusamushiri-cli unfollow follows.csv --profile main --headless
 ```
 
-- プロファイルはアプリと共通です。`login` は常にウィンドウを表示します。ほかのコマンドは `--headless` でウィンドウなしで動き、未ログインなら中止します。ヘッドレスの Chromium は `HeadlessChrome` と名乗るため X に別扱いされることがあり、うまくいかない場合は `--headless` なしで試してください。
+- 一覧はアプリが書き出すのと同じ CSV / JSON で、プロファイルもアプリと共通です。
+- `login` は常にウィンドウを表示します。ほかのコマンドは `--headless` でウィンドウなしで動き、未ログインなら中止します。ヘッドレスの Chromium は `HeadlessChrome` と名乗るため X に別扱いされることがあり、うまくいかない場合は `--headless` なしで試してください。
 - `delete` と `unfollow` は実行前に確認します。無人で実行するときは `--yes` を付けてください。Ctrl+C で現在の項目の後に停止し、もう一度押すと即中断します。
 - 終了コード: 0 成功、1 一部失敗、2 入力エラー、130 中断。各オプションは `kusamushiri-cli COMMAND --help` で確認できます。
 

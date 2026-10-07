@@ -82,27 +82,44 @@ user data directory (e.g. `%LOCALAPPDATA%\kusamushiri` on Windows, `~/.local/sha
 
 ## Command line (semi-automation)
 
-When run from source (or installed with pip), `kusamushiri-cli` does the same work without the
-window. Lists travel as the same CSV / JSON files the app exports, so you can collect, review or
-edit the file, and then run it. The prebuilt app does not include the CLI.
+The download also contains `kusamushiri-cli` (Windows: `kusamushiri-cli.exe`, macOS:
+`kusamushiri.app/Contents/MacOS/kusamushiri-cli`, from source: `uv run kusamushiri-cli`).
+Nothing else needs installing.
+
+### The easy way: answer questions once, then repeat
+
+Start `kusamushiri-cli` without arguments (on Windows, double-click `kusamushiri-cli.exe`).
+It asks for the profile, filters (e.g. "older than 30 days", keywords to keep) and whether to delete,
+saves them to `kusamushiri.toml`, and runs:
+
+1. Signs in if needed (a browser window opens the first time).
+2. Collects the matching posts and saves the list to `kusamushiri-lists/posts-<date>.csv`.
+3. Shows a preview and asks before deleting. Edit or delete rows in the CSV before answering
+   to change what runs; only the rows left in the file are processed.
+
+Next time, starting it again offers to reuse `kusamushiri.toml`, or run `kusamushiri-cli run kusamushiri.toml`.
+The file is plain text with comments; edit it to change filters. Without a `[delete]` table
+a run only writes the list. `confirm = false` under `[delete]` skips the question for scheduled runs.
+
+### Individual commands
 
 ```bash
-uv run kusamushiri-cli login --profile main                 # sign in once in the opened window
-uv run kusamushiri-cli collect --profile main --headless \
-    --since 2020-01-01 --until 2020-12-31 --exclude keep -o posts.json
-uv run kusamushiri-cli archive twitter-archive.zip --profile main --oldest-first -o old.json
-uv run kusamushiri-cli delete posts.json --profile main --headless --dry-run   # list only
-uv run kusamushiri-cli delete posts.json --profile main --headless --interval 3 --failed-output failed.json
-uv run kusamushiri-cli following --profile main --skip-mutual -o follows.csv
-uv run kusamushiri-cli last-posts follows.csv --profile main -o follows.csv
-uv run kusamushiri-cli unfollow follows.csv --profile main --headless
+kusamushiri-cli login --profile main                 # sign in once in the opened window
+kusamushiri-cli collect --profile main --headless --older-than 30 --exclude keep -o posts.json
+kusamushiri-cli archive twitter-archive.zip --profile main --oldest-first -o old.json
+kusamushiri-cli delete posts.json --profile main --headless --dry-run   # list only
+kusamushiri-cli delete posts.json --profile main --headless --interval 3 --failed-output failed.json
+kusamushiri-cli following --profile main --skip-mutual -o follows.csv
+kusamushiri-cli last-posts follows.csv --profile main -o follows.csv
+kusamushiri-cli unfollow follows.csv --profile main --headless
 ```
 
-- Profiles are shared with the app. `login` always opens a window; other commands accept
-  `--headless` and stop if the profile is not signed in. Headless Chromium reports itself as `HeadlessChrome`,
-  so X may treat it differently; if a headless run fails, try it without `--headless`.
+- Lists are the same CSV / JSON files the app exports, and profiles are shared with the app.
+- `login` always opens a window; other commands accept `--headless` and stop if the profile is
+  not signed in. Headless Chromium reports itself as `HeadlessChrome`, so X may treat it differently;
+  if a headless run fails, try it without `--headless`.
 - `delete` and `unfollow` ask for confirmation; pass `--yes` for unattended runs. Ctrl+C stops
-  after the current item, and a second Ctrl+C aborts.
+  after the current item, and a second Ctrl+C aborts. Messages are in Japanese; add `--lang en` for English.
 - Exit codes: 0 success, 1 some items failed, 2 invalid input, 130 interrupted.
   Run `kusamushiri-cli COMMAND --help` for every option.
 
