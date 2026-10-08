@@ -20,6 +20,9 @@ from kusamushiri.paths import DEFAULT_ACCOUNT_NAME
 class FakeCore:
     """Mock XDeleterCore for integration testing."""
 
+    rate_limit_status: int | None = None
+
+
     def __init__(self) -> None:
         self.calls: list[str] = []
         self.account_name: str | None = None

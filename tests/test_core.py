@@ -472,6 +472,9 @@ def test_browser_manager_restarts_when_profile_changes(monkeypatch, tmp_path) ->
                 def new_page(self):
                     return object()
 
+                def on(self, _event, _handler):
+                    pass
+
             return Context()
 
     class Playwright:

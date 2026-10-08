@@ -7,7 +7,7 @@ from datetime import date, timedelta
 from pathlib import Path
 from urllib.parse import quote, urljoin, urlparse
 
-from playwright.sync_api import Browser, BrowserContext, Locator, Page, Playwright
+from playwright.sync_api import Browser, BrowserContext, Locator, Page, Playwright, Response
 
 from kusamushiri import actions
 from kusamushiri.actions import OWNED_TIMESTAMP_LINK_SELECTOR, POST_ARTICLE_SELECTOR
@@ -88,6 +88,13 @@ MEDIA_SELECTORS = (
 )
 
 
+def rate_limit_message(status: int) -> str:
+    return tr(
+        "X の利用制限 (HTTP {status}) を検出したため処理を中断しました。しばらく待ってから再試行してください。",
+        status=status,
+    )
+
+
 @dataclass(slots=True)
 class ArticleProcessingResult:
     collected_in_cycle: int
@@ -108,12 +115,27 @@ class XDeleterCore:
         self._browser = BrowserManager(headless=headless)
         self._cancel_event = threading.Event()
         self.collection_limit_reached = False
+        # Status of the first rate-limited response since the last clear_cancel(), if any.
+        self.rate_limit_status: int | None = None
+        # Also called on a rate limit, so a caller with its own cancellation stops too.
+        self.on_rate_limited: Callable[[], None] | None = None
+        self._browser.on_rate_limited = self._stop_on_rate_limit
+
+    def _stop_on_rate_limit(self, response: Response) -> None:
+        # Pressing on after X starts refusing requests only extends the limit; stop the whole run.
+        if self.rate_limit_status is None:
+            logger.warning("X rate limited a request (HTTP %s): %s. Stopping.", response.status, response.url)
+            self.rate_limit_status = response.status
+        self.request_cancel()
+        if self.on_rate_limited is not None:
+            self.on_rate_limited()
 
     def request_cancel(self) -> None:
         self._cancel_event.set()
 
     def clear_cancel(self) -> None:
         self._cancel_event.clear()
+        self.rate_limit_status = None
 
     def is_cancel_requested(self) -> bool:
         return self._cancel_event.is_set()

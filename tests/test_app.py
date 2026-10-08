@@ -20,6 +20,9 @@ from kusamushiri.models import CollectRequest, ExecuteActionsRequest, PostAction
 
 
 class FakeCore:
+    rate_limit_status: int | None = None
+    on_rate_limited: Callable[[], None] | None = None
+
     def __init__(self) -> None:
         self.page: object | None = object()
         self.calls: list[str] = []
@@ -57,6 +60,7 @@ class FakeCore:
 
     def clear_cancel(self) -> None:
         self.cancel_requested = False
+        self.rate_limit_status = None
 
     def _raise_if_configured(self, method_name: str) -> None:
         if self.fail_on == method_name:
@@ -108,6 +112,12 @@ class FakeCore:
         self.calls.append(f"unfollow_account:{username}")
         if username == "rate_limited":
             return False, "friendships/destroy.json がエラーを返しました: Rate limit"
+        if username == "http429":
+            self.rate_limit_status = 429
+            self.request_cancel()
+            if self.on_rate_limited is not None:
+                self.on_rate_limited()
+            return False, "HTTP 429"
         return True, None
 
     def fetch_last_post(self, username: str) -> LastPostResult:
@@ -492,6 +502,24 @@ def test_worker_cancels_unfollow_batch_during_interval(qtbot: object) -> None:
     worker.shutdown()
     assert len(completed[0]) <= 1
     assert "unfollow_account:bob" not in core.calls
+
+
+def test_worker_stops_unfollow_batch_when_rate_limited(qtbot: object) -> None:
+    core = FakeCore()
+    worker = XDeleterWorker(core=core)
+    completed: list[list[UnfollowResult]] = []
+    errors: list[str] = []
+    worker.events.unfollow_completed.connect(completed.append)
+    worker.events.rate_limited.connect(errors.append)
+
+    # The interval wait must wake up on the rate limit instead of sleeping it out.
+    worker.enqueue_unfollow(UnfollowRequest(targets=[_follow("http429"), _follow("bob")], interval_seconds=30))
+
+    wait_until(qtbot, lambda: len(completed) == 1 and len(errors) == 1)
+    worker.shutdown()
+    assert [result.target.username for result in completed[0]] == ["http429"]
+    assert "unfollow_account:bob" not in core.calls
+    assert "HTTP 429" in errors[0]
 
 
 def test_unfollow_request_rejects_empty_targets_and_negative_interval() -> None:

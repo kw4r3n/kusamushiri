@@ -32,6 +32,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Fetch the last post date of checked followed accounts (pinned posts and reposts are ignored) and
   record when it was fetched; results are kept per profile, shown as sortable columns, and exported.
 
+### Changed
+- A run stops as soon as X answers with HTTP 429 (rate limit) instead of moving on to the next
+  item, in both the app and the CLI.
+
 ## [0.3.0] - 2026-10-01
 
 First public release.

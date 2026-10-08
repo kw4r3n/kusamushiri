@@ -735,6 +735,29 @@ def test_stop_keeps_controls_locked_until_browser_stopped(window, monkeypatch) -
     assert not window._busy
 
 
+def test_rate_limited_delete_reports_stop_instead_of_retry(window, monkeypatch) -> None:
+    dialogs: list[str] = []
+    monkeypatch.setattr("PySide6.QtWidgets.QMessageBox.warning", lambda _parent, title, _text: dialogs.append(title))
+    monkeypatch.setattr("PySide6.QtWidgets.QMessageBox.exec", lambda _box: dialogs.append("retry"))
+    window.display_posts([_sample(), _sample(id="2", url="https://x.com/user/status/2")])
+    window._requested_action_count = 2
+
+    window.on_rate_limited("X の利用制限 (HTTP 429)")
+    window.on_delete_done([
+        PostActionResult(
+            target=PostActionTarget(url="https://x.com/user/status/1", kind="post"),
+            action_label="削除",
+            success=False,
+            error_message="HTTP 429",
+        )
+    ])
+
+    assert dialogs == ["X の利用制限"]
+    assert window.status_label.text() == "削除/解除処理を中止: 0 / 2 件成功（1 件失敗、1 件未処理）"
+    assert not window._busy
+    assert window._rate_limit_message is None
+
+
 def test_retry_failed_rechecks_account_match(window, monkeypatch) -> None:
     emitted: list[object] = []
     window.delete_requested.connect(emitted.append)

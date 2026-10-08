@@ -3,7 +3,8 @@ from unittest.mock import Mock
 import pytest
 from playwright.sync_api import Error as PlaywrightError
 
-from kusamushiri.browser import BrowserManager
+from kusamushiri.browser import BrowserManager, is_rate_limit_response
+from kusamushiri.core import XDeleterCore
 
 
 @pytest.mark.parametrize("page_state", ["open", "closed", "pending_close"])
@@ -31,6 +32,7 @@ def test_start_reuses_only_open_page(monkeypatch, tmp_path, page_state):
         old_playwright.stop.assert_called_once()
         assert manager.context is new_context
         assert manager.page is new_context.pages[0]
+        new_context.on.assert_called_once_with("response", manager._watch_response)
     else:
         old_context.close.assert_not_called()
         old_playwright.stop.assert_not_called()
@@ -94,3 +96,35 @@ def test_start_installs_chromium_only_when_executable_is_missing(monkeypatch, tm
             manager.start(tmp_path)
         install.assert_not_called()
         assert manager.context is None
+
+
+@pytest.mark.parametrize(
+    ("url", "status", "expected"),
+    [
+        ("https://x.com/i/api/graphql/abc/DeleteTweet", 429, True),
+        ("https://api.x.com/1.1/friendships/destroy.json", 429, True),
+        ("https://twitter.com/i/api/2/timeline", 420, True),
+        ("https://x.com/i/api/graphql/abc/DeleteTweet", 500, False),
+        ("https://pbs.twimg.com/media/a.jpg", 429, False),
+        ("https://notx.com/", 429, False),
+    ],
+)
+def test_is_rate_limit_response(url, status, expected):
+    assert is_rate_limit_response(url, status) is expected
+
+
+def test_rate_limited_response_cancels_core_until_cleared():
+    core = XDeleterCore()
+    core.on_rate_limited = Mock()
+    response = Mock(url="https://x.com/i/api/graphql/abc/DeleteTweet", status=429)
+
+    core._browser._watch_response(Mock(url="https://x.com/home", status=200))
+    assert not core.is_cancel_requested()
+    core._browser._watch_response(response)
+
+    assert core.is_cancel_requested()
+    assert core.rate_limit_status == 429
+    core.on_rate_limited.assert_called_once_with()
+    core.clear_cancel()
+    assert not core.is_cancel_requested()
+    assert core.rate_limit_status is None

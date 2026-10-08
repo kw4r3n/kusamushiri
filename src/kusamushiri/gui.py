@@ -195,6 +195,7 @@ class XDeleterWindow(QMainWindow):
         self._browser_running = False
         self._login_verified = False
         self._stop_pending = False
+        self._rate_limit_message: str | None = None
         self._requested_action_count = 0
         self._requested_unfollow_count = 0
         self._requested_last_post_count = 0
@@ -785,8 +786,24 @@ class XDeleterWindow(QMainWindow):
         )
         self.check_login_requested.emit()
 
+    def on_rate_limited(self, message: str) -> None:
+        # The job's result arrives next; it reports a stop and shows this instead of offering a retry.
+        self._rate_limit_message = message
+
+    def _job_stopped(self) -> bool:
+        """Whether the finishing job was stopped by the user or by a rate limit."""
+        return self._stop_pending or self._rate_limit_message is not None
+
+    def _show_rate_limit(self, parent: QWidget | None = None) -> bool:
+        message, self._rate_limit_message = self._rate_limit_message, None
+        if message is None:
+            return False
+        QMessageBox.warning(parent or self, tr("X の利用制限"), message)
+        return True
+
     def show_error(self, message: str) -> None:
         self._stop_pending = False
+        self._rate_limit_message = None
         self.set_busy(False)
         QMessageBox.critical(self, tr("エラー"), message)
 
@@ -1286,6 +1303,7 @@ class XDeleterWindow(QMainWindow):
             )
         self.hide_progress()
         self._update_filter_summary(self._last_collect_request)
+        self._show_rate_limit()
 
     def on_collection_progress(self, scanned: int, current: int, total: int) -> None:
         self.update_status(tr("対象を収集中: {scanned} 件走査済み ({current}/{total})", scanned=scanned, current=current, total=total))
@@ -1327,7 +1345,7 @@ class XDeleterWindow(QMainWindow):
 
     def on_following_export_finished(self, path: str, count: int) -> None:
         self.set_busy(False)
-        if not path:
+        if self._show_rate_limit() or not path:
             return
         self.update_status(tr("フォローリスト {count} 件を保存しました: {path}", count=count, path=path))
         QMessageBox.information(self, tr("エクスポート完了"), tr("{count} 件のフォローを保存しました。\n{path}", count=count, path=path))
@@ -1357,12 +1375,13 @@ class XDeleterWindow(QMainWindow):
         return self.follow_dialog
 
     def on_following_collected(self, username: str, records: list[FollowRecord], limit_reached: bool) -> None:
-        stopped = self._stop_pending
+        stopped = self._job_stopped()
         dialog = self._ensure_follow_dialog()
         dialog.set_records(username, records, limit_reached)
         dialog.apply_last_posts(self._load_last_posts())
         self.set_busy(False)
         if stopped:
+            self._show_rate_limit()
             return
         self.update_status(tr("フォロー {count} 件を取得しました。", count=len(records)))
         dialog.show()
@@ -1424,7 +1443,7 @@ class XDeleterWindow(QMainWindow):
             }
         if self.follow_dialog is not None:
             self.follow_dialog.apply_last_posts(entries)
-        stopped = self._stop_pending
+        stopped = self._job_stopped()
         self.set_busy(False)
         heading = tr("最終ポスト日の取得を中止") if stopped else tr("最終ポスト日の取得完了")
         message = tr("{heading}: {success} / {requested} 件成功", heading=heading, success=succeeded, requested=requested)
@@ -1440,7 +1459,10 @@ class XDeleterWindow(QMainWindow):
                 tr("エラー"),
                 tr("取得結果を保存できませんでした: {message}", message=save_error),
             )
-        if stopped or not failures:
+        if stopped:
+            self._show_rate_limit(self.follow_dialog)
+            return
+        if not failures:
             return
         box = QMessageBox(self.follow_dialog or self)
         box.setIcon(QMessageBox.Icon.Warning)
@@ -1503,7 +1525,7 @@ class XDeleterWindow(QMainWindow):
         skipped = requested - len(results)
         if self.follow_dialog is not None:
             self.follow_dialog.remove_usernames(succeeded)
-        stopped = self._stop_pending
+        stopped = self._job_stopped()
         self.set_busy(False)
         heading = tr("フォロー解除を中止") if stopped else tr("フォロー解除完了")
         message = tr("{heading}: {success} / {requested} 件成功", heading=heading, success=len(succeeded), requested=requested)
@@ -1514,6 +1536,7 @@ class XDeleterWindow(QMainWindow):
             message += tr("（{notes}）", notes=tr("、").join(notes))
         self.update_status(message)
         if stopped:
+            self._show_rate_limit(self.follow_dialog)
             return
         parent = self.follow_dialog or self
         if not failures:
@@ -1645,7 +1668,7 @@ class XDeleterWindow(QMainWindow):
                 tr("選択した項目をすべて処理しました"),
                 tr("続けて整理する場合は、条件を指定してもう一度収集してください。"),
             )
-        stopped = self._stop_pending
+        stopped = self._job_stopped()
         self.set_busy(False)
         heading = tr("削除/解除処理を中止") if stopped else tr("削除/解除処理完了")
         message = tr("{heading}: {success} / {requested} 件成功", heading=heading, success=success_count, requested=requested)
@@ -1661,6 +1684,7 @@ class XDeleterWindow(QMainWindow):
             )
         if stopped:
             # The stop dialog already had the user's attention; report in the status line.
+            self._show_rate_limit()
             return
         if not failures:
             QMessageBox.information(self, tr("完了"), message)

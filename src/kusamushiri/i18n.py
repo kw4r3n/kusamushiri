@@ -256,8 +256,12 @@ ENGLISH: Final[dict[str, str]] = {
     "対象ポストの読み込み": "Loading the target post",
     "「…」メニューボタンの表示待ち": "Waiting for the \"…\" menu button",
     "削除メニューが見つかりませんでした。": "Could not find the delete menu.",
-    "X の利用制限 (HTTP 429) でポストを表示できませんでした。しばらく待ってから再試行してください。": (
-        "X is rate limiting (HTTP 429) and did not show the post. Wait a while and try again."
+    "X の利用制限": "X rate limit",
+    "X の利用制限 (HTTP {status}) を検出したため処理を中断しました。しばらく待ってから再試行してください。": (
+        "X is rate limiting (HTTP {status}), so the run stopped. Wait a while and try again."
+    ),
+    "X の利用制限 (HTTP {status}) でポストを表示できませんでした。しばらく待ってから再試行してください。": (
+        "X is rate limiting (HTTP {status}) and did not show the post. Wait a while and try again."
     ),
     "ポストが表示されませんでした。削除済み・非公開か、X の利用制限の可能性があります。時間をおいて再試行してください。": (
         "The post did not appear. It may be deleted or protected, or X may be rate limiting. Try again later."
