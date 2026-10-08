@@ -8,7 +8,7 @@ from PySide6.QtGui import QColor, QPalette
 from PySide6.QtWidgets import QApplication
 
 from kusamushiri.actions import action_label_for
-from kusamushiri.core import XDeleterCore
+from kusamushiri.core import XDeleterCore, rate_limit_message
 from kusamushiri.follows import ExportFollowingRequest, UnfollowRequest, UnfollowResult, write_follow_list
 from kusamushiri.gui import XDeleterWindow
 from kusamushiri.i18n import set_language, tr
@@ -133,6 +133,7 @@ class XDeleterWorkerEvents(QObject):
     last_post_progress = Signal(str, int, int)
     last_posts_completed = Signal(list)
     error_occurred = Signal(str)
+    rate_limited = Signal(str)  # sent before the stopped job's result signal
 
 
 class XDeleterWorker:
@@ -216,6 +217,18 @@ class XDeleterWorker:
                 core.clear_cancel()
             return True
 
+    def _emit_rate_limit(self, core: XDeleterCore) -> None:
+        """Tell the window before the job's own result, so the result reads as a stop, not a retryable failure."""
+        if core.rate_limit_status is None:
+            return
+        message = rate_limit_message(core.rate_limit_status)
+        self.events.status_changed.emit(message)
+        self.events.rate_limited.emit(message)
+
+    def _report_stop(self, core: XDeleterCore, cancelled_message: str) -> None:
+        if core.rate_limit_status is None and self._cancel_event.is_set():
+            self.events.status_changed.emit(cancelled_message)
+
     def _require_running_core(self, core: XDeleterCore) -> XDeleterCore:
         if core.page is None:
             raise RuntimeError(tr("先にブラウザを起動してログインしてください。"))
@@ -224,6 +237,8 @@ class XDeleterWorker:
     def _run(self) -> None:
         logger.info("Starting Playwright backend thread.")
         core = self._core if self._core is not None else XDeleterCore()
+        # A rate limit cancels like the stop button, including commands queued behind it.
+        core.on_rate_limited = self.cancel_current_operation
         with self._command_lock:
             self._active_core = core
         while True:
@@ -283,9 +298,10 @@ class XDeleterWorker:
                             scanned, current, total
                         ),
                     )
+                    self._emit_rate_limit(core)
                     self.events.posts_collected.emit(posts)
                     if self._cancel_event.is_set():
-                        self.events.status_changed.emit(tr("収集処理を中断しました。"))
+                        self._report_stop(core, tr("収集処理を中断しました。"))
                     elif core.collection_limit_reached:
                         self.events.status_changed.emit(tr("収集の安全上限に到達したため走査を終了しました。"))
                     continue
@@ -313,9 +329,9 @@ class XDeleterWorker:
                         if interval_seconds > 0 and index < total and self._cancel_event.wait(interval_seconds):
                             break
                     logger.info("Finished delete batch: %s/%s succeeded", success_count, total)
+                    self._emit_rate_limit(core)
                     self.events.delete_completed.emit(results)
-                    if self._cancel_event.is_set():
-                        self.events.status_changed.emit(tr("削除/解除処理を中断しました。"))
+                    self._report_stop(core, tr("削除/解除処理を中断しました。"))
                     continue
 
                 if isinstance(command, ExportFollowingCommand):
@@ -325,6 +341,7 @@ class XDeleterWorker:
                         on_progress=self.events.following_progress.emit,
                     )
                     if self._cancel_event.is_set():
+                        self._emit_rate_limit(core)
                         self.events.following_export_finished.emit("", len(result.records))
                         self.events.status_changed.emit(tr("フォローリストの取得を中断しました。ファイルは保存していません。"))
                         continue
@@ -346,8 +363,8 @@ class XDeleterWorker:
                         command.username,
                         on_progress=self.events.following_progress.emit,
                     )
-                    if self._cancel_event.is_set():
-                        self.events.status_changed.emit(tr("フォローリストの取得を中断しました。"))
+                    self._emit_rate_limit(core)
+                    self._report_stop(core, tr("フォローリストの取得を中断しました。"))
                     self.events.following_collected.emit(
                         command.username, result.records, result.limit_reached
                     )
@@ -372,9 +389,9 @@ class XDeleterWorker:
                         sum(1 for result in unfollow_results if result.success),
                         len(targets),
                     )
+                    self._emit_rate_limit(core)
                     self.events.unfollow_completed.emit(unfollow_results)
-                    if self._cancel_event.is_set():
-                        self.events.status_changed.emit(tr("フォロー解除を中断しました。"))
+                    self._report_stop(core, tr("フォロー解除を中断しました。"))
                     continue
 
                 if isinstance(command, FetchLastPostsCommand):
@@ -395,9 +412,9 @@ class XDeleterWorker:
                         sum(1 for result in last_post_results if result.success),
                         len(targets),
                     )
+                    self._emit_rate_limit(core)
                     self.events.last_posts_completed.emit(last_post_results)
-                    if self._cancel_event.is_set():
-                        self.events.status_changed.emit(tr("最終ポスト日の取得を中断しました。"))
+                    self._report_stop(core, tr("最終ポスト日の取得を中断しました。"))
                     continue
 
                 logger.warning("Unknown worker command received: %s", command)
@@ -459,6 +476,7 @@ def main() -> int:
     worker.events.last_post_progress.connect(window.on_last_post_progress)
     worker.events.last_posts_completed.connect(window.on_last_posts_done)
     worker.events.error_occurred.connect(window.show_error)
+    worker.events.rate_limited.connect(window.on_rate_limited)
 
     window.show()
     exit_code = app.exec()

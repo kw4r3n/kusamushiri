@@ -22,7 +22,7 @@ from typing import TypeVar
 
 from kusamushiri.actions import action_label_for
 from kusamushiri.archive import ArchiveError, load_archive_posts, select_archive_posts
-from kusamushiri.core import XDeleterCore
+from kusamushiri.core import XDeleterCore, rate_limit_message
 from kusamushiri.deleted_posts import DeletedPostStore
 from kusamushiri.exporting import EXPORT_SUFFIXES, write_post_list, write_records
 from kusamushiri.follows import DEFAULT_UNFOLLOW_INTERVAL_SECONDS, FollowRecord, write_follow_list
@@ -281,6 +281,9 @@ def browser_session(
         yield core
     finally:
         signal.signal(signal.SIGINT, previous_handler)
+        if core.rate_limit_status is not None:
+            _end_progress()
+            _info(rate_limit_message(core.rate_limit_status))
         core.stop_browser()
 
 

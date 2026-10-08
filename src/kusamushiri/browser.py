@@ -1,11 +1,12 @@
 import subprocess
 import sys
 import warnings
+from collections.abc import Callable
 from pathlib import Path
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 from playwright._impl._driver import compute_driver_executable, get_driver_env
-from playwright.sync_api import Browser, BrowserContext, Locator, Page, Playwright, sync_playwright
+from playwright.sync_api import Browser, BrowserContext, Locator, Page, Playwright, Response, sync_playwright
 from playwright.sync_api import Error as PlaywrightError
 
 from kusamushiri.logger import logger
@@ -27,6 +28,17 @@ PROFILE_LINK_SELECTORS = (
     '[data-testid="AppTabBar_Profile_Link"]',
     'a[aria-label="Profile"]',
 )
+# 429 Too Many Requests, and 420 which Twitter historically sent for the same limit.
+RATE_LIMIT_STATUSES = frozenset({420, 429})
+RATE_LIMITED_HOSTS = ("x.com", "twitter.com")
+
+
+def is_rate_limit_response(url: str, status: int) -> bool:
+    """Whether X itself refused a request for sending too many."""
+    if status not in RATE_LIMIT_STATUSES:
+        return False
+    host = (urlparse(url).hostname or "").lower()
+    return any(host == name or host.endswith(f".{name}") for name in RATE_LIMITED_HOSTS)
 
 
 def find_first_visible_locator(root: Page | Locator, selectors: tuple[str, ...]) -> Locator | None:
@@ -61,6 +73,12 @@ class BrowserManager:
         self.context: BrowserContext | None = None
         self.page: Page | None = None
         self.profile_dir: Path | None = None
+        # Called with the response whenever X answers a request with a rate-limit status.
+        self.on_rate_limited: Callable[[Response], None] | None = None
+
+    def _watch_response(self, response: Response) -> None:
+        if self.on_rate_limited is not None and is_rate_limit_response(response.url, response.status):
+            self.on_rate_limited(response)
 
     def _require_page(self) -> Page:
         if self.page is None:
@@ -109,6 +127,7 @@ class BrowserManager:
                     raise
                 install_chromium()
                 self.context = self._launch_context(self.playwright, profile_dir, headless=self.headless)
+            self.context.on("response", self._watch_response)
             self.browser = self.context.browser
             self.page = self.context.pages[0] if self.context.pages else self.context.new_page()
             self.profile_dir = profile_dir

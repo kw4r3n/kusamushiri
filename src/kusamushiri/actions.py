@@ -5,7 +5,7 @@ from urllib.parse import urljoin, urlparse
 from playwright.sync_api import Locator, Page, Request, Response
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
-from kusamushiri.browser import BASE_X_URL, NAVIGATION_TIMEOUT_MS, find_first_visible_locator
+from kusamushiri.browser import BASE_X_URL, NAVIGATION_TIMEOUT_MS, find_first_visible_locator, is_rate_limit_response
 from kusamushiri.i18n import tr
 from kusamushiri.logger import logger
 from kusamushiri.models import PostActionResult, PostActionTarget, PostKind
@@ -183,7 +183,7 @@ def _open_target_article(page: Page, post_url: str) -> Locator:
     rate_limited: list[Response] = []
 
     def record_rate_limit(response: Response) -> None:
-        if response.status == 429:
+        if is_rate_limit_response(response.url, response.status):
             rate_limited.append(response)
 
     page.on("response", record_rate_limit)
@@ -194,7 +194,10 @@ def _open_target_article(page: Page, post_url: str) -> Locator:
         # X stops showing posts after many actions in a short time; say so instead of dumping the locator.
         if rate_limited:
             raise TargetPostUnavailableError(
-                tr("X の利用制限 (HTTP 429) でポストを表示できませんでした。しばらく待ってから再試行してください。")
+                tr(
+                    "X の利用制限 (HTTP {status}) でポストを表示できませんでした。しばらく待ってから再試行してください。",
+                    status=rate_limited[0].status,
+                )
             ) from error
         raise TargetPostUnavailableError(
             tr("ポストが表示されませんでした。削除済み・非公開か、X の利用制限の可能性があります。時間をおいて再試行してください。")

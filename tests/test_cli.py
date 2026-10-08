@@ -33,6 +33,9 @@ class FakeCore:
 
     instances: list["FakeCore"] = []
 
+    rate_limit_status: int | None = None
+
+
     def __init__(self, *, headless: bool = False) -> None:
         self.headless = headless
         self.logged_in = True
@@ -252,6 +255,25 @@ def test_delete_stops_when_cancelled_during_interval(fake_core, tmp_path, monkey
     assert len(fake_core.instances[0].actions) == 1
 
 
+def test_delete_stops_when_x_rate_limits(fake_core, tmp_path, monkeypatch, capsys) -> None:
+    path = tmp_path / "posts.json"
+    write_post_list(path, [make_post("1"), make_post("2")])
+
+    def rate_limited_action(self, target):
+        self.actions.append(target)
+        self.rate_limit_status = 429
+        self.cancelled = True
+        return PostActionResult(target, "delete", False, "HTTP 429")
+
+    monkeypatch.setattr(FakeCore, "execute_post_action", rate_limited_action)
+
+    code = cli.main(["delete", str(path), "--yes", "--interval", "0"])
+
+    assert code == cli.EXIT_INTERRUPTED
+    assert len(fake_core.instances[0].actions) == 1
+    assert "HTTP 429" in capsys.readouterr().err
+
+
 def test_unfollow_skips_mutual_follows(fake_core, tmp_path) -> None:
     path = tmp_path / "follows.json"
     write_follow_list(
@@ -376,6 +398,22 @@ def test_run_with_confirm_false_needs_no_terminal(fake_core, tmp_path, monkeypat
 
     assert fake_core.instances[0].headless is True
     assert len(fake_core.instances[0].actions) == 2
+
+
+def test_run_does_not_delete_after_rate_limited_collection(fake_core, tmp_path, monkeypatch, capsys) -> None:
+    monkeypatch.setattr("sys.stdin", Mock(isatty=lambda: False))
+    recipe = write_recipe(tmp_path, "headless = true\n[delete]\ninterval = 0\nconfirm = false\n")
+
+    def rate_limited_collect(self, request, on_progress=None):
+        self.rate_limit_status = 429
+        self.cancelled = True
+        return [make_post("1")]
+
+    monkeypatch.setattr(FakeCore, "search_and_collect_posts", rate_limited_collect)
+
+    assert cli.main(["run", str(recipe)]) == cli.EXIT_INTERRUPTED
+    assert fake_core.instances[0].actions == []
+    assert "HTTP 429" in capsys.readouterr().err
 
 
 def test_run_refuses_confirmation_without_terminal(fake_core, tmp_path, monkeypatch) -> None:
