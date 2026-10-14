@@ -408,7 +408,7 @@ def _run_post_actions(
             on_result(result)
             if not result.success:
                 if _state.reason == "completed":
-                    _state.reason = result.failure_kind if result.failure_kind in {"auth", "ambiguous", "permanent"} else "retry_limit"
+                    _state.reason = "held_receipt" if result.attempts == 0 else result.failure_kind if result.failure_kind in {"auth", "ambiguous", "permanent", "blocked"} else "retry_limit"
                 emit(result.error_message or result.failure_kind)
                 core.request_cancel()
                 break
@@ -445,10 +445,11 @@ def run_post_actions(
     def summary() -> dict[str, object]:
         failed = sum(not result.success for result in state.results)
         skipped = sum(result.success and result.attempts == 0 for result in state.results)
+        held = sum(not result.success and result.attempts == 0 for result in state.results)
         return {"total": len(targets), "successes": len(state.results) - failed, "skipped": skipped,
                 "failed": failed, "unprocessed": len(targets) - len(state.results), "deferrals": state.deferrals,
                 "retries": state.retries, "cooldowns": state.cooldowns, "waited_seconds": round(state.waited, 3),
-                "stop_reason": state.reason}
+                "stop_reason": state.reason, "held_receipts": held}
 
     try:
         return _run_post_actions(core, targets, interval_seconds, policy, journal=journal, on_progress=on_progress,
@@ -477,7 +478,8 @@ def run_post_actions(
         reason_labels = {"completed": tr("完了"), "cancelled": tr("中止"), "cooldown_limit": tr("通信休止の上限"),
                          "wait_limit": tr("総待機の上限"), "retry_limit": tr("安全な再試行の上限"), "auth": tr("認証・アカウント制限"),
                          "ambiguous": tr("結果不明"), "permanent": tr("恒久エラー"), "unexpected_error": tr("予期しないエラー"),
-                         "storage_error": tr("実行記録の保存エラー"), "view_changed": tr("対象表示の変化")}
+                         "storage_error": tr("実行記録の保存エラー"), "view_changed": tr("対象表示の変化"),
+                         "blocked": tr("通信拒否（認証原因は未確認）"), "held_receipt": tr("保存済みの保留記録（今回の通信結果ではありません）")}
         try:
             callback = getattr(core, "record_action_batch_summary", None)
             if callback is not None:

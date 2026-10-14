@@ -11,6 +11,9 @@ DEFAULT_LANGUAGE: Final = "ja"
 LANGUAGE_NAMES: Final = {"ja": "日本語", "en": "English"}
 
 ENGLISH: Final[dict[str, str]] = {
+    "保存済みの保留記録（今回の通信結果ではありません）": "saved held receipt (not a current HTTP observation)",
+    "通信拒否（認証原因は未確認）": "request blocked (authentication cause unconfirmed)",
+    "HTTP {status} の通信拒否で停止しました。認証原因は未確認です。diagnostics --summary で通信先と理由を確認してください。": "Stopped on HTTP {status}. Its authentication cause is unconfirmed; inspect the endpoint and evidence with diagnostics --summary.",
     '中止': 'cancelled',
     '総待機の上限': 'total wait limit',
     '安全な再試行の上限': 'safe retry limit',

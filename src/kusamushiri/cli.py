@@ -471,7 +471,7 @@ def _report_post_actions(
         fields = list(failed_rows[0].keys())
         write_records(failed_output, fields, [{field: row.get(field) for field in fields} for row in failed_rows])
         _info(tr("失敗・未処理の {count} 件を {path} に保存しました。記録済みの結果不明・恒久エラーは再実行しません。", count=len(failed_rows), path=failed_output))
-    if execution_error or any(results[index].failure_kind in {"auth", "permanent", "ambiguous"} for index in failed_indexes):
+    if execution_error or any(results[index].failure_kind in {"auth", "permanent", "ambiguous", "blocked"} for index in failed_indexes):
         return EXIT_FAILURE
     if cancelled:
         return EXIT_INTERRUPTED

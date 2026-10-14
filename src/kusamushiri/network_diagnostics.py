@@ -1,6 +1,8 @@
 """Observation only: bounded request correlation and closed-schema sanitized logs.
 
-No request is issued, no payload/body is read and no rate-limit decision is changed.
+No request is issued and no payload/body is retained. Declared small API403 JSON
+errors may be read for closed numeric categories, never messages or body output.
+No rate-limit decision is changed.
 An operation association means an event occurred during that operation, not causation.
 """
 
@@ -17,6 +19,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urlparse
 
+from kusamushiri.http_failures import HTTP_CATEGORIES, HTTP_PROVENANCE, KNOWN_CODES, HttpFailure, http_failure
 from kusamushiri.logger import logger
 from kusamushiri.models import PostActionResult, PostActionTarget
 from kusamushiri.parsing import extract_post_id
@@ -25,6 +28,7 @@ from kusamushiri.request_metadata import (
     API_LABELS,
     REQUEST_FAMILIES,
     RESOURCE_TYPES,
+    operation_digest,
     request_metadata,
     runtime_source_fingerprint,
 )
@@ -67,7 +71,7 @@ EVENTS = {
 METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "OTHER"}
 ENDPOINTS = MUTATIONS | TARGET_READS | ANCILLARY_READS | {"target-document", "unclassified"}
 ROLES = {"mutation", "target", "ancillary", "unknown"}
-OUTCOMES = {"success", "deferred", "auth", "ambiguous", "permanent", "retryable", "unknown"}
+OUTCOMES = {"success", "deferred", "auth", "ambiguous", "permanent", "retryable", "unknown", "blocked"}
 
 
 def _number(value: object) -> float | None:
@@ -109,6 +113,7 @@ def sanitize_event(value: object) -> dict[str, object] | None:
         "request_event_operation": "op",
         "request_event_navigation": "nav",
         "endpoint_group": "g",
+        "http_response": "r",
     }
     for key, prefix in id_prefixes.items():
         item = value.get(key)
@@ -127,7 +132,11 @@ def sanitize_event(value: object) -> dict[str, object] | None:
         "resource_type": RESOURCE_TYPES,
         "request_family": REQUEST_FAMILIES,
         "api_label": API_LABELS,
-        "stop_reason": {"completed", "cancelled", "cooldown_limit", "wait_limit", "retry_limit", "auth", "ambiguous", "permanent", "unexpected_error", "storage_error", "view_changed"},
+        "stop_reason": {"completed", "cancelled", "cooldown_limit", "wait_limit", "retry_limit", "auth", "ambiguous", "permanent", "unexpected_error", "storage_error", "view_changed", "blocked", "held_receipt"},
+        "http_role": ROLES,
+        "http_endpoint": ENDPOINTS,
+        "http_category": HTTP_CATEGORIES,
+        "http_provenance": HTTP_PROVENANCE,
     }
     for key, allowed in enum_fields.items():
         if isinstance(value.get(key), str) and value[key] in allowed:
@@ -144,7 +153,7 @@ def sanitize_event(value: object) -> dict[str, object] | None:
         "since_request_event_ms",
         "retry_after_seconds",
         "unattributed_mutation_requests",
-        "total", "successes", "skipped", "failed", "unprocessed", "deferrals", "retries", "cooldowns", "waited_seconds",
+        "total", "successes", "skipped", "failed", "unprocessed", "deferrals", "retries", "cooldowns", "waited_seconds", "held_receipts",
     ):
         if key in value:
             number = _number(value[key])
@@ -154,6 +163,11 @@ def sanitize_event(value: object) -> dict[str, object] | None:
                 clean[key] = None
     if isinstance(value.get("status"), int) and not isinstance(value["status"], bool) and 100 <= value["status"] <= 599:
         clean["status"] = value["status"]
+    if type(value.get("http_status")) is int and value["http_status"] in {200, 401, 403}:
+        clean["http_status"] = value["http_status"]
+    codes = value.get("known_error_codes")
+    if isinstance(codes, list):
+        clean["known_error_codes"] = sorted({code for code in codes[:8] if type(code) is int and code in KNOWN_CODES})
     for key in ("cross_operation", "cross_navigation", "submitted", "graphql_code88", "faulted", "outcome_recorded", "view_reuse_invalid"):
         if isinstance(value.get(key), bool):
             clean[key] = value[key]
@@ -168,6 +182,9 @@ def sanitize_event(value: object) -> dict[str, object] | None:
     fingerprint = value.get("package_source_sha256")
     if isinstance(fingerprint, str) and re.fullmatch(r"[0-9a-f]{64}", fingerprint):
         clean["package_source_sha256"] = fingerprint
+    op_digest = value.get("operation_sha256")
+    if isinstance(op_digest, str) and re.fullmatch(r"[0-9a-f]{64}", op_digest):
+        clean["operation_sha256"] = op_digest
     return clean
 
 
@@ -214,7 +231,7 @@ class NetworkDiagnostics:
         self._capacity = max(1, capacity)
         self._context = _Context()
         self._requests: OrderedDict[int, _Request] = OrderedDict()
-        self._responses: OrderedDict[int, tuple[object, str]] = OrderedDict()
+        self._responses: OrderedDict[int, tuple[object, str, HttpFailure | None]] = OrderedDict()
         self._items: OrderedDict[tuple[str, str], tuple[str, int]] = OrderedDict()
         self._seq = self._request_seq = self._response_seq = self._operation_seq = self._item_seq = self._nav_seq = 0
         self._blocking: list[str] = []
@@ -239,7 +256,8 @@ class NetworkDiagnostics:
                     self._groups.popitem(last=False)
             else:
                 self._groups.move_to_end(key)
-        return {"endpoint_group": group, "resource_type": resource_type, "request_family": family, "api_label": label}
+        return {"endpoint_group": group, "resource_type": resource_type, "request_family": family, "api_label": label,
+                "operation_sha256": operation_digest(url)}
 
     @staticmethod
     def _identity(value: object) -> object:
@@ -438,7 +456,7 @@ class NetworkDiagnostics:
                 return
             self._response_seq += 1
             local_id = f"r{self._response_seq}"
-            self._responses[id(identity)] = (identity, local_id)
+            self._responses[id(identity)] = (identity, local_id, None)
             if len(self._responses) > self._capacity:
                 self._responses.popitem(last=False)
             request = getattr(response, "request", None)
@@ -486,9 +504,32 @@ class NetworkDiagnostics:
                     else None,
                 }
             )
+            failure = http_failure(response)
+            if failure is not None:
+                failure = replace(failure, response_id=local_id)
+            self._responses[id(identity)] = (identity, local_id, failure)
+            if len(self._responses) > self._capacity:
+                self._responses.popitem(last=False)
+            if failure is not None:
+                fields.update(failure.fields())
             self._emit("response", **fields)
         except Exception:
             pass
+
+    def http_failure_for(self, response: object) -> HttpFailure | None:
+        """Reuse the response's closed evidence; never retain a decoded body."""
+        identity = self._identity(response)
+        recorded = self._responses.get(id(identity))
+        if recorded is not None and recorded[0] is identity:
+            if recorded[2] is not None and recorded[2].category in {"unknown403", "target403", "mutation403", "ancillary403"}:
+                # Recheck only metadata readiness; the parser will not fetch an
+                # unfinished body. An outcome may enrich the earlier header event.
+                failure = http_failure(response)
+                if failure is not None and failure.category != recorded[2].category:
+                    self._responses[id(identity)] = (identity, recorded[1], replace(failure, response_id=recorded[1]))
+                    return self._responses[id(identity)][2]
+            return recorded[2]
+        return http_failure(response)
 
     def request_failed(self, request: object) -> None:
         try:
@@ -568,6 +609,7 @@ class NetworkDiagnostics:
                 graphql_code88=graphql_code88,
                 blocking_responses=self._blocking,
                 view_reuse_invalid=result.view_reuse_invalid,
+                **(result.http_failure.fields() if result.http_failure is not None else {}),
             )
             if self._context.operation is not None:
                 self._outcomes.add(self._context.operation)
@@ -609,6 +651,15 @@ def diagnostic_summary(records: Sequence[dict[str, object]]) -> dict[str, object
     responses = [event for event in records if event.get("event") == "response"]
     limits = [event for event in responses if event.get("status") in (420, 429)]
     group_counts: Counter[tuple[object, ...]] = Counter()
+    http_counts: Counter[tuple[object, ...]] = Counter()
+    for event in responses:
+        if event.get("status") in (401, 403):
+            error_codes = event.get("known_error_codes")
+            known_codes = tuple(error_codes) if isinstance(error_codes, list) else ()
+            http_counts[(event.get("endpoint_group"), event.get("method"), event.get("request_family"),
+                         event.get("api_label"), event.get("operation_sha256"), event.get("http_role"),
+                         event.get("http_endpoint"), event.get("status"), event.get("http_category"),
+                         event.get("http_provenance"), known_codes)] += 1
     for event in limits:
         group_counts[(event.get("endpoint_group"), event.get("method"), event.get("resource_type"),
                       event.get("request_family"), event.get("api_label"), event.get("role"), event.get("endpoint"))] += 1
@@ -624,4 +675,9 @@ def diagnostic_summary(records: Sequence[dict[str, object]]) -> dict[str, object
                          "api_label": key[4], "role": key[5], "endpoint": key[6], "responses": count}
                         for key, count in group_counts.items()],
         "batch_summary": next((event for event in reversed(records) if event.get("event") == "batch_summary"), None),
+        "http_errors": [{"endpoint_group": key[0], "method": key[1], "request_family": key[2], "api_label": key[3],
+                         "operation_sha256": key[4], "http_role": key[5], "http_endpoint": key[6], "status": key[7],
+                         "http_category": key[8], "http_provenance": key[9], "known_error_codes": list(codes) if isinstance(codes := key[10], tuple) else [],
+                         "responses": count} for key, count in http_counts.items()],
+        "action_http_evidence": [event for event in records if event.get("event") == "operation_outcome" and "http_category" in event],
     }

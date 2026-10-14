@@ -13,7 +13,7 @@ from kusamushiri.i18n import tr
 from kusamushiri.models import FailureKind, PostActionResult, PostActionTarget
 from kusamushiri.parsing import extract_post_id
 
-STATES = {"inflight", "success", "retryable", "permanent", "auth", "ambiguous", "pending"}
+STATES = {"inflight", "success", "retryable", "permanent", "auth", "ambiguous", "pending", "blocked"}
 
 
 class ActionJournal:

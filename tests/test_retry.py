@@ -392,7 +392,7 @@ class ActionLocator:
         (429, {}, False, "retryable"),
         (420, {}, False, "retryable"),
         (401, {}, False, "auth"),
-        (403, {}, False, "auth"),
+        (403, {}, False, "blocked"),
         (404, {}, False, "permanent"),
         (500, {}, False, "ambiguous"),
         (503, {}, False, "ambiguous"),
@@ -412,7 +412,7 @@ def test_real_delete_stages_classify_refusal_vs_ambiguous_completion(status, bod
     assert page.handlers == {"request": [], "response": []}
 
 
-@pytest.mark.parametrize("status, expected", [(429, "retryable"), (401, "auth"), (403, "auth"), (404, "permanent")])
+@pytest.mark.parametrize("status, expected", [(429, "retryable"), (401, "auth"), (403, "blocked"), (404, "permanent")])
 def test_refusal_before_submission_never_clicks_confirm(status, expected):
     page = ActionPage(navigation_status=status)
     result = actions.execute_post_action(page, target(), lambda root, selectors: root.locator(selectors[0]))

@@ -93,10 +93,11 @@ class BrowserManager:
         self.on_rate_limited: Callable[[Response], None] | None = None
 
     def _watch_response(self, response: Response) -> None:
-        self.diagnostics.response(response)
         if (self.post_actions_active and response.status in {401, 403}
                 and is_rate_limit_response(response.url, 429) and self.on_action_auth_failed is not None):
             self.on_action_auth_failed()
+        # Install the stop flag before any optional bounded diagnostic body read.
+        self.diagnostics.response(response)
         if self.on_rate_limited is not None and is_rate_limit_response(response.url, response.status):
             self.on_rate_limited(response)
 

@@ -451,6 +451,28 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ### Lower-amplification batches and actionable diagnostics
 
+HTTP403 alone is reported as `blocked`, with its request role and provenance, rather than
+as proof of expired login. A401 or a bounded JSON error envelope containing only existing
+known authentication/account codes can support the `auth` category. Both categories stop
+and remain held in the journal; this grants no endpoint exemption or automatic retry.
+Existing `auth` receipts are retained without reclassification or removal.
+`diagnostics --summary` includes `http_errors`: status, role, fixed category, fixed known
+error codes, the existing per-trace group, known catalog names and `operation_sha256`.
+Unknown operation names are not printed. The digest hashes only a canonical GraphQL operation
+token or a REST basename, excluding query/hash IDs, full routes, credentials and user content.
+REST basenames can collide across routes; the digest is an identity aid, not a quota bucket.
+It cannot recover the missing names from old g34/g25 records. Only declared JSON API403
+error envelopes from completed requests, up to 8192 actual bytes, are parsed for fixed codes; messages/bodies are never
+retained or logged. Missing, oversized or malformed evidence stays blocked and unconfirmed.
+An unfinished body is never awaited for diagnostic enrichment. Later action evidence can
+link completed error-code evidence to the original anonymous response ID.
+Check login manually when a401/known auth code is recorded. An unknown403 may instead be
+an endpoint permission failure; login failure has not been established. A manual browser
+check is useful for the missing permission/operation context, not a reason to reset journals.
+`held_receipt` with `held_receipts` in the summary identifies a saved failure encountered
+without execution. The same previously held item produces no fresh endpoint evidence;
+an old `auth` receipt is not proof of a new login failure and is never cleared automatically.
+
 Rate/cancellation checks now run before navigation and before opening reversible menus.
 Only a positively unsent **post deletion** blocked exclusively by the exact known
 ViewerBadgeCounts/Spaces fleetline GETs can reuse its idle target view after the full cooldown.

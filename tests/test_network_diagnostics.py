@@ -201,7 +201,7 @@ def attach_action(page, recorder):
         (200, {}, False, False, "success", False),
         (429, {}, False, False, "retryable", False),
         (200, {"errors": [{"code": 88, "message": SECRET}]}, False, False, "retryable", True),
-        (403, {}, False, False, "auth", False),
+        (403, {}, False, False, "blocked", False),
         (200, {"errors": [{"code": 326, "message": SECRET}]}, False, False, "auth", False),
         (200, {}, True, False, "ambiguous", False),
         (200, {}, False, True, "ambiguous", False),

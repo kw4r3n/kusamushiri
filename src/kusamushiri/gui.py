@@ -1783,7 +1783,7 @@ class XDeleterWindow(QMainWindow):
             )
         if stopped:
             self._show_rate_limit()
-            held = [result for result in failures if result.failure_kind in {"auth", "ambiguous"}]
+            held = [result for result in failures if result.failure_kind in {"auth", "ambiguous", "blocked"}]
             if held:
                 QMessageBox.warning(self, tr("一部失敗"), format_action_failures(held))
             return

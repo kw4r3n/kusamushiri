@@ -6,6 +6,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- HTTP403 evidence distinguishes confirmed authentication/account codes from unproven
+  request blocks. All blocks remain held and stop without automatic retries. Diagnostics
+  include closed error categories and operation-token digests without raw names/URLs/bodies.
 - Actionable privacy-safe diagnostics: fixed resource/API-family labels, per-trace endpoint groups,
   a diagnostic-only API catalog, package source fingerprints and `diagnostics --summary`.
 - Exact idle-target reuse after known-only, positively unsent deferrals; early rate/cancel gates

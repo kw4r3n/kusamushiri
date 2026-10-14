@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import Final, Literal
 
+from kusamushiri.http_failures import HttpFailure
 from kusamushiri.i18n import tr
 from kusamushiri.rate_limits import RateLimitScope
 
@@ -56,7 +57,7 @@ class PostActionTarget:
     kind: PostKind
 
 
-FailureKind = Literal["retryable", "permanent", "auth", "ambiguous"]
+FailureKind = Literal["retryable", "permanent", "auth", "ambiguous", "blocked"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,6 +111,7 @@ class PostActionResult:
     rate_limit_scope: RateLimitScope | None = None
     rate_limit_endpoint: str | None = None
     view_reuse_invalid: bool = False
+    http_failure: HttpFailure | None = None
 
 
 @dataclass(slots=True, frozen=True)

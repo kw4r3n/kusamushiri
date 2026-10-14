@@ -58,3 +58,27 @@ def runtime_source_fingerprint() -> str | None:
         return digest.hexdigest()
     except OSError:
         return None
+
+
+def operation_digest(url: object) -> str | None:
+    """One-way identity for API operation tokens; exclude hosts, IDs, paths and queries.
+
+    Unknown names are never emitted. REST basenames deliberately do not identify
+    a complete route; endpoint_group keeps distinct routes apart within a trace.
+    """
+    if not isinstance(url, str):
+        return None
+    try:
+        parsed = urlparse(url)
+        if parsed.scheme != "https" or parsed.hostname not in {"x.com", "www.x.com", "twitter.com", "www.twitter.com"} or parsed.username is not None:
+            return None
+        graph = re.fullmatch(r"/i/api/graphql/[A-Za-z0-9_-]+/([A-Za-z][A-Za-z_]{0,79})", parsed.path.rstrip("/"))
+        if graph:
+            token = "graphql:" + graph.group(1)
+        elif parsed.path.startswith("/i/api/") and re.fullmatch(r"[A-Za-z][A-Za-z_-]{0,79}\.json", parsed.path.rsplit("/", 1)[-1]):
+            token = "rest:" + parsed.path.rsplit("/", 1)[-1]
+        else:
+            return None
+        return hashlib.sha256(token.encode("ascii")).hexdigest()
+    except (ValueError, UnicodeError):
+        return None

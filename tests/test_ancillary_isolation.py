@@ -190,7 +190,7 @@ def test_delayed_response_keeps_origin_and_does_not_weaken_mutation_gate(isolate
 
 @pytest.mark.parametrize("status,body,kind", [(429, {}, "retryable"),
     (200, {"errors": [{"code": 88}]}, "retryable"),
-    (403, {}, "auth"), (200, {"errors": [{"code": 326}]}, "auth")])
+    (403, {}, "blocked"), (200, {"errors": [{"code": 326}]}, "auth")])
 def test_simultaneous_actual_mutation_refusal_wins_over_isolated_ancillary(isolated, status, body, kind):
     core, page, context, clock, events = isolated
     page.response.status = status
@@ -220,7 +220,7 @@ def test_auxiliary_auth_stops_and_keeps_confirmed_success(isolated, before, stat
         result = core.execute_post_action(target())
     assert core.is_cancel_requested()
     if before:
-        assert not result.success and result.failure_kind == "auth"
+        assert not result.success and result.failure_kind == ("auth" if status == 401 else "blocked")
     else:
         assert result.success
 

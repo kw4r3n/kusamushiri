@@ -7,6 +7,7 @@ from playwright.sync_api import Locator, Page, Request, Response
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
 from kusamushiri.browser import BASE_X_URL, NAVIGATION_TIMEOUT_MS, find_first_visible_locator, is_rate_limit_response
+from kusamushiri.http_failures import ACCOUNT_CODES, KNOWN_CODES, HttpFailure, http_failure
 from kusamushiri.i18n import tr
 from kusamushiri.logger import logger
 from kusamushiri.models import FailureKind, PostActionResult, PostActionTarget, PostKind
@@ -293,6 +294,7 @@ def execute_post_action(
     mutation = {"post": DELETE_POST_MUTATION, "repost": UNDO_REPOST_MUTATION, "like": UNLIKE_MUTATION}[target.kind]
     requests: list[Request] = []
     responses: list[Response] = []
+    classify_http = diagnostics.http_failure_for if diagnostics is not None else http_failure
     evidence = ActionEvidence(should_cancel=should_cancel, rate_limit_pending=rate_limit_pending, diagnostics=diagnostics,
                               reuse_view=reuse_view, on_target_loaded=on_target_loaded)
 
@@ -338,6 +340,10 @@ def execute_post_action(
         retry_after = None
         mutation_rate_refused = False
         graphql_code88 = False
+        failure_evidence = None
+        observed_http = [failure for response in responses if (failure := classify_http(response)) is not None]
+        if observed_http:
+            failure_evidence = max(observed_http, key=lambda item: (item.auth_confirmed, {"mutation": 3, "target": 2, "ancillary": 1, "unknown": 0}[item.role]))
         if not success:
             if evidence.submitted or requests:
                 # An absent response, 5xx, or unconfirmed 2xx may follow a committed
@@ -352,7 +358,8 @@ def execute_post_action(
                         kind = "retryable"
                         retry_after = parse_retry_after(response.headers.get("retry-after"))
                     elif response.status in {401, 403}:
-                        kind = "auth"
+                        failure_evidence = classify_http(response)
+                        kind = "auth" if failure_evidence is not None and failure_evidence.auth_confirmed else "blocked"
                     elif 400 <= response.status < 500:
                         kind = "permanent"
                     elif 200 <= response.status < 300 and _is_mutation_request(response.request, mutation):
@@ -372,13 +379,16 @@ def execute_post_action(
                                 retry_after = parse_retry_after(response.headers.get("retry-after"))
                             elif codes & {32, 89, 99, 135, 215, 220, 326}:
                                 kind = "auth"
+                                failure_evidence = HttpFailure(response.status, "mutation", mutation,
+                                    "account_code" if codes & ACCOUNT_CODES else "auth_code", "error_code",
+                                    tuple(sorted(code for code in KNOWN_CODES if code in codes)))
                             else:
                                 kind = "permanent"
             else:
                 statuses = {response.status for response in responses
                             if response.status not in {420, 429} or rate_limit_blocking(response)}
                 if statuses & {401, 403}:
-                    kind = "auth"
+                    kind = "auth" if failure_evidence is not None and failure_evidence.auth_confirmed else "blocked"
                 elif evidence.cancelled:
                     kind = "retryable"
                 elif statuses & {404, 410}:
@@ -389,6 +399,9 @@ def execute_post_action(
                                        for r in responses if r.status in {420, 429, 503}), default=0.0) or None
             if kind == "ambiguous":
                 error_message = tr("結果不明のため再試行しません。X で確認してください。") + " " + (error_message or "")
+            if kind == "blocked":
+                error_message = tr("HTTP {status} の通信拒否で停止しました。認証原因は未確認です。diagnostics --summary で通信先と理由を確認してください。",
+                                   status=failure_evidence.status if failure_evidence is not None else 403)
         limited = [response for response in responses if response.status in {420, 429} and rate_limit_blocking(response)]
         rate_scope, rate_endpoint = None, None
         if limited:
@@ -397,14 +410,15 @@ def execute_post_action(
                                            key=lambda pair: priority[pair[0]])
         if mutation_rate_refused:
             rate_scope, rate_endpoint = "mutation", mutation
-        deferred = not success and not evidence.submitted and not requests and (evidence.rate_blocked or evidence.view_reuse_invalid) and kind not in {"auth", "ambiguous"} and not any(response.status in {404, 410} for response in responses)
+        deferred = not success and not evidence.submitted and not requests and (evidence.rate_blocked or evidence.view_reuse_invalid) and kind not in {"auth", "ambiguous", "blocked"} and not any(response.status in {404, 410} for response in responses)
         if deferred:
             kind = "retryable"
             if not evidence.view_reuse_invalid:
                 error_message = tr("利用制限を検知したため送信せず保留しました。削除失敗には数えません。")
         result = PostActionResult(target, action_label, success, error_message, kind, retry_after,
                                   deferred=deferred, rate_limit_scope=rate_scope, rate_limit_endpoint=rate_endpoint,
-                                  view_reuse_invalid=evidence.view_reuse_invalid)
+                                  view_reuse_invalid=evidence.view_reuse_invalid,
+                                  http_failure=failure_evidence if not success else None)
         if diagnostics is not None:
             diagnostics.outcome(result, requests, submitted=evidence.submitted, graphql_code88=graphql_code88)
         return result
