@@ -5,6 +5,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Report validated public operation names and fixed route templates in sanitized diagnostics;
+  retain unavailable identities and safe digests without changing 403/429 stop or retry gates.
+
 ### Added
 - HTTP403 evidence distinguishes confirmed authentication/account codes from unproven
   request blocks. All blocks remain held and stop without automatic retries. Diagnostics

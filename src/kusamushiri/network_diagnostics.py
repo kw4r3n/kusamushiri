@@ -19,6 +19,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urlparse
 
+from kusamushiri.endpoint_identity import public_identity, sanitize_identity
 from kusamushiri.http_failures import HTTP_CATEGORIES, HTTP_PROVENANCE, KNOWN_CODES, HttpFailure, http_failure
 from kusamushiri.logger import logger
 from kusamushiri.models import PostActionResult, PostActionTarget
@@ -185,6 +186,8 @@ def sanitize_event(value: object) -> dict[str, object] | None:
     op_digest = value.get("operation_sha256")
     if isinstance(op_digest, str) and re.fullmatch(r"[0-9a-f]{64}", op_digest):
         clean["operation_sha256"] = op_digest
+    if event in {"request_start", "response", "request_failed", "ancillary_quarantine", "request_suppressed", "isolation_fallback"}:
+        clean.update(sanitize_identity(value))
     return clean
 
 
@@ -257,7 +260,7 @@ class NetworkDiagnostics:
             else:
                 self._groups.move_to_end(key)
         return {"endpoint_group": group, "resource_type": resource_type, "request_family": family, "api_label": label,
-                "operation_sha256": operation_digest(url)}
+                "operation_sha256": operation_digest(url), **public_identity(url, method)}
 
     @staticmethod
     def _identity(value: object) -> object:
@@ -477,6 +480,7 @@ class NetworkDiagnostics:
             if record is None:
                 method = getattr(request, "method", None)
                 method = method.upper() if isinstance(method, str) and method.upper() in METHODS else "OTHER"
+                fields["method"] = method
                 fields.update(self._metadata(getattr(response, "url", None), method, getattr(request, "resource_type", None)))
             headers = getattr(response, "headers", None)
             delay = (
@@ -659,10 +663,13 @@ def diagnostic_summary(records: Sequence[dict[str, object]]) -> dict[str, object
             http_counts[(event.get("endpoint_group"), event.get("method"), event.get("request_family"),
                          event.get("api_label"), event.get("operation_sha256"), event.get("http_role"),
                          event.get("http_endpoint"), event.get("status"), event.get("http_category"),
-                         event.get("http_provenance"), known_codes)] += 1
+                         event.get("http_provenance"), known_codes, event.get("identity_status"),
+                         event.get("public_operation"), event.get("route_template"))] += 1
     for event in limits:
         group_counts[(event.get("endpoint_group"), event.get("method"), event.get("resource_type"),
-                      event.get("request_family"), event.get("api_label"), event.get("role"), event.get("endpoint"))] += 1
+                      event.get("request_family"), event.get("api_label"), event.get("role"), event.get("endpoint"),
+                      event.get("status"), event.get("operation_sha256"), event.get("identity_status"),
+                      event.get("public_operation"), event.get("route_template"))] += 1
     return {
         "trace": records[-1].get("trace") if records else None,
         "available_events": len(records), "complete_trace_start_available": any(event.get("event") == "trace_start" for event in records),
@@ -672,12 +679,15 @@ def diagnostic_summary(records: Sequence[dict[str, object]]) -> dict[str, object
         "reused_views": sum(event.get("event") == "view_reused" for event in records),
         "outcomes": dict(Counter(str(event.get("outcome")) for event in records if event.get("event") == "operation_outcome")),
         "rate_limits": [{"endpoint_group": key[0], "method": key[1], "resource_type": key[2], "request_family": key[3],
-                         "api_label": key[4], "role": key[5], "endpoint": key[6], "responses": count}
+                         "api_label": key[4], "role": key[5], "endpoint": key[6], "status": key[7],
+                         "operation_sha256": key[8], "identity_status": key[9], "public_operation": key[10],
+                         "route_template": key[11], "responses": count}
                         for key, count in group_counts.items()],
         "batch_summary": next((event for event in reversed(records) if event.get("event") == "batch_summary"), None),
         "http_errors": [{"endpoint_group": key[0], "method": key[1], "request_family": key[2], "api_label": key[3],
                          "operation_sha256": key[4], "http_role": key[5], "http_endpoint": key[6], "status": key[7],
                          "http_category": key[8], "http_provenance": key[9], "known_error_codes": list(codes) if isinstance(codes := key[10], tuple) else [],
+                         "identity_status": key[11], "public_operation": key[12], "route_template": key[13],
                          "responses": count} for key, count in http_counts.items()],
         "action_http_evidence": [event for event in records if event.get("event") == "operation_outcome" and "http_category" in event],
     }

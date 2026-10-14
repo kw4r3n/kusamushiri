@@ -456,6 +456,13 @@ as proof of expired login. A401 or a bounded JSON error envelope containing only
 known authentication/account codes can support the `auth` category. Both categories stop
 and remain held in the journal; this grants no endpoint exemption or automatic retry.
 Existing `auth` receipts are retained without reclassification or removal.
+Diagnostics also include `identity_status`, `public_operation` and `route_template`
+for exact names/paths in a frozen public catalog. Routing hashes, dynamic path values
+and queries are omitted. Unconfirmed names remain `unavailable`; safe operation
+hashes remain in both 429 and HTTP-error summaries. Public identity does not change
+request roles, cooldowns, stops or retry permissions. Older traces remain readable.
+See [catalog provenance and limits](docs/public-endpoint-diagnostics.md).
+
 `diagnostics --summary` includes `http_errors`: status, role, fixed category, fixed known
 error codes, the existing per-trace group, known catalog names and `operation_sha256`.
 Unknown operation names are not printed. The digest hashes only a canonical GraphQL operation
