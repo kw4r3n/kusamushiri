@@ -94,6 +94,7 @@ def fake_core(monkeypatch, tmp_path) -> type[FakeCore]:
     FakeCore.instances = []
     monkeypatch.setattr(cli, "XDeleterCore", FakeCore)
     monkeypatch.setattr(cli, "LOGIN_POLL_SECONDS", 0)
+    monkeypatch.setattr(cli, "get_account_profile_dir", lambda _name: tmp_path / "profile")
     monkeypatch.setattr(cli.DeletedPostStore, "for_account", lambda _name: DeletedPostStore(tmp_path / "deleted.json"))
     monkeypatch.setattr(cli.LastPostStore, "for_account", lambda _name: LastPostStore(tmp_path / "last.json"))
     return FakeCore
@@ -233,10 +234,11 @@ def test_delete_records_deleted_posts_and_writes_failures(fake_core, tmp_path, m
     code = cli.main(["delete", str(path), "--yes", "--interval", "0", "--failed-output", str(failed)])
 
     assert code == cli.EXIT_FAILURE
-    assert len(fake_core.instances[0].actions) == 3
+    assert len(fake_core.instances[0].actions) == 2
+    # Permanent failures stop the batch; the remaining row is saved for resume.
     # Only successfully deleted original posts are remembered for archive imports.
     assert DeletedPostStore(tmp_path / "deleted.json").load() == {"1"}
-    assert [row["id"] for row in json.loads(failed.read_text(encoding="utf-8"))] == ["2"]
+    assert [row["id"] for row in json.loads(failed.read_text(encoding="utf-8"))] == ["2", "3"]
 
 
 def test_delete_stops_when_cancelled_during_interval(fake_core, tmp_path, monkeypatch) -> None:
@@ -263,7 +265,7 @@ def test_delete_stops_when_x_rate_limits(fake_core, tmp_path, monkeypatch, capsy
         self.actions.append(target)
         self.rate_limit_status = 429
         self.cancelled = True
-        return PostActionResult(target, "delete", False, "HTTP 429")
+        return PostActionResult(target, "delete", False, "HTTP 429", "retryable")
 
     monkeypatch.setattr(FakeCore, "execute_post_action", rate_limited_action)
 
@@ -506,3 +508,263 @@ def test_archive_order_picks_newest_or_oldest(fake_core, tmp_path, flags: list[s
 
     assert code == 0
     assert [row["id"] for row in json.loads(output.read_text(encoding="utf-8"))] == expected
+
+
+
+def test_delete_retry_options_reach_shared_runner(fake_core, tmp_path, monkeypatch):
+    path = tmp_path / "posts.json"
+    write_post_list(path, [make_post("1")])
+    policies = []
+    real_run = cli.run_post_actions
+
+    def capture(core, targets, interval, policy, **kwargs):
+        policies.append(policy)
+        return real_run(core, targets, interval, policy, **kwargs)
+
+    monkeypatch.setattr(cli, "run_post_actions", capture)
+    assert cli.main(["delete", str(path), "--yes", "--batch-size", "10", "--batch-pause", "75",
+                     "--max-retries", "2", "--retry-delay", "90", "--retry-max-delay", "400",
+                     "--retry-max-wait", "800"]) == 0
+    assert policies[0].batch_size == 10 and policies[0].batch_pause_seconds == 75
+    assert policies[0].max_retries == 2 and policies[0].initial_delay_seconds == 90
+    assert policies[0].max_delay_seconds == 400 and policies[0].max_wait_seconds == 800
+
+
+def test_dry_run_has_no_browser_journal_or_wait(fake_core, tmp_path, monkeypatch):
+    path = tmp_path / "posts.json"
+    write_post_list(path, [make_post("1")])
+    runner = Mock(side_effect=AssertionError("dry-run must not execute actions"))
+    monkeypatch.setattr(cli, "run_post_actions", runner)
+    assert cli.main(["delete", str(path), "--dry-run", "--batch-size", "33", "--batch-pause", "60"]) == 0
+    assert fake_core.instances == []
+    assert not (tmp_path / "profile").exists()
+    runner.assert_not_called()
+
+
+@pytest.mark.parametrize("option, value", [("--max-retries", "-1"), ("--retry-delay", "nan"),
+                                         ("--batch-size", "-1"), ("--batch-pause", "0")])
+def test_invalid_retry_option_rejected_before_browser(fake_core, tmp_path, option, value):
+    assert cli.main(["delete", str(tmp_path / "missing.json"), "--dry-run", option, value]) == cli.EXIT_USAGE
+    assert fake_core.instances == []
+
+
+
+@pytest.mark.parametrize("command", ["delete", "run"])
+def test_both_delete_and_recipe_help_expose_retry_settings(command):
+    parser = cli.build_parser()
+    with pytest.raises(SystemExit) as stopped:
+        parser.parse_args([command, "--help"])
+    assert stopped.value.code == 0
+    parsed = parser.parse_args([command, "placeholder", "--batch-size", "33", "--batch-pause", "60",
+                                "--max-retries", "3", "--retry-delay", "60", "--retry-max-delay", "900",
+                                "--retry-max-wait", "1800"])
+    assert cli._retry_policy_from_args(parsed).batch_size == 33
+
+
+def test_run_retry_overrides_do_not_rewrite_recipe_or_change_other_settings(tmp_path, monkeypatch):
+    recipe_path = tmp_path / "cleanup.toml"
+    text = "[delete]\ninterval = 0.5\nconfirm = false\nmax_retries = 4\nretry_delay = 75\nretry_max_delay = 600\nretry_max_wait = 2000\nbatch_size = 25\nbatch_pause = 90\n"
+    recipe_path.write_text(text)
+    received = []
+    monkeypatch.setattr(cli, "run_recipe", lambda recipe, **kwargs: received.append(recipe) or 0)
+    assert cli.main(["run", str(recipe_path), "--max-retries", "0", "--batch-size", "0", "--batch-pause", "120"]) == 0
+    delete = received[0].delete
+    assert delete.interval == 0.5 and delete.confirm is False
+    assert delete.retry_policy.max_retries == delete.retry_policy.batch_size == 0
+    assert delete.retry_policy.batch_pause_seconds == 120
+    assert delete.retry_policy.initial_delay_seconds == 75
+    assert delete.retry_policy.max_delay_seconds == 600
+    assert delete.retry_policy.max_wait_seconds == 2000
+    assert recipe_path.read_text() == text
+
+
+def test_run_without_flags_preserves_saved_retry_policy_and_legacy_defaults(tmp_path, monkeypatch):
+    received = []
+    monkeypatch.setattr(cli, "run_recipe", lambda recipe, **kwargs: received.append(recipe) or 0)
+    recipe_path = tmp_path / "cleanup.toml"
+    legacy = "[delete]\ninterval = 0.5\nconfirm = false\n"
+    recipe_path.write_text(legacy)
+    assert cli.main(["run", str(recipe_path)]) == 0
+    delete = received[-1].delete
+    assert delete.interval == 0.5 and delete.confirm is False
+    assert delete.retry_policy == cli.RetryPolicy()
+    assert recipe_path.read_text() == legacy
+    custom = legacy + "batch_size = 25\nbatch_pause = 90\nmax_retries = 4\n"
+    recipe_path.write_text(custom)
+    assert cli.main(["run", str(recipe_path)]) == 0
+    assert received[-1].delete.retry_policy.batch_size == 25
+    assert received[-1].delete.retry_policy.batch_pause_seconds == 90
+    assert received[-1].delete.retry_policy.max_retries == 4
+    assert recipe_path.read_text() == custom
+
+
+def test_run_overrides_cannot_enable_deletion_for_collect_only_recipe(tmp_path, monkeypatch):
+    recipe_path = tmp_path / "collect-only.toml"
+    recipe_path.write_text("[collect]\nmax_posts = 5\n")
+    run = Mock(side_effect=AssertionError("no execution should start"))
+    monkeypatch.setattr(cli, "run_recipe", run)
+    assert cli.main(["run", str(recipe_path), "--batch-size", "33"]) == cli.EXIT_USAGE
+    run.assert_not_called()
+    assert "[delete]" not in recipe_path.read_text()
+
+
+@pytest.mark.parametrize("option, value", [("--max-retries", "-1"), ("--retry-delay", "nan"),
+                                         ("--batch-pause", "0"), ("--retry-max-delay", "30")])
+def test_run_invalid_retry_override_stops_before_execution(tmp_path, monkeypatch, option, value):
+    recipe_path = tmp_path / "cleanup.toml"
+    recipe_path.write_text("[delete]\n")
+    run = Mock(side_effect=AssertionError("no execution should start"))
+    monkeypatch.setattr(cli, "run_recipe", run)
+    assert cli.main(["run", str(recipe_path), option, value]) == cli.EXIT_USAGE
+    run.assert_not_called()
+
+
+
+def test_dry_run_does_not_migrate_profiles_or_configure_browser(fake_core, tmp_path, monkeypatch):
+    path = tmp_path / "posts.json"
+    write_post_list(path, [make_post("1")])
+    migrate = Mock(side_effect=AssertionError("dry-run must not migrate profiles"))
+    configure = Mock(side_effect=AssertionError("dry-run must not configure the browser"))
+    monkeypatch.setattr(cli, "migrate_legacy_app_data", migrate)
+    monkeypatch.setattr(cli, "configure_frozen_browser_path", configure)
+    assert cli.main(["delete", str(path), "--dry-run"]) == 0
+    migrate.assert_not_called()
+    configure.assert_not_called()
+    assert fake_core.instances == []
+
+
+
+@pytest.mark.parametrize("command", ["delete", "run"])
+def test_cooldown_and_pacing_flags_are_exposed_for_both_commands(command):
+    args = parse(command, "placeholder.json", "--max-cooldowns", "2", "--cooldown-delay", "300", "--rate-limit-interval", "7")
+    policy = cli._retry_policy_from_args(args)
+    assert policy.max_cooldowns == 2 and policy.cooldown_delay_seconds == 300
+    assert policy.rate_limit_interval_seconds == 7
+
+
+def test_recipe_cooldown_overrides_preserve_file(tmp_path, monkeypatch):
+    path = tmp_path / "recipe.toml"
+    original = "[delete]\ninterval = 5\nmax_cooldowns = 1\ncooldown_delay = 180\nrate_limit_interval = 6\n"
+    path.write_text(original)
+    recipes = []
+    monkeypatch.setattr(cli, "run_recipe", lambda recipe, **kwargs: recipes.append(recipe) or 0)
+    assert cli.main(["run", str(path), "--max-cooldowns", "2", "--cooldown-delay", "300", "--rate-limit-interval", "7"]) == 0
+    policy = recipes[0].delete.retry_policy
+    assert (policy.max_cooldowns, policy.cooldown_delay_seconds, policy.rate_limit_interval_seconds) == (2, 300, 7)
+    assert recipes[0].delete.interval == 5 and path.read_text() == original
+
+
+
+def tuning_recipe(tmp_path):
+    path = tmp_path / "tuning.toml"
+    text = "profile = 'not-inherited'\nheadless = true\n[delete]\ninterval = 8\nconfirm = false\nbatch_size = 20\nbatch_pause = 180\nmax_retries = 2\nretry_delay = 90\nretry_max_delay = 1000\nretry_max_wait = 1700\nmax_cooldowns = 2\ncooldown_delay = 240\nrate_limit_interval = 10\n"
+    path.write_text(text)
+    return path, text
+
+
+@pytest.mark.parametrize("override", [False, True])
+def test_direct_delete_reads_all_toml_tuning_and_explicit_flags_win(fake_core, tmp_path, monkeypatch, override):
+    path = tmp_path / "posts.json"
+    write_post_list(path, [make_post("1")])
+    recipe, text = tuning_recipe(tmp_path)
+    calls = []
+    real_run = cli.run_post_actions
+    def capture(core, targets, interval, policy, **kwargs):
+        calls.append((interval, policy))
+        return real_run(core, targets, interval, policy, **kwargs)
+    monkeypatch.setattr(cli, "run_post_actions", capture)
+    args = ["delete", str(path), "--recipe", str(recipe), "--yes"]
+    if override:
+        args += ["--interval", "0", "--batch-size", "0", "--max-cooldowns", "0", "--rate-limit-interval", "12"]
+    assert cli.main(args) == 0
+    interval, policy = calls[0]
+    assert interval == (0 if override else 8)
+    assert policy.batch_size == (0 if override else 20)
+    assert policy.max_cooldowns == (0 if override else 2)
+    assert policy.rate_limit_interval_seconds == (12 if override else 10)
+    assert (policy.batch_pause_seconds, policy.max_retries, policy.initial_delay_seconds) == (180, 2, 90)
+    assert (policy.max_delay_seconds, policy.max_wait_seconds, policy.cooldown_delay_seconds) == (1000, 1700, 240)
+    assert fake_core.instances[0].started_profile is None and not fake_core.instances[0].headless
+    assert recipe.read_text() == text
+
+
+def test_direct_delete_toml_confirm_false_does_not_disable_confirmation(fake_core, tmp_path, monkeypatch):
+    path = tmp_path / "posts.json"
+    write_post_list(path, [make_post("1")])
+    recipe, _ = tuning_recipe(tmp_path)
+    monkeypatch.setattr("sys.stdin", Mock(isatty=lambda: False))
+    assert cli.main(["delete", str(path), "--recipe", str(recipe)]) == cli.EXIT_USAGE
+    assert fake_core.instances == []
+
+
+@pytest.mark.parametrize("override", [False, True])
+def test_run_toml_reaches_actual_shared_runner_with_interval_override(fake_core, tmp_path, monkeypatch, override):
+    recipe, text = tuning_recipe(tmp_path)
+    monkeypatch.setattr("sys.stdin", Mock(isatty=lambda: False))
+    calls = []
+    real_run = cli.run_post_actions
+    def capture(core, targets, interval, policy, **kwargs):
+        calls.append((interval, policy))
+        return real_run(core, targets, interval, policy, **kwargs)
+    monkeypatch.setattr(cli, "run_post_actions", capture)
+    args = ["run", str(recipe)]
+    if override:
+        args += ["--interval", "10", "--cooldown-delay", "300"]
+    assert cli.main(args) == 0
+    interval, policy = calls[0]
+    assert interval == (10 if override else 8) and policy.cooldown_delay_seconds == (300 if override else 240)
+    assert (policy.batch_size, policy.batch_pause_seconds, policy.max_cooldowns) == (20, 180, 2)
+    assert (policy.max_retries, policy.initial_delay_seconds, policy.max_delay_seconds, policy.max_wait_seconds,
+            policy.rate_limit_interval_seconds) == (2, 90, 1000, 1700, 10)
+    assert recipe.read_text() == text
+
+
+def test_toml_dry_run_never_touches_browser_or_profile_state(fake_core, tmp_path, monkeypatch):
+    path = tmp_path / "posts.json"
+    write_post_list(path, [make_post("1")])
+    recipe, text = tuning_recipe(tmp_path)
+    runner = Mock(side_effect=AssertionError("dry-run must not start a job"))
+    migration = Mock(side_effect=AssertionError("dry-run must not migrate profiles"))
+    monkeypatch.setattr(cli, "run_post_actions", runner)
+    monkeypatch.setattr(cli, "migrate_legacy_app_data", migration)
+    assert cli.main(["delete", str(path), "--recipe", str(recipe), "--dry-run"]) == 0
+    runner.assert_not_called()
+    migration.assert_not_called()
+    assert fake_core.instances == [] and recipe.read_text() == text
+
+
+def test_toml_never_overrides_saved_safety_deadline(fake_core, tmp_path, monkeypatch):
+    recipe, _ = tuning_recipe(tmp_path)
+    state = tmp_path / "profile" / "action-progress.json"
+    state.parent.mkdir()
+    payload = '{"version":1,"scope":"default","entries":{},"cooldown_until":9999999999}'
+    state.write_text(payload)
+    args = parse("delete", "placeholder.json", "--recipe", str(recipe), "--retry-max-wait", "2000")
+    options = cli._delete_tuning_from_args(args)
+    assert options.retry_policy.max_wait_seconds == 2000
+    assert state.read_text() == payload
+
+
+@pytest.mark.parametrize("command", ["run", "delete"])
+def test_interval_override_cannot_enable_deletion_in_collect_only_recipe(fake_core, tmp_path, command):
+    recipe = tmp_path / "collect-only.toml"
+    recipe.write_text("[collect]\nmax_posts = 10\n")
+    args = ["run", str(recipe), "--interval", "8"] if command == "run" else ["delete", "placeholder.json", "--recipe", str(recipe), "--interval", "8", "--dry-run"]
+    assert cli.main(args) == cli.EXIT_USAGE
+    assert fake_core.instances == []
+
+
+@pytest.mark.parametrize("bad", ["nan", "inf", "-inf", "true", "-1"])
+def test_invalid_toml_interval_rejected_before_execution(fake_core, tmp_path, bad):
+    recipe = tmp_path / "invalid.toml"
+    recipe.write_text("[delete]\ninterval = " + bad + "\n")
+    assert cli.main(["delete", "placeholder.json", "--recipe", str(recipe), "--dry-run"]) == cli.EXIT_USAGE
+    assert fake_core.instances == []
+
+
+def test_state_deadline_is_not_a_recipe_setting(tmp_path):
+    from kusamushiri.recipe import RecipeError, load_recipe
+    recipe = tmp_path / "invalid.toml"
+    recipe.write_text("[delete]\ncooldown_until = 0\n")
+    with pytest.raises(RecipeError, match="unknown setting delete.cooldown_until"):
+        load_recipe(recipe)

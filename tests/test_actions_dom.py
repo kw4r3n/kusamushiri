@@ -740,3 +740,59 @@ def test_action_explains_a_post_that_never_appears(
     assert success is False
     assert error_message is not None and expected in error_message
     assert "xpath" not in error_message
+
+
+
+def test_quiet_cooldown_stops_polling_a_loopback_server():
+    """Fresh browser context, localhost GETs only; no X or user profile access."""
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from unittest.mock import patch
+
+    from kusamushiri.browser import BrowserManager
+
+    polls = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            if self.path == "/poll":
+                polls.append(True)
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(b"<!doctype html><title>local fixture</title>")
+
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with sync_playwright() as playwright:
+            if not Path(playwright.chromium.executable_path).is_file():
+                pytest.skip("Playwright Chromium is not installed")
+            browser = playwright.chromium.launch(headless=True)
+            try:
+                context = browser.new_context()
+                page = context.new_page()
+                page.goto(f"http://127.0.0.1:{server.server_port}/")
+                manager = BrowserManager()
+                manager.context, manager.page = context, page
+                with patch("kusamushiri.browser.time.time", return_value=1000):
+                    manager.suspend_action_network(1120)
+                    outcome = page.evaluate("fetch('/poll', {cache: 'no-store'}).then(r => r.status).catch(() => 'offline')")
+                    assert outcome == "offline" and polls == []
+                    with pytest.raises(RuntimeError):
+                        manager._require_page()
+                with patch("kusamushiri.browser.time.time", return_value=1120):
+                    manager.resume_action_network()
+                    assert page.evaluate("fetch('/poll', {cache: 'no-store'}).then(r => r.status)") == 200
+                assert len(polls) == 1
+            finally:
+                browser.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(1)

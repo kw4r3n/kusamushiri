@@ -55,6 +55,7 @@ from kusamushiri.models import (
     PostActionResult,
     PostActionTarget,
     PostRecord,
+    RetryPolicy,
     parse_keywords,
 )
 from kusamushiri.parsing import USERNAME_PATTERN, extract_post_id
@@ -547,6 +548,60 @@ class XDeleterWindow(QMainWindow):
         self.export_posts_button.clicked.connect(self._handle_export_posts)
         action_options_layout.addWidget(self.export_posts_button)
         layout.addLayout(action_options_layout)
+        retry_grid = QGridLayout()
+        self.action_max_retries_input = QSpinBox()
+        self.action_max_retries_input.setRange(0, 20)
+        self.action_max_retries_input.setValue(3)
+        retry_grid.addWidget(QLabel(tr("再試行上限")), 0, 0)
+        retry_grid.addWidget(self.action_max_retries_input, 0, 1)
+        self.action_retry_delay_seconds_input = QDoubleSpinBox()
+        self.action_retry_delay_seconds_input.setRange(0.1, 86400.0)
+        self.action_retry_delay_seconds_input.setValue(60.0)
+        retry_grid.addWidget(QLabel(tr("再試行の初期待機（秒）")), 0, 2)
+        retry_grid.addWidget(self.action_retry_delay_seconds_input, 0, 3)
+        self.action_retry_max_delay_seconds_input = QDoubleSpinBox()
+        self.action_retry_max_delay_seconds_input.setRange(0.1, 86400.0)
+        self.action_retry_max_delay_seconds_input.setValue(900.0)
+        retry_grid.addWidget(QLabel(tr("待機増加の上限（秒）")), 1, 0)
+        retry_grid.addWidget(self.action_retry_max_delay_seconds_input, 1, 1)
+        self.action_retry_max_wait_seconds_input = QDoubleSpinBox()
+        self.action_retry_max_wait_seconds_input.setRange(0.1, 86400.0)
+        self.action_retry_max_wait_seconds_input.setValue(1800.0)
+        retry_grid.addWidget(QLabel(tr("再試行の総待機上限（秒）")), 1, 2)
+        retry_grid.addWidget(self.action_retry_max_wait_seconds_input, 1, 3)
+        self.action_batch_size_input = QSpinBox()
+        self.action_batch_size_input.setRange(0, 10000)
+        self.action_batch_size_input.setValue(RetryPolicy().batch_size)
+        retry_grid.addWidget(QLabel(tr("定期休止の完了件数（0で無効）")), 2, 0)
+        retry_grid.addWidget(self.action_batch_size_input, 2, 1)
+        self.action_batch_pause_seconds_input = QDoubleSpinBox()
+        self.action_batch_pause_seconds_input.setRange(0.1, 86400.0)
+        self.action_batch_pause_seconds_input.setValue(RetryPolicy().batch_pause_seconds)
+        retry_grid.addWidget(QLabel(tr("定期休止（秒）")), 2, 2)
+        retry_grid.addWidget(self.action_batch_pause_seconds_input, 2, 3)
+        self.action_max_cooldowns_input = QSpinBox()
+        self.action_max_cooldowns_input.setRange(0, 20)
+        self.action_max_cooldowns_input.setValue(RetryPolicy().max_cooldowns)
+        retry_grid.addWidget(QLabel(tr("通信休止の上限")), 3, 0)
+        retry_grid.addWidget(self.action_max_cooldowns_input, 3, 1)
+        self.action_cooldown_delay_seconds_input = QDoubleSpinBox()
+        self.action_cooldown_delay_seconds_input.setRange(0.1, 86400.0)
+        self.action_cooldown_delay_seconds_input.setValue(RetryPolicy().cooldown_delay_seconds)
+        retry_grid.addWidget(QLabel(tr("通信休止の初期待機（秒）")), 3, 2)
+        retry_grid.addWidget(self.action_cooldown_delay_seconds_input, 3, 3)
+        self.action_rate_limit_interval_seconds_input = QDoubleSpinBox()
+        self.action_rate_limit_interval_seconds_input.setRange(0.1, 86400.0)
+        self.action_rate_limit_interval_seconds_input.setValue(RetryPolicy().rate_limit_interval_seconds)
+        retry_grid.addWidget(QLabel(tr("制限後の最低項目間隔（秒）")), 4, 0)
+        retry_grid.addWidget(self.action_rate_limit_interval_seconds_input, 4, 1)
+        self.retry_settings_widget = QWidget()
+        self.retry_settings_widget.setLayout(retry_grid)
+        self.retry_settings_widget.setVisible(False)
+        self.retry_settings_button = QPushButton(tr("待機・再試行設定"))
+        self.retry_settings_button.setCheckable(True)
+        self.retry_settings_button.toggled.connect(self.retry_settings_widget.setVisible)
+        action_options_layout.addWidget(self.retry_settings_button)
+        layout.addWidget(self.retry_settings_widget)
 
         self.table = QTableWidget(0, 9)
         self.table.setHorizontalHeaderLabels([
@@ -696,6 +751,16 @@ class XDeleterWindow(QMainWindow):
             self.follow_dialog.set_busy(busy, can_run=self._login_verified)
         self.delete_button.setEnabled(enabled and self._login_verified and self.table.rowCount() > 0)
         self.delete_interval_input.setEnabled(enabled)
+        self.retry_settings_button.setEnabled(enabled)
+        self.action_max_retries_input.setEnabled(enabled)
+        self.action_retry_delay_seconds_input.setEnabled(enabled)
+        self.action_retry_max_delay_seconds_input.setEnabled(enabled)
+        self.action_retry_max_wait_seconds_input.setEnabled(enabled)
+        self.action_batch_size_input.setEnabled(enabled)
+        self.action_batch_pause_seconds_input.setEnabled(enabled)
+        self.action_max_cooldowns_input.setEnabled(enabled)
+        self.action_cooldown_delay_seconds_input.setEnabled(enabled)
+        self.action_rate_limit_interval_seconds_input.setEnabled(enabled)
         self.table.setEnabled(enabled)
         self.select_all_button.setEnabled(enabled and self.table.rowCount() > 0)
         self.export_posts_button.setEnabled(enabled and self.table.rowCount() > 0)
@@ -1003,6 +1068,15 @@ class XDeleterWindow(QMainWindow):
         self.min_likes_input.setValue(settings.min_likes)
         self.min_replies_input.setValue(settings.min_replies)
         self.delete_interval_input.setValue(settings.action_interval_seconds)
+        self.action_max_retries_input.setValue(settings.action_max_retries)
+        self.action_retry_delay_seconds_input.setValue(settings.action_retry_delay_seconds)
+        self.action_retry_max_delay_seconds_input.setValue(settings.action_retry_max_delay_seconds)
+        self.action_retry_max_wait_seconds_input.setValue(settings.action_retry_max_wait_seconds)
+        self.action_batch_size_input.setValue(settings.action_batch_size)
+        self.action_batch_pause_seconds_input.setValue(settings.action_batch_pause_seconds)
+        self.action_max_cooldowns_input.setValue(settings.action_max_cooldowns)
+        self.action_cooldown_delay_seconds_input.setValue(settings.action_cooldown_delay_seconds)
+        self.action_rate_limit_interval_seconds_input.setValue(settings.action_rate_limit_interval_seconds)
         self.auto_save_interval_input.setValue(settings.auto_save_interval_seconds)
         self.include_keywords_input.setText(settings.include_keywords)
         self.exclude_keywords_input.setText(settings.exclude_keywords)
@@ -1044,6 +1118,15 @@ class XDeleterWindow(QMainWindow):
                 min_likes=self.min_likes_input.value(),
                 min_replies=self.min_replies_input.value(),
                 action_interval_seconds=self.delete_interval_input.value(),
+                action_max_retries=self.action_max_retries_input.value(),
+                action_retry_delay_seconds=self.action_retry_delay_seconds_input.value(),
+                action_retry_max_delay_seconds=self.action_retry_max_delay_seconds_input.value(),
+                action_retry_max_wait_seconds=self.action_retry_max_wait_seconds_input.value(),
+                action_batch_size=self.action_batch_size_input.value(),
+                action_batch_pause_seconds=self.action_batch_pause_seconds_input.value(),
+                action_max_cooldowns=self.action_max_cooldowns_input.value(),
+                action_cooldown_delay_seconds=self.action_cooldown_delay_seconds_input.value(),
+                action_rate_limit_interval_seconds=self.action_rate_limit_interval_seconds_input.value(),
                 auto_save_interval_seconds=self.auto_save_interval_input.value(),
                 since_date=self.since_date_input.date().toString(Qt.DateFormat.ISODate),
                 until_date=self.until_date_input.date().toString(Qt.DateFormat.ISODate),
@@ -1309,6 +1392,8 @@ class XDeleterWindow(QMainWindow):
         self.update_status(tr("対象を収集中: {scanned} 件走査済み ({current}/{total})", scanned=scanned, current=current, total=total))
         self.show_progress(current, total)
 
+
+
     def _handle_export_following(self) -> None:
         if self._busy:
             return
@@ -1547,7 +1632,7 @@ class XDeleterWindow(QMainWindow):
         box.setIcon(QMessageBox.Icon.Warning)
         box.setWindowTitle(tr("一部失敗"))
         box.setText(message)
-        box.setInformativeText(tr("失敗した項目の詳細を確認し、失敗分だけ再試行できます。"))
+        box.setInformativeText(tr("詳細を確認してください。安全に再試行できる失敗だけ再試行します。結果不明・認証・恒久エラーは実行記録で保留します。"))
         box.setDetailedText(format_unfollow_failures(failures))
         retry_button = box.addButton(tr("失敗分だけ再試行"), QMessageBox.ButtonRole.AcceptRole)
         box.addButton(QMessageBox.StandardButton.Close)
@@ -1594,6 +1679,19 @@ class XDeleterWindow(QMainWindow):
     def _handle_toggle_all(self) -> None:
         self.table_manager.toggle_all()
 
+    def _action_retry_policy(self) -> RetryPolicy:
+        return RetryPolicy(
+            max_retries=self.action_max_retries_input.value(),
+            initial_delay_seconds=self.action_retry_delay_seconds_input.value(),
+            max_delay_seconds=self.action_retry_max_delay_seconds_input.value(),
+            max_wait_seconds=self.action_retry_max_wait_seconds_input.value(),
+            batch_size=self.action_batch_size_input.value(),
+            batch_pause_seconds=self.action_batch_pause_seconds_input.value(),
+            max_cooldowns=self.action_max_cooldowns_input.value(),
+            cooldown_delay_seconds=self.action_cooldown_delay_seconds_input.value(),
+            rate_limit_interval_seconds=self.action_rate_limit_interval_seconds_input.value(),
+        )
+
     def _handle_delete(self) -> None:
         logger.info("GUI: Delete button clicked.")
         if self._busy:
@@ -1635,6 +1733,7 @@ class XDeleterWindow(QMainWindow):
         request = ExecuteActionsRequest(
             targets=targets,
             interval_seconds=self.delete_interval_input.value(),
+            retry_policy=self._action_retry_policy(),
         )
         try:
             request.validate()
@@ -1683,8 +1782,10 @@ class XDeleterWindow(QMainWindow):
                 self, tr("エラー"), tr("削除済みポストの記録を保存できませんでした: {message}", message=save_error)
             )
         if stopped:
-            # The stop dialog already had the user's attention; report in the status line.
             self._show_rate_limit()
+            held = [result for result in failures if result.failure_kind in {"auth", "ambiguous"}]
+            if held:
+                QMessageBox.warning(self, tr("一部失敗"), format_action_failures(held))
             return
         if not failures:
             QMessageBox.information(self, tr("完了"), message)
@@ -1694,13 +1795,15 @@ class XDeleterWindow(QMainWindow):
         box.setIcon(QMessageBox.Icon.Warning)
         box.setWindowTitle(tr("一部失敗"))
         box.setText(message)
-        box.setInformativeText(tr("失敗した項目の詳細を確認し、失敗分だけ再試行できます。"))
+        box.setInformativeText(tr("詳細を確認してください。安全に再試行できる失敗だけ再試行します。結果不明・認証・恒久エラーは実行記録で保留します。"))
         box.setDetailedText(format_action_failures(failures))
-        retry_button = box.addButton(tr("失敗分だけ再試行"), QMessageBox.ButtonRole.AcceptRole)
+        retry_button = None
+        if any(result.failure_kind == "retryable" for result in failures):
+            retry_button = box.addButton(tr("失敗分だけ再試行"), QMessageBox.ButtonRole.AcceptRole)
         box.addButton(QMessageBox.StandardButton.Close)
         box.exec()
 
-        if box.clickedButton() == retry_button:
+        if retry_button is not None and box.clickedButton() == retry_button:
             self._retry_failed(failures)
 
     def _record_deleted_posts(self, results: list[PostActionResult]) -> str:
@@ -1720,6 +1823,9 @@ class XDeleterWindow(QMainWindow):
         return ""
 
     def _retry_failed(self, failures: list[PostActionResult]) -> None:
+        failures = [result for result in failures if result.failure_kind == "retryable"]
+        if not failures:
+            return
         # Same guards as the delete button: the target field may have changed
         # while the result dialog was open, or the browser may have stopped.
         if self._busy or not self._login_verified:
@@ -1732,6 +1838,7 @@ class XDeleterWindow(QMainWindow):
         retry_request = ExecuteActionsRequest(
             targets=[result.target for result in failures],
             interval_seconds=self.delete_interval_input.value(),
+            retry_policy=self._action_retry_policy(),
         )
         self._submit_delete(retry_request, tr("失敗分を再試行しています..."))
 

@@ -1,0 +1,9 @@
+# Use with: delete reviewed.csv --recipe this-file.toml --dry-run
+# Explicit CLI flag > TOML value > built-in default. Existing deadlines always apply.
+
+[delete]
+interval = 8.0  # seconds between items; conservative example, default 3
+confirm = true # run confirmation; direct delete uses its existing explicit prompt
+
+# Advanced compatibility controls are optional; see README's advanced settings.
+# Omission never removes runtime receipts/deadlines or overrides Retry-After.

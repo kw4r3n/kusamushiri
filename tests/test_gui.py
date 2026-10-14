@@ -19,7 +19,13 @@ from kusamushiri.follows import FollowRecord, UnfollowRequest, UnfollowResult
 from kusamushiri.gui import XDeleterWindow, format_action_failures, remove_successful_rows
 from kusamushiri.gui_follows import CHECKED_AT_COLUMN, LAST_POST_COLUMN, FollowListDialog
 from kusamushiri.last_posts import FetchLastPostsRequest, LastPostResult, LastPostStore
-from kusamushiri.models import CollectRequest, ExecuteActionsRequest, PostActionResult, PostActionTarget, PostRecord
+from kusamushiri.models import (
+    CollectRequest,
+    ExecuteActionsRequest,
+    PostActionResult,
+    PostActionTarget,
+    PostRecord,
+)
 from kusamushiri.paths import list_saved_accounts
 from kusamushiri.settings import AccountSettingsManager
 
@@ -73,6 +79,10 @@ def window(qtbot, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> XDeleterWi
 
 def test_window_title(window: XDeleterWindow, qtbot) -> None:
     assert window.windowTitle() == "Kusamushiri"
+
+
+
+
 
 
 def test_set_busy_disables_controls(window: XDeleterWindow, qtbot) -> None:
@@ -772,6 +782,7 @@ def test_retry_failed_rechecks_account_match(window, monkeypatch) -> None:
         action_label="削除",
         success=False,
         error_message="failed",
+        failure_kind="retryable",
     )
 
     window._retry_failed([failure])
@@ -1297,3 +1308,14 @@ def test_last_posts_done_updates_rows_and_survives_recollecting(window, qtbot, m
         ]
     finally:
         dialog.close()
+
+
+
+def test_gui_cooldown_controls_match_policy_and_request(window):
+    policy = window._action_retry_policy()
+    assert (policy.max_cooldowns, policy.cooldown_delay_seconds, policy.rate_limit_interval_seconds) == (3, 120, 5)
+    window.action_max_cooldowns_input.setValue(2)
+    window.action_cooldown_delay_seconds_input.setValue(300)
+    window.action_rate_limit_interval_seconds_input.setValue(7)
+    policy = window._action_retry_policy()
+    assert (policy.max_cooldowns, policy.cooldown_delay_seconds, policy.rate_limit_interval_seconds) == (2, 300, 7)

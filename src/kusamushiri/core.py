@@ -2,6 +2,7 @@ import re
 import threading
 import time
 from collections.abc import Callable
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
@@ -16,6 +17,7 @@ from kusamushiri.actions import execute_post_action as _execute_post_action
 from kusamushiri.actions import undo_repost as _undo_repost
 from kusamushiri.actions import unfollow_account as _unfollow_account
 from kusamushiri.actions import unlike_post as _unlike_post
+from kusamushiri.ancillary_isolation import isolatable_endpoint
 from kusamushiri.browser import (
     BASE_X_URL,
     NAVIGATION_TIMEOUT_MS,
@@ -32,6 +34,7 @@ from kusamushiri.models import (
     PostActionTarget,
     PostKind,
     PostRecord,
+    RetryPolicy,
     is_within_date_range,
     post_skip_reason,
 )
@@ -43,6 +46,10 @@ from kusamushiri.parsing import (
     parse_count_from_aria_label,
     parse_post_date,
 )
+from kusamushiri.progress import ActionJournal
+from kusamushiri.rate_limits import classify_rate_limit
+from kusamushiri.retry import parse_retry_after
+from kusamushiri.view_cache import PendingView
 
 SEARCH_PATH = "search"
 SCROLL_WAIT_MS = 2_000  # Time for new posts to load after scroll
@@ -117,25 +124,181 @@ class XDeleterCore:
         self.collection_limit_reached = False
         # Status of the first rate-limited response since the last clear_cancel(), if any.
         self.rate_limit_status: int | None = None
+        self.rate_limit_retry_after: float | None = None
+        self.rate_limit_retry_until = 0.0
+        self.rate_limit_seen_at = 0.0
+        self.rate_limit_generation = 0
+        self.rate_limit_scope = "unknown"
+        self.rate_limit_endpoint = "unclassified"
+        self._defer_rate_limit_stop = False
+        self._post_action_policy = RetryPolicy()
+        self._pending_view: PendingView | None = None
+        self._rate_limits_reusable = False
+        self.rate_limit_group = ""
+        self.rate_limit_resource = "other"
+        self.rate_limit_family = "other"
+        self.rate_limit_api_label = "unrecognized"
+        self.last_action_batch_summary: dict[str, object] | None = None
         # Also called on a rate limit, so a caller with its own cancellation stops too.
         self.on_rate_limited: Callable[[], None] | None = None
         self._browser.on_rate_limited = self._stop_on_rate_limit
+        self._browser.on_isolation_failed = self._isolation_failed
+        self._browser.on_action_auth_failed = self.request_cancel
+
+    def prepare_post_action_policy(self, policy: RetryPolicy) -> None:
+        policy.validate()
+        self._post_action_policy = policy
+        if policy.ancillary_rate_limit_mode == "isolate-known" and self._browser.context is None:
+            self._browser.block_service_workers = True
+
+    @property
+    def isolated_rate_limit_deadline(self) -> float:
+        return self._browser.ancillary_isolation.deadline
+
+    @property
+    def isolated_rate_limit_seen(self) -> bool:
+        return bool(self._browser.ancillary_isolation.deadlines)
+
+    def _isolation_failed(self, response: Response, deadline: float) -> None:
+        self.request_cancel()
+        try:
+            self._stop_on_rate_limit(response)
+        except Exception:
+            self.rate_limit_status = 429
+            logger.warning("Global rate-limit metadata unavailable; stopping with the protected deadline.")
+        finally:
+            self.rate_limit_retry_until = max(self.rate_limit_retry_until, deadline)
+            self.request_cancel()
+
+    @contextmanager
+    def post_action_journal_scope(self, journal: ActionJournal | None):
+        isolation = self._browser.ancillary_isolation
+        previous = isolation.persist_deadline
+        isolation.persist_deadline = None
+        try:
+            if journal is not None and self._post_action_policy.ancillary_rate_limit_mode == "isolate-known":
+                try:
+                    journal.arm_isolation_storage()
+                except Exception:
+                    self.request_cancel()
+                    self._browser.disable_action_network(max(isolation.deadline, self.rate_limit_retry_until))
+                    raise RuntimeError("Durable deadline storage failed; no action was started.") from None
+                isolation.persist_deadline = journal.persist_isolated_deadline
+            yield
+        finally:
+            isolation.persist_deadline = previous
+
+    def is_action_rate_blocking(self, response: Response) -> bool:
+        return not self._browser.ancillary_isolation.owns(response)
 
     def _stop_on_rate_limit(self, response: Response) -> None:
-        # Pressing on after X starts refusing requests only extends the limit; stop the whole run.
-        if self.rate_limit_status is None:
-            logger.warning("X rate limited a request (HTTP %s): %s. Stopping.", response.status, response.url)
-            self.rate_limit_status = response.status
+        if self._browser.ancillary_isolation.quarantine(response, self._post_action_policy.cooldown_delay_seconds):
+            return
+        try:
+            reusable = isolatable_endpoint(response.url, response.request.method) is not None
+        except Exception:
+            reusable = False
+        self._rate_limits_reusable = reusable if self.rate_limit_status is None else self._rate_limits_reusable and reusable
+        if not reusable:
+            self._pending_view = None
+        # Unisolated, dependency and unknown limits retain global pacing.
+        self.rate_limit_generation += 1
+        self.rate_limit_seen_at = time.time()
+        scope, endpoint = classify_rate_limit(response.url)
+        priority = {"ancillary": 0, "unknown": 1, "target": 2, "mutation": 3}
+        if self.rate_limit_status is None or priority[scope] >= priority[self.rate_limit_scope]:
+            self.rate_limit_scope, self.rate_limit_endpoint = scope, endpoint
+            metadata = self._browser.diagnostics.describe_response(response)
+            self.rate_limit_group = str(metadata.get("endpoint_group") or "")
+            self.rate_limit_resource = str(metadata.get("resource_type") or "other")
+            self.rate_limit_family = str(metadata.get("request_family") or "other")
+            self.rate_limit_api_label = str(metadata.get("api_label") or "unrecognized")
+        self.rate_limit_status = response.status
+        delay = parse_retry_after(response.headers.get("retry-after"))
+        if delay is not None:
+            self.rate_limit_retry_after = max(self.rate_limit_retry_after or 0.0, delay)
+            self.rate_limit_retry_until = max(self.rate_limit_retry_until, self.rate_limit_seen_at + delay)
+        logger.warning("X rate limit: HTTP %s; role=%s endpoint=%s Retry-After seconds=%s; %s",
+                       response.status, scope, endpoint, delay,
+                       "Cooling down" if self._defer_rate_limit_stop else "Stopping")
+        if self._defer_rate_limit_stop:
+            return
         self.request_cancel()
         if self.on_rate_limited is not None:
             self.on_rate_limited()
 
     def request_cancel(self) -> None:
+        self._pending_view = None
         self._cancel_event.set()
 
     def clear_cancel(self) -> None:
         self._cancel_event.clear()
+        self.clear_rate_limit()
+
+    def clear_rate_limit(self) -> None:
+        self._browser.diagnostics.clear_rate_signal()
         self.rate_limit_status = None
+        self.rate_limit_retry_after = None
+        self.rate_limit_retry_until = 0.0
+        self.rate_limit_seen_at = 0.0
+        self.rate_limit_scope = "unknown"
+        self.rate_limit_endpoint = "unclassified"
+        self._rate_limits_reusable = False
+        self.rate_limit_group = ""
+        self.rate_limit_resource = "other"
+        self.rate_limit_family = "other"
+        self.rate_limit_api_label = "unrecognized"
+
+    @contextmanager
+    def post_action_retry_scope(self):
+        previous_defer = self._defer_rate_limit_stop
+        previous_active_batch = self._browser.post_actions_active
+        self._browser.post_actions_active = True
+        self._defer_rate_limit_stop = True
+        isolation = self._browser.ancillary_isolation
+        previous_active = isolation.active
+        isolation.active = (self._post_action_policy.ancillary_rate_limit_mode == "isolate-known"
+                            and isolation.ready and self._post_action_policy.max_cooldowns > 0
+                            and isolation.persist_deadline is not None)
+        if self._post_action_policy.ancillary_rate_limit_mode == "isolate-known" and not isolation.active:
+            logger.warning("Ancillary isolation unavailable in this context; using global rate-limit handling.")
+            self._browser.diagnostics.isolation_event("isolation_fallback", "unclassified", 0.0)
+        try:
+            yield
+        finally:
+            isolation.active = previous_active
+            self._defer_rate_limit_stop = previous_defer
+            self._pending_view = None
+            self._browser.post_actions_active = previous_active_batch
+
+    def record_action_batch_summary(self, summary: dict[str, object]) -> None:
+        self.last_action_batch_summary = summary
+        self._browser.diagnostics.batch_summary(**summary)
+
+    def poll_action_events(self) -> None:
+        # A blocking Event.wait does not dispatch Playwright callbacks. Drain before
+        # choosing to resume, including responses queued before offline mode began.
+        if self.page is not None and not self.page.is_closed():
+            self.page.wait_for_timeout(0)
+
+    def suspend_action_network(self, deadline: float) -> None:
+        self._browser.suspend_action_network(deadline)
+        self.poll_action_events()
+
+    def resume_action_network(self) -> None:
+        self._browser.resume_action_network()
+        self.poll_action_events()
+
+    def wait_for_action_cancel(self, seconds: float) -> bool:
+        if self.page is None:
+            return self.wait_for_cancel(seconds)
+        deadline = time.monotonic() + seconds
+        while not self.is_cancel_requested():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            self.page.wait_for_timeout(min(remaining, 0.1) * 1000)
+        return True
 
     def is_cancel_requested(self) -> bool:
         return self._cancel_event.is_set()
@@ -189,6 +352,7 @@ class XDeleterCore:
             )
         except Exception as error:
             logger.debug("Timeline height did not change before timeout: %s", error)
+
 
     def _is_post_within_date_range(self, post_date: date | None, request: CollectRequest) -> bool:
         return is_within_date_range(post_date, request)
@@ -726,8 +890,29 @@ class XDeleterCore:
         return fetch_last_post(page, username, self._cancel_event)
 
     def execute_post_action(self, target: PostActionTarget) -> PostActionResult:
-        page = self._browser._require_page()
-        return _execute_post_action(page, target, find_locator=self._find_first_visible_locator)
+        diagnostics = self._browser.diagnostics
+        with diagnostics.operation(target):
+            page = self._browser._require_page()
+            loaded: Locator | None = None
+
+            def record_loaded(locator: Locator) -> None:
+                nonlocal loaded
+                loaded = locator
+
+            reuse = self._pending_view if target.kind == "post" and self._pending_view is not None and self._pending_view.target_url == target.url else None
+            self._pending_view = None
+            result = _execute_post_action(page, target, find_locator=self._find_first_visible_locator,
+                                        should_cancel=self.is_cancel_requested,
+                                        rate_limit_pending=lambda: self.rate_limit_status is not None,
+                                        rate_limit_blocking=self.is_action_rate_blocking,
+                                        isolated_dependency_failed=self._browser.ancillary_isolation.fail,
+                                        isolation_pending=lambda: bool(self._browser.ancillary_isolation.deadlines),
+                                        diagnostics=diagnostics, reuse_view=reuse, on_target_loaded=record_loaded)
+            if result.view_reuse_invalid:
+                self.request_cancel()
+            if result.deferred and self._defer_rate_limit_stop and target.kind == "post" and self._rate_limits_reusable and loaded is not None:
+                self._pending_view = PendingView.capture(page, target.url, loaded)
+            return result
 
     def undo_repost(self, post_url: str) -> tuple[bool, str | None]:
         page = self._browser._require_page()

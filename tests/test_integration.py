@@ -55,6 +55,12 @@ class FakeCore:
     def request_cancel(self) -> None:
         self.cancel_requested = True
 
+    def is_cancel_requested(self) -> bool:
+        return self.cancel_requested
+
+    def wait_for_cancel(self, seconds: float) -> bool:
+        return self.cancel_requested
+
     def clear_cancel(self) -> None:
         self.cancel_requested = False
 

@@ -5,6 +5,7 @@ filters as the app, and an optional [delete] table. Without [delete] a run only 
 """
 
 import json
+import math
 import tomllib
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
@@ -18,6 +19,7 @@ from kusamushiri.models import (
     CollectRequest,
     MediaFilter,
     PostKindFilter,
+    RetryPolicy,
     SearchMode,
     parse_keywords,
 )
@@ -85,6 +87,22 @@ class CollectOptions:
 class DeleteOptions:
     interval: float = DEFAULT_ACTION_INTERVAL_SECONDS
     confirm: bool = True
+    retry_policy: RetryPolicy = field(default_factory=RetryPolicy)
+
+
+DELETE_ADVANCED_FIELDS = (
+    ("max_retries", "max_retries", int, "additional safe action retries per item (0..20)"),
+    ("retry_delay", "initial_delay_seconds", float, "seconds before the first safe action retry"),
+    ("retry_max_delay", "max_delay_seconds", float, "backoff cap; never shortens Retry-After"),
+    ("retry_max_wait", "max_wait_seconds", float, "total retry/cooldown/saved-wait budget in seconds"),
+    ("batch_size", "batch_size", int, "new confirmed successes; 0 disables proactive pauses"),
+    ("batch_pause", "batch_pause_seconds", float, "seconds in each quiet proactive pause"),
+    ("max_cooldowns", "max_cooldowns", int, "across the whole batch; success does not reset (0..20)"),
+    ("cooldown_delay", "cooldown_delay_seconds", float, "seconds before the first rate-limit resume"),
+    ("rate_limit_interval", "rate_limit_interval_seconds", float, "minimum post-limit item interval in seconds"),
+    ("ancillary_rate_limit_mode", "ancillary_rate_limit_mode", str, "global / isolate-known; known GETs only"),
+)
+DELETE_KEYS = frozenset({"interval", "confirm", *(item[0] for item in DELETE_ADVANCED_FIELDS)})
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,6 +114,7 @@ class Recipe:
     archive: str | None = None
     collect: CollectOptions = field(default_factory=CollectOptions)
     delete: DeleteOptions | None = None
+    explicit_delete_keys: frozenset[str] = field(default_factory=frozenset, compare=False, repr=False)
 
     def resolve(self, relative: str) -> Path:
         """Paths in a recipe are relative to the recipe file, not the working directory."""
@@ -159,6 +178,8 @@ def _keywords(table: Mapping[str, object], key: str) -> tuple[str, ...]:
 
 
 def _non_negative(value: _Value | None, where: str) -> _Value | None:
+    if isinstance(value, float) and not math.isfinite(value):
+        raise RecipeError(f"{where}: must be finite")
     if isinstance(value, (int, float)) and value < 0:
         raise RecipeError(f"{where}: must be 0 or greater")
     return value
@@ -214,12 +235,23 @@ def parse_recipe(data: Mapping[str, object], path: Path) -> Recipe:
     delete: DeleteOptions | None = None
     delete_table = _table(data, "delete")
     if delete_table is not None:
-        _reject_unknown(delete_table, {"interval", "confirm"}, "delete.")
+        _reject_unknown(delete_table, set(DELETE_KEYS), "delete.")
+        defaults = RetryPolicy()
+        retry_values = {}
+        for key, attribute, kind, _note in DELETE_ADVANCED_FIELDS:
+            value = _check(delete_table, key, kind, "delete.")
+            retry_values[attribute] = getattr(defaults, attribute) if value is None else value
+        retry_policy = RetryPolicy(**retry_values)
+        try:
+            retry_policy.validate()
+        except ValueError as error:
+            raise RecipeError(f"delete: {error}") from error
         interval = _non_negative(_check(delete_table, "interval", float, "delete."), "delete.interval")
         confirm = _check(delete_table, "confirm", bool, "delete.")
         delete = DeleteOptions(
             interval=DEFAULT_ACTION_INTERVAL_SECONDS if interval is None else interval,
             confirm=True if confirm is None else confirm,
+            retry_policy=retry_policy,
         )
 
     return Recipe(
@@ -230,6 +262,7 @@ def parse_recipe(data: Mapping[str, object], path: Path) -> Recipe:
         archive=_check(data, "archive", str, "") or None,
         collect=collect,
         delete=delete,
+        explicit_delete_keys=frozenset(delete_table) if delete_table is not None else frozenset(),
     )
 
 
@@ -291,14 +324,20 @@ def format_recipe(recipe: Recipe) -> str:
         _line("order", "oldest" if collect.oldest_first else "newest", "newest / oldest (archive only)"),
     ]
     if recipe.delete is None:
-        lines += ["", "# Add a [delete] table to delete the collected posts:", "# [delete]", "# interval = 1.0"]
+        lines += ["", "# Add a [delete] table to delete the collected posts:", "# [delete]", f"# interval = {DEFAULT_ACTION_INTERVAL_SECONDS:g}"]
     else:
         lines += [
             "",
             "[delete]",
             _line("interval", recipe.delete.interval, "seconds between items"),
             _line("confirm", recipe.delete.confirm, "false runs without asking"),
+            "# Advanced values are optional; omitted values keep built-in safety defaults.",
         ]
+        defaults = RetryPolicy()
+        for key, attribute, _kind, note in DELETE_ADVANCED_FIELDS:
+            value = getattr(recipe.delete.retry_policy, attribute)
+            if key in recipe.explicit_delete_keys or value != getattr(defaults, attribute):
+                lines.append(_line(key, value, note))
     return "\n".join(lines) + "\n"
 
 
@@ -337,7 +376,7 @@ def _ask_number(ask: Ask, prompt: str, default: _Value | None, parse: Callable[[
         except ValueError:
             print(tr("数値を入力してください。"))
             continue
-        if isinstance(value, (int, float)) and value < 0:
+        if isinstance(value, (int, float)) and (not math.isfinite(value) or value < 0):
             print(tr("0 以上で入力してください。"))
             continue
         return value

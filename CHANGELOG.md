@@ -6,6 +6,35 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- Actionable privacy-safe diagnostics: fixed resource/API-family labels, per-trace endpoint groups,
+  a diagnostic-only API catalog, package source fingerprints and `diagnostics --summary`.
+- Exact idle-target reuse after known-only, positively unsent deferrals; early rate/cancel gates
+  avoid unnecessary menu operations. Unknown/mutation/target limits remain conservative.
+- Batch stop/wait/result summaries and partial-result retention on unexpected faults; explicit
+  cancellation propagation, nonrenewing Retry-After bookkeeping, global-mode auth stops and
+  conservative mutation receipt host/method/path/count/error-envelope validation.
+- Compact deletion templates (12 to 2 default keys) and focused tuning help (11 to 3 visible options).
+  All advanced keys/flags and explicit values remain compatible; the updater does not re-add defaults.
+- Correct ancillary isolation stop/storage paths: later missing views/controls stop without target
+  reload retries; blank duplicate Spaces parameters and malformed URLs stay unknown; deadlines
+  are stored synchronously with a durable lock and POSIX directory sync. Storage/control failures
+  cancel before offline attempts and retain restart protection. Unreadable/non-object mutation
+  bodies are ambiguous and never recorded as success or retried. Live opt-in awaits independent re-review.
+- Opt-in `--ancillary-rate-limit-mode isolate-known` / `[delete].ancillary_rate_limit_mode`
+  quarantines exact nonessential ViewerBadgeCounts and Spaces-only fleetline GETs after 420/429.
+  Requires a new service-worker-blocked routed context, preserves retry deadlines on exit,
+  suppresses endpoint retries until context close, and falls back/stops conservatively on missing
+  control or a local retry storm. Existing recipes/wizard/GUI default to global handling;
+  mutation refusals, authentication, uncertain outcomes and cancellation remain conservative.
+- Privacy-safe request/response correlation and operation phases in `KS_DIAG` events,
+  plus `diagnostics` to export only sanitized JSONL. Late/unmatched responses retain
+  their original or unknown association; logging changes no rate-limit policy or waits.
+- `update-recipe FILE [--dry-run]` adds missing concrete TOML defaults while retaining
+  values, comments and legacy aliases, with a diff, exclusive backup and validated
+  atomic replacement. Repeated updates are no-ops; it never enables an absent `[delete]`.
+- `update-recipe --all [--dry-run]` lists and updates saved recipes only in the current
+  directory, excluding artifacts/symlinks, validating all targets before writing and
+  reporting any partial completion on write failure with per-file backups.
 - `kusamushiri-cli`, included in the downloads, for semi-automated runs without the window.
   Started without arguments it asks for the filters once, saves them to `kusamushiri.toml`, and
   then signs in, collects, saves the list for review and asks before deleting; `run FILE` repeats it.
@@ -33,8 +62,22 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   record when it was fetched; results are kept per profile, shown as sortable columns, and exported.
 
 ### Changed
-- A run stops as soon as X answers with HTTP 429 (rate limit) instead of moving on to the next
-  item, in both the app and the CLI.
+- Post deletion/undo uses conservative defaults: 3-second item spacing and a 120-second quiet
+  pause after 25 new confirmed successes, with saved explicit values preserved.
+- Distinguish mutation/target-load/ancillary/unknown rate observations without assuming separate
+  server quota buckets. All observed X limits trigger bounded quiet cooldowns; unsent actions remain
+  pending rather than failed. Separate action retry and cooldown counts, preserve Retry-After and
+  deadlines, pace remaining items after a limit, and stop on exhaustion or unsafe outcomes.
+- Suspend browser networking during long waits, process queued responses before resuming, and
+  block browser startup before a saved cooldown deadline. Cancellation preserves the pause/deadline.
+- Expose the same nine controls in CLI, invocation-only recipe overrides and saved GUI settings.
+  Atomic receipts skip successes and hold uncertain/authentication/permanent outcomes; failed-list
+  exports include unprocessed rows. Other jobs continue to stop on HTTP 429.
+- Reuse the existing TOML `[delete]` settings with `delete --recipe`, add `run --interval`, and
+  apply explicit CLI overrides before TOML/defaults without rewriting files or safety deadlines.
+  Reject nonfinite intervals before execution; direct-delete confirmation/account choices remain explicit.
+- Document every tuning key/unit/default and batch-wide cooldown counting, add a commented
+  dry-run-oriented TOML example, and explain diagnostic 33/66-success stops without quota claims.
 
 ## [0.3.0] - 2026-10-01
 

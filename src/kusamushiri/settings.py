@@ -6,7 +6,7 @@ from typing import TypeVar, overload
 from PySide6.QtCore import QSettings
 
 from kusamushiri.i18n import DEFAULT_LANGUAGE, normalize_language, tr
-from kusamushiri.models import DEFAULT_ACTION_INTERVAL_SECONDS
+from kusamushiri.models import DEFAULT_ACTION_INTERVAL_SECONDS, RetryPolicy
 from kusamushiri.paths import (
     ACCOUNT_PROFILE_PREFIX,
     DEFAULT_ACCOUNT_NAME,
@@ -29,6 +29,15 @@ class AccountSettings:
     min_likes: int = 0
     min_replies: int = 0
     action_interval_seconds: float = DEFAULT_ACTION_INTERVAL_SECONDS
+    action_max_retries: int = 3
+    action_retry_delay_seconds: float = 60.0
+    action_retry_max_delay_seconds: float = 900.0
+    action_retry_max_wait_seconds: float = 1800.0
+    action_batch_size: int = RetryPolicy().batch_size
+    action_batch_pause_seconds: float = RetryPolicy().batch_pause_seconds
+    action_max_cooldowns: int = RetryPolicy().max_cooldowns
+    action_cooldown_delay_seconds: float = RetryPolicy().cooldown_delay_seconds
+    action_rate_limit_interval_seconds: float = RetryPolicy().rate_limit_interval_seconds
     since_date: str | None = None
     until_date: str | None = None
     since_date_enabled: bool = False
@@ -72,6 +81,15 @@ class AccountSettingsManager:
         self._settings.setValue(f"{prefix}min_likes", settings.min_likes)
         self._settings.setValue(f"{prefix}min_replies", settings.min_replies)
         self._settings.setValue(f"{prefix}action_interval_seconds", settings.action_interval_seconds)
+        self._settings.setValue(f"{prefix}action_max_retries", settings.action_max_retries)
+        self._settings.setValue(f"{prefix}action_retry_delay_seconds", settings.action_retry_delay_seconds)
+        self._settings.setValue(f"{prefix}action_retry_max_delay_seconds", settings.action_retry_max_delay_seconds)
+        self._settings.setValue(f"{prefix}action_retry_max_wait_seconds", settings.action_retry_max_wait_seconds)
+        self._settings.setValue(f"{prefix}action_batch_size", settings.action_batch_size)
+        self._settings.setValue(f"{prefix}action_batch_pause_seconds", settings.action_batch_pause_seconds)
+        self._settings.setValue(f"{prefix}action_max_cooldowns", settings.action_max_cooldowns)
+        self._settings.setValue(f"{prefix}action_cooldown_delay_seconds", settings.action_cooldown_delay_seconds)
+        self._settings.setValue(f"{prefix}action_rate_limit_interval_seconds", settings.action_rate_limit_interval_seconds)
         self._settings.setValue(f"{prefix}since_date_enabled", settings.since_date_enabled)
         self._settings.setValue(f"{prefix}until_date_enabled", settings.until_date_enabled)
         self._settings.setValue(f"{prefix}auto_save_interval_seconds", settings.auto_save_interval_seconds)
@@ -102,6 +120,15 @@ class AccountSettingsManager:
                 DEFAULT_ACTION_INTERVAL_SECONDS,
                 float,
             ),
+            action_max_retries=self._account_setting_value(prefix, "action_max_retries", 3, int),
+            action_retry_delay_seconds=self._account_setting_value(prefix, "action_retry_delay_seconds", 60.0, float),
+            action_retry_max_delay_seconds=self._account_setting_value(prefix, "action_retry_max_delay_seconds", 900.0, float),
+            action_retry_max_wait_seconds=self._account_setting_value(prefix, "action_retry_max_wait_seconds", 1800.0, float),
+            action_batch_size=self._account_setting_value(prefix, "action_batch_size", RetryPolicy().batch_size, int),
+            action_batch_pause_seconds=self._account_setting_value(prefix, "action_batch_pause_seconds", RetryPolicy().batch_pause_seconds, float),
+            action_max_cooldowns=self._account_setting_value(prefix, "action_max_cooldowns", RetryPolicy().max_cooldowns, int),
+            action_cooldown_delay_seconds=self._account_setting_value(prefix, "action_cooldown_delay_seconds", RetryPolicy().cooldown_delay_seconds, float),
+            action_rate_limit_interval_seconds=self._account_setting_value(prefix, "action_rate_limit_interval_seconds", RetryPolicy().rate_limit_interval_seconds, float),
             since_date=self._account_setting_value(prefix, "since_date", None, str),
             until_date=self._account_setting_value(prefix, "until_date", None, str),
             since_date_enabled=self._account_setting_value(prefix, "since_date_enabled", False, bool),

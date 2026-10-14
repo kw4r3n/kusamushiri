@@ -11,6 +11,46 @@ DEFAULT_LANGUAGE: Final = "ja"
 LANGUAGE_NAMES: Final = {"ja": "日本語", "en": "English"}
 
 ENGLISH: Final[dict[str, str]] = {
+    '中止': 'cancelled',
+    '総待機の上限': 'total wait limit',
+    '安全な再試行の上限': 'safe retry limit',
+    '認証・アカウント制限': 'authentication/account restriction',
+    '恒久エラー': 'permanent error',
+    '予期しないエラー': 'unexpected error',
+    '実行記録の保存エラー': 'receipt storage error',
+    '対象表示の変化': 'target view changed',
+    '結果不明': 'ambiguous',
+    '保存した対象表示を確認できないため停止します。再読込や再送はしません。': 'The saved target view cannot be revalidated. Stopping without reloading or resubmitting.',
+    'バッチ終了: 成功{successes}、未処理{unprocessed}、失敗{failed}。理由: {reason}。休止{cooldowns}回／{seconds:.1f}秒。': 'Batch ended: {successes} successful, {unprocessed} unprocessed, {failed} failed. Reason: {reason}; {cooldowns} cooldowns / {seconds:.1f}s.',
+    'X の利用制限（{scope} / {endpoint}）': 'X rate limit ({scope} / {endpoint})',
+    '{reason}: {seconds:.1f} 秒休止。期限 {deadline}。通信を休止し、中止できます。': '{reason}: pausing {seconds:.1f}s until {deadline}. Networking is paused; cancellation is available.',
+    '{reason}: {seconds:.1f} 秒休止（{current}/{limit}）。期限 {deadline}。通信を休止し、中止できます。': '{reason}: pausing {seconds:.1f}s ({current}/{limit}) until {deadline}. Networking is paused; cancellation is available.',
+    '保存された待機期限 {deadline} まで通信を休止しています。期限後に再開してください。': 'Networking is paused until the saved deadline {deadline}. Start or resume after it expires.',
+    '利用制限を検知したため送信せず保留しました。削除失敗には数えません。': 'A rate limit was observed before submission. The item is pending, not a deletion failure.',
+    '制限後の最低項目間隔（秒）': 'Minimum item interval after a limit (s)',
+    '通信休止: {scope} / {endpoint}、期限 {deadline}': 'Network pause: {scope} / {endpoint}, until {deadline}',
+    '通信休止の上限': 'Cooldown limit',
+    '通信休止の上限に達したため停止します。未送信の項目は未処理で保持します。': 'Cooldown limit reached. Stopping; unsubmitted items remain unprocessed.',
+    '通信休止の初期待機（秒）': 'Initial cooldown wait (s)',
+    '再試行の待機上限に達しました。処理を停止します。': 'Retry wait budget reached. Stopping the batch.',
+    '前回の待機を再開': 'Resuming the saved cooldown',
+    '周辺通信の休止期限を保持': 'Retaining the ancillary request deadline',
+    '記録済みの項目をスキップ: {state}': 'Skipping a recorded item: {state}',
+    '完了件数による定期休止': 'Scheduled pause after confirmed completions',
+    '再試行上限に達しました。処理を停止します。': 'Retry limit reached. Stopping the batch.',
+    '記録された {state} のため再実行しません。X と実行記録を確認してください。': 'Recorded {state}; this item will not run again. Verify its state on X and review the action journal.',
+    '結果不明のため再試行しません。X で確認してください。': 'The outcome is uncertain; no retry will be sent. Check its state on X.',
+    '{mutation} の応答を確認できませんでした。結果不明です。': 'Could not verify the {mutation} response. Its outcome is uncertain.',
+    '送信前に中断しました。待機またはログイン確認が必要です。': 'Stopped before submission. Wait or check your login before resuming.',
+    '失敗・未処理の {count} 件を {path} に保存しました。記録済みの結果不明・恒久エラーは再実行しません。': 'Saved {count} failed/unprocessed rows to {path}. Recorded uncertain or permanent failures will not be repeated.',
+    '待機・再試行設定': 'Wait / retry settings',
+    '再試行上限': 'Retry limit',
+    '再試行の初期待機（秒）': 'Initial retry wait (s)',
+    '待機増加の上限（秒）': 'Backoff cap (s)',
+    '再試行の総待機上限（秒）': 'Total retry wait budget (s)',
+    '定期休止の完了件数（0で無効）': 'Pause every completed items (0 disables)',
+    '定期休止（秒）': 'Scheduled pause (s)',
+    '詳細を確認してください。安全に再試行できる失敗だけ再試行します。結果不明・認証・恒久エラーは実行記録で保留します。': 'Review the details. Only safe failures can be retried; uncertain, authentication and permanent errors are held in the action journal.',
     # Window and footer
     "待機中...": "Idle...",
     "ポストを確認して、必要なものだけ整理。": "Review your posts and clean up only what you choose.",
@@ -181,9 +221,6 @@ ENGLISH: Final[dict[str, str]] = {
     "リポスト解除 {count} 件": "undo {count} reposts",
     "いいね取り消し {count} 件": "undo {count} likes",
     "一部失敗": "Some items failed",
-    "失敗した項目の詳細を確認し、失敗分だけ再試行できます。": (
-        "Check the details of the failed items; you can retry just those."
-    ),
     "失敗分だけ再試行": "Retry failed items",
     "アプリケーションを終了しますか？": "Quit the application?",
     "処理中ですがアプリケーションを終了しますか？": "An operation is in progress. Quit the application anyway?",
@@ -198,9 +235,6 @@ ENGLISH: Final[dict[str, str]] = {
     ),
     "ログイン確認済み: @{username}": "Login verified: @{username}",
     "対象を収集しています...": "Collecting posts...",
-    "対象を収集中: {scanned} 件走査済み ({current}/{total})": (
-        "Collecting posts: {scanned} scanned ({current}/{total})"
-    ),
     "収集完了: {count} 件の対象を取得しました。": "Collection complete: found {count} items.",
     "@{username} のフォローリストを取得しています...": "Fetching the following list of @{username}...",
     "フォローリストを取得中: {count} 件": "Fetching following list: {count}",
@@ -431,7 +465,6 @@ ENGLISH: Final[dict[str, str]] = {
     "{succeeded}/{total} 件成功。": "{succeeded}/{total} succeeded.",
     "{succeeded}/{total} 件成功（途中で停止）。": "{succeeded}/{total} succeeded (stopped early).",
     "失敗: {target}: {error}": "failed: {target}: {error}",
-    "失敗した {count} 件を {path} に保存しました。": "Wrote {count} failed rows to {path}.",
     "{count} 件を {path} に保存しました。": "Wrote {count} items to {path}.",
     "{count} 件（確認のみ、何も変更していません）。": "{count} items (dry run, nothing changed).",
     "{path} の {count} 件を削除/解除しますか？元に戻せません。": (
@@ -440,7 +473,6 @@ ENGLISH: Final[dict[str, str]] = {
     "{path} の {count} 件をフォロー解除しますか？": "Unfollow {count} accounts listed in {path}?",
     "中断したため、ファイルは保存していません。": "Stopped; no file was written.",
     "対象のアカウントがありません。": "No accounts to process.",
-    "走査 {scanned} 件、該当 {current}/{total} 件": "scanned {scanned}, matched {current}/{total}",
     "アーカイブを読み込み中… {done}/{total}": "Reading the archive… {done}/{total}",
     "{count} 件取得": "collected {count}",
     "アーカイブの {total} 件から {count} 件を選びました（リポスト {reposts} 件、削除済み {deleted} 件は対象外）。": (
@@ -500,6 +532,10 @@ ENGLISH: Final[dict[str, str]] = {
     ),
     "数値を入力してください。": "Enter a number.",
     "0 以上で入力してください。": "Enter 0 or greater.",
+    "対象を収集中: {scanned} 件走査済み ({current}/{total})": (
+        "Collecting posts: {scanned} scanned ({current}/{total})"
+    ),
+    "走査 {scanned} 件、該当 {current}/{total} 件": "scanned {scanned}, matched {current}/{total}",
 }
 
 TRANSLATIONS: Final[dict[str, dict[str, str]]] = {"en": ENGLISH}

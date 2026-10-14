@@ -2,6 +2,7 @@ import queue
 import sys
 import threading
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
 from PySide6.QtCore import QObject, Signal
 from PySide6.QtGui import QColor, QPalette
@@ -9,13 +10,16 @@ from PySide6.QtWidgets import QApplication
 
 from kusamushiri.actions import action_label_for
 from kusamushiri.core import XDeleterCore, rate_limit_message
+from kusamushiri.deleted_posts import DeletedPostStore
 from kusamushiri.follows import ExportFollowingRequest, UnfollowRequest, UnfollowResult, write_follow_list
 from kusamushiri.gui import XDeleterWindow
 from kusamushiri.i18n import set_language, tr
 from kusamushiri.last_posts import FetchLastPostsRequest, LastPostResult, apply_last_post_entries
 from kusamushiri.logger import logger
-from kusamushiri.models import CollectRequest, ExecuteActionsRequest, PostActionResult
+from kusamushiri.models import CollectRequest, ExecuteActionsRequest
 from kusamushiri.paths import configure_frozen_browser_path, migrate_legacy_app_data
+from kusamushiri.progress import ActionJournal
+from kusamushiri.retry import ActionBatchError, run_post_actions
 from kusamushiri.settings import AccountSettingsManager, migrate_legacy_settings
 
 
@@ -222,6 +226,10 @@ class XDeleterWorker:
         if core.rate_limit_status is None:
             return
         message = rate_limit_message(core.rate_limit_status)
+        if isinstance(core, XDeleterCore) and core._browser.network_resume_at:
+            message += " " + tr("通信休止: {scope} / {endpoint}、期限 {deadline}",
+                                 scope=core.rate_limit_scope, endpoint=core.rate_limit_endpoint,
+                                 deadline=datetime.fromtimestamp(core._browser.network_resume_at, UTC).isoformat(timespec="seconds"))
         self.events.status_changed.emit(message)
         self.events.rate_limited.emit(message)
 
@@ -313,22 +321,28 @@ class XDeleterWorker:
                         continue
 
                     active_core = self._require_running_core(core)
-                    success_count = 0
-                    total = len(command.request.targets)
-                    interval_seconds = command.request.interval_seconds
-                    results: list[PostActionResult] = []
-                    for index, target in enumerate(command.request.targets, start=1):
-                        if self._cancel_event.is_set():
-                            break
-                        action_label = action_label_for(target.kind)
-                        self.events.delete_progress.emit(action_label, target.url, index, total)
-                        result = active_core.execute_post_action(target)
-                        results.append(result)
-                        if result.success:
-                            success_count += 1
-                        if interval_seconds > 0 and index < total and self._cancel_event.wait(interval_seconds):
-                            break
-                    logger.info("Finished delete batch: %s/%s succeeded", success_count, total)
+                    journal = None
+                    known_successes = None
+                    if isinstance(active_core, XDeleterCore):
+                        profile_dir = active_core._browser.profile_dir
+                        if profile_dir is None:
+                            raise RuntimeError("Browser profile is unknown; cannot safely record actions")
+                        known_successes = {f"post:{post_id}" for post_id in DeletedPostStore(profile_dir / "deleted-posts.json").load()}
+                        journal = ActionJournal(profile_dir / "action-progress.json", profile_dir.name.removeprefix("chromium-profile-"))
+                    results = run_post_actions(
+                        active_core, command.request.targets, command.request.interval_seconds, command.request.retry_policy,
+                        journal=journal, wait_for_cancel=None if isinstance(active_core, XDeleterCore) else self._cancel_event.wait,
+                        known_successes=known_successes,
+                        on_progress=lambda target, index, total: self.events.delete_progress.emit(
+                            action_label_for(target.kind),
+                            target.url, index, total),
+                        on_status=self.events.status_changed.emit,
+                    )
+                    logger.info("Finished delete batch: %s/%s succeeded",
+                                sum(result.success for result in results), len(command.request.targets))
+                    if core.is_cancel_requested() and not self._cancel_event.is_set():
+                        # Exhaustion/unsafe failures invalidate queued actions as user stops do.
+                        self.cancel_current_operation()
                     self._emit_rate_limit(core)
                     self.events.delete_completed.emit(results)
                     self._report_stop(core, tr("削除/解除処理を中断しました。"))
@@ -419,6 +433,12 @@ class XDeleterWorker:
 
                 logger.warning("Unknown worker command received: %s", command)
             except Exception as error:
+                if isinstance(command, DeletePostsCommand) and isinstance(error, ActionBatchError):
+                    # Faults must retain completed rows and invalidate queued work
+                    # just as a normally returned unsafe result does.
+                    self.cancel_current_operation()
+                    self._emit_rate_limit(core)
+                    self.events.delete_completed.emit(error.results)
                 self._handle_error(getattr(command, "action", "worker command"), error)
 
     def shutdown(self) -> None:

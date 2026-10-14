@@ -1,16 +1,18 @@
+import math
 import re
 import unicodedata
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from typing import Final, Literal
 
 from kusamushiri.i18n import tr
+from kusamushiri.rate_limits import RateLimitScope
 
 MediaFilter = Literal["all", "with_media", "without_media"]
 SearchMode = Literal["profile", "search"]
 PostKindFilter = Literal["posts", "reposts", "all", "likes"]
 PostKind = Literal["post", "repost", "like"]
-DEFAULT_ACTION_INTERVAL_SECONDS = 1.0
+DEFAULT_ACTION_INTERVAL_SECONDS = 3.0
 KEYWORD_SEPARATOR_PATTERN: Final = re.compile(r"[,、，\n]")
 
 
@@ -54,23 +56,73 @@ class PostActionTarget:
     kind: PostKind
 
 
+FailureKind = Literal["retryable", "permanent", "auth", "ambiguous"]
+
+
+@dataclass(frozen=True, slots=True)
+class RetryPolicy:
+    max_retries: int = 3
+    batch_size: int = 25
+    batch_pause_seconds: float = 120.0
+    max_cooldowns: int = 3
+    cooldown_delay_seconds: float = 120.0
+    rate_limit_interval_seconds: float = 5.0
+    initial_delay_seconds: float = 60.0
+    max_delay_seconds: float = 900.0
+    max_wait_seconds: float = 1800.0
+    ancillary_rate_limit_mode: Literal["global", "isolate-known"] = "global"
+
+    def validate(self) -> None:
+        if self.ancillary_rate_limit_mode not in ("global", "isolate-known"):
+            raise ValueError("ancillary_rate_limit_mode must be global or isolate-known")
+        if isinstance(self.max_retries, bool) or not isinstance(self.max_retries, int) or not 0 <= self.max_retries <= 20:
+            raise ValueError("max_retries must be an integer between 0 and 20")
+        if isinstance(self.max_cooldowns, bool) or not isinstance(self.max_cooldowns, int) or not 0 <= self.max_cooldowns <= 20:
+            raise ValueError("max_cooldowns must be an integer between 0 and 20")
+        if isinstance(self.batch_size, bool) or not isinstance(self.batch_size, int) or not 0 <= self.batch_size <= 10000:
+            raise ValueError("batch_size must be an integer between 0 and 10000")
+        for name in ("initial_delay_seconds", "max_delay_seconds", "max_wait_seconds", "batch_pause_seconds", "cooldown_delay_seconds", "rate_limit_interval_seconds"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not math.isfinite(value) or value <= 0:
+                raise ValueError(f"{name} must be finite and positive")
+        if self.max_delay_seconds < max(self.initial_delay_seconds, self.cooldown_delay_seconds):
+            raise ValueError("max_delay_seconds must be at least both initial_delay_seconds and cooldown_delay_seconds")
+
+    def cooldown_delay(self, cooldown: int, retry_after: float | None = None) -> float:
+        return max(min(self.max_delay_seconds, self.cooldown_delay_seconds * 2 ** (cooldown - 1)), retry_after or 0.0)
+
+    def delay(self, retry: int, retry_after: float | None = None) -> float:
+        backoff = min(self.max_delay_seconds, self.initial_delay_seconds * 2 ** (retry - 1))
+        # Never shorten a server's requested delay to fit the local backoff cap.
+        return max(backoff, retry_after or 0.0)
+
+
 @dataclass(frozen=True, slots=True)
 class PostActionResult:
     target: PostActionTarget
     action_label: str
     success: bool
     error_message: str | None
+    failure_kind: FailureKind = "permanent"
+    retry_after_seconds: float | None = None
+    attempts: int = 1
+    deferred: bool = False
+    rate_limit_scope: RateLimitScope | None = None
+    rate_limit_endpoint: str | None = None
+    view_reuse_invalid: bool = False
 
 
 @dataclass(slots=True, frozen=True)
 class ExecuteActionsRequest:
     targets: list[PostActionTarget]
     interval_seconds: float = DEFAULT_ACTION_INTERVAL_SECONDS
+    retry_policy: RetryPolicy = field(default_factory=RetryPolicy)
 
     def validate(self) -> None:
         if not self.targets:
             raise ValueError(tr("実行対象が選択されていません。"))
-        if self.interval_seconds < 0:
+        self.retry_policy.validate()
+        if not math.isfinite(self.interval_seconds) or self.interval_seconds < 0:
             raise ValueError(tr("削除/解除間隔は0秒以上で指定してください。"))
 
 

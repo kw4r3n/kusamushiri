@@ -9,6 +9,8 @@ import argparse
 import csv
 import json
 import logging
+import math
+import re
 import signal
 import sys
 import time
@@ -18,7 +20,9 @@ from dataclasses import asdict, replace
 from datetime import date, datetime
 from pathlib import Path
 from types import FrameType
-from typing import TypeVar
+from typing import TypedDict, TypeVar
+
+from platformdirs import user_log_dir
 
 from kusamushiri.actions import action_label_for
 from kusamushiri.archive import ArchiveError, load_archive_posts, select_archive_posts
@@ -42,21 +46,32 @@ from kusamushiri.models import (
     PostActionTarget,
     PostKind,
     PostRecord,
+    RetryPolicy,
     parse_keywords,
 )
+from kusamushiri.network_diagnostics import diagnostic_excerpt, diagnostic_summary
 from kusamushiri.parsing import extract_post_id
-from kusamushiri.paths import configure_frozen_browser_path, migrate_legacy_app_data
+from kusamushiri.paths import (
+    configure_frozen_browser_path,
+    get_account_profile_dir,
+    migrate_legacy_app_data,
+    normalize_account_name,
+)
+from kusamushiri.progress import ActionJournal
 from kusamushiri.recipe import (
     ARCHIVE_ORDERS,
     DEFAULT_MAX_POSTS,
     DEFAULT_RECIPE_NAME,
     CollectOptions,
+    DeleteOptions,
     Recipe,
     RecipeError,
     choose_recipe_path,
     load_recipe,
     run_wizard,
 )
+from kusamushiri.recipe_update import RecipeUpdate, apply_recipe_update, discover_update_recipes, plan_recipe_update
+from kusamushiri.retry import ActionBatchError, run_post_actions
 
 EXIT_FAILURE = 1
 EXIT_USAGE = 2
@@ -74,6 +89,10 @@ _Item = TypeVar("_Item")
 _Result = TypeVar("_Result")
 
 
+class _SessionOptions(TypedDict, total=False):
+    retry_policy: RetryPolicy
+
+
 class CliError(Exception):
     """A failure reported as one line on stderr with a non-zero exit code."""
 
@@ -83,6 +102,7 @@ class CliError(Exception):
 
 
 def _info(message: str) -> None:
+    _end_progress()
     print(message, file=sys.stderr, flush=True)
 
 
@@ -122,8 +142,8 @@ def _output_path(text: str) -> Path:
 
 def _non_negative_float(text: str) -> float:
     value = float(text)
-    if value < 0:
-        raise argparse.ArgumentTypeError("must be 0 or greater")
+    if not math.isfinite(value) or value < 0:
+        raise argparse.ArgumentTypeError("must be finite and 0 or greater")
     return value
 
 
@@ -254,12 +274,15 @@ def browser_session(
     login_timeout: float | None = None,
     not_logged_in_message: str | None = None,
     require_login: bool = True,
+    retry_policy: RetryPolicy | None = None,
 ) -> Iterator[XDeleterCore]:
     """Start the browser on a saved profile, require a login, and stop it on exit.
 
     The first Ctrl+C asks the running batch to stop after the current item; a second one aborts.
     """
     core = XDeleterCore(headless=headless)
+    if retry_policy is not None:
+        core.prepare_post_action_policy(retry_policy)
 
     def on_interrupt(_signum: int, _frame: FrameType | None) -> None:
         if core.is_cancel_requested():
@@ -287,9 +310,11 @@ def browser_session(
         core.stop_browser()
 
 
-def _signed_in_core(stack: ExitStack, profile: str | None, *, headless: bool, interactive: bool) -> XDeleterCore:
+def _signed_in_core(stack: ExitStack, profile: str | None, *, headless: bool, interactive: bool,
+                    retry_policy: RetryPolicy | None = None) -> XDeleterCore:
     """Open a signed-in browser in `stack`, asking for a sign-in in a window when needed and possible."""
-    core = stack.enter_context(browser_session(profile, headless=headless, require_login=False))
+    extra: _SessionOptions = {"retry_policy": retry_policy} if retry_policy is not None else {}
+    core = stack.enter_context(browser_session(profile, headless=headless, require_login=False, **extra))
     if core.is_logged_in():
         return core
     if not interactive:
@@ -297,7 +322,7 @@ def _signed_in_core(stack: ExitStack, profile: str | None, *, headless: bool, in
     if headless:
         # Signing in needs a visible window.
         stack.close()
-        core = stack.enter_context(browser_session(profile, headless=False, require_login=False))
+        core = stack.enter_context(browser_session(profile, headless=False, require_login=False, **extra))
     _info(
         tr(
             "開いたブラウザで X にログインしてください（最大 {minutes} 分待ちます）。",
@@ -310,7 +335,7 @@ def _signed_in_core(stack: ExitStack, profile: str | None, *, headless: bool, in
         raise CliError(tr("ログインを確認できませんでした。"))
     if headless:
         stack.close()
-        core = stack.enter_context(browser_session(profile, headless=True))
+        core = stack.enter_context(browser_session(profile, headless=True, **extra))
     return core
 
 
@@ -370,6 +395,8 @@ def _collect_posts(core: XDeleterCore, request: CollectRequest) -> list[PostReco
     return posts
 
 
+
+
 def _select_archive_posts(
     archive_path: Path, request: CollectRequest, profile: str | None, *, oldest_first: bool
 ) -> list[PostRecord]:
@@ -398,25 +425,32 @@ def _select_archive_posts(
 
 
 def _execute_post_actions(
-    core: XDeleterCore, targets: Sequence[PostActionTarget], interval_seconds: float, profile: str | None
+    core: XDeleterCore, targets: Sequence[PostActionTarget], interval_seconds: float, profile: str | None,
+    retry_policy: RetryPolicy | None = None,
 ) -> list[PostActionResult]:
-    results = _run_batch(
-        core,
-        targets,
-        interval_seconds,
-        core.execute_post_action,
-        lambda target: f"{action_label_for(target.kind)} {target.url}",
-    )
-    # Remember deleted originals so later archive imports skip them, as the app does.
-    deleted_ids = [
-        extract_post_id(result.target.url) for result in results if result.success and result.target.kind == "post"
-    ]
-    if deleted_ids:
-        try:
-            DeletedPostStore.for_account(profile).record(deleted_ids)
-        except OSError as error:
-            _info(tr("削除済みポスト ID を保存できませんでした: {error}", error=error))
-    return results
+    # One receipt file per browser profile is shared by CLI files, recipes and GUI.
+    journal = ActionJournal(get_account_profile_dir(profile) / "action-progress.json", normalize_account_name(profile))
+
+    def remember(result: PostActionResult) -> None:
+        if result.success and result.target.kind == "post":
+            try:
+                DeletedPostStore.for_account(profile).record([extract_post_id(result.target.url)])
+            except OSError as error:
+                _info(tr("削除済みポスト ID を保存できませんでした: {error}", error=error))
+
+    known_successes = {f"post:{post_id}" for post_id in DeletedPostStore.for_account(profile).load()}
+    try:
+        return run_post_actions(
+            core, targets, interval_seconds, retry_policy or RetryPolicy(), journal=journal,
+            on_progress=lambda target, index, total: _progress(
+                f"[{index}/{total}] {action_label_for(target.kind)} {target.url}"),
+            on_status=_info, on_result=remember, known_successes=known_successes,
+        )
+    except ActionBatchError as error:
+        _info(str(error))
+        return error.results
+    finally:
+        _end_progress()
 
 
 def _report_post_actions(
@@ -425,20 +459,28 @@ def _report_post_actions(
     cancelled: bool,
     rows: Sequence[Mapping[str, object]],
     failed_output: Path | None,
+    execution_error: bool = False,
 ) -> int:
     failed_indexes = [index for index, result in enumerate(results) if not result.success]
     for index in failed_indexes:
         result = results[index]
         _info(tr("失敗: {target}: {error}", target=result.target.url, error=result.error_message or "?"))
-    _info(_summary(len(results) - len(failed_indexes), total, cancelled))
-    failed_rows = [rows[index] for index in failed_indexes]
+    _info(_summary(len(results) - len(failed_indexes), total, cancelled or len(results) < total))
+    failed_rows = [rows[index] for index in failed_indexes] + list(rows[len(results):])
     if failed_output is not None and failed_rows:
         fields = list(failed_rows[0].keys())
         write_records(failed_output, fields, [{field: row.get(field) for field in fields} for row in failed_rows])
-        _info(tr("失敗した {count} 件を {path} に保存しました。", count=len(failed_rows), path=failed_output))
+        _info(tr("失敗・未処理の {count} 件を {path} に保存しました。記録済みの結果不明・恒久エラーは再実行しません。", count=len(failed_rows), path=failed_output))
+    if execution_error or any(results[index].failure_kind in {"auth", "permanent", "ambiguous"} for index in failed_indexes):
+        return EXIT_FAILURE
     if cancelled:
         return EXIT_INTERRUPTED
     return EXIT_FAILURE if failed_indexes else 0
+
+
+def _execution_failed(core: XDeleterCore) -> bool:
+    summary = getattr(core, "last_action_batch_summary", None)
+    return isinstance(summary, dict) and summary.get("stop_reason") in {"unexpected_error", "storage_error"}
 
 
 def _post_action_request(targets: list[PostActionTarget], interval: float) -> ExecuteActionsRequest:
@@ -484,9 +526,73 @@ def cmd_archive(args: argparse.Namespace) -> int:
     return 0
 
 
+RETRY_ARGUMENTS = (
+    ("max_retries", "max_retries", int, "additional safe action retries per item (0..20); unsent rate-limit deferrals do not count"),
+    ("retry_delay", "initial_delay_seconds", float, "initial retry wait in seconds"),
+    ("retry_max_delay", "max_delay_seconds", float, "backoff cap in seconds; never shortens Retry-After"),
+    ("retry_max_wait", "max_wait_seconds", float, "total retry/cooldown/saved-wait budget per run in seconds; ordinary item spacing and rate-free proactive pauses are excluded"),
+    ("batch_size", "batch_size", int, "confirmed new successes between proactive pauses (0 disables)"),
+    ("batch_pause", "batch_pause_seconds", float, "proactive pause in seconds; not a known optimal X window"),
+    ("max_cooldowns", "max_cooldowns", int, "rate-limit cooldowns across the whole batch (0..20); successful recovery does not reset this count"),
+    ("cooldown_delay", "cooldown_delay_seconds", float, "initial rate-limit quiet cooldown in seconds"),
+    ("rate_limit_interval", "rate_limit_interval_seconds", float, "minimum seconds between items for the rest of a run after a rate limit"),
+)
+
+
+def _retry_policy_from_args(args: argparse.Namespace, defaults: RetryPolicy | None = None) -> RetryPolicy:
+    overrides = {
+        attribute: getattr(args, name)
+        for name, attribute, _kind, _help in RETRY_ARGUMENTS
+        if getattr(args, name, None) is not None
+    }
+    mode = getattr(args, "ancillary_rate_limit_mode", None)
+    if mode is not None:
+        overrides["ancillary_rate_limit_mode"] = mode
+    return replace(defaults or RetryPolicy(), **overrides)
+
+
+def _add_retry_args(parser: argparse.ArgumentParser, *, recipe_overrides: bool = False) -> None:
+    parser.epilog = (parser.epilog or "") + " Advanced compatibility flags remain accepted; see the README's advanced settings table."
+    defaults = RetryPolicy()
+    for name, attribute, kind, description in RETRY_ARGUMENTS:
+        value = getattr(defaults, attribute)
+        note = f"override recipe; omitted keeps recipe value (fallback {value:g})" if recipe_overrides else f"default {value:g}"
+        parser.add_argument("--" + name.replace("_", "-"), type=kind,
+                            default=None if recipe_overrides else value,
+                            help=f"{description} ({note})" if name == "retry_max_wait" else argparse.SUPPRESS)
+    parser.add_argument("--ancillary-rate-limit-mode", choices=("global", "isolate-known"),
+                        default=None if recipe_overrides else "global",
+                        help="global (safe default) or isolate-known: quarantine exact ViewerBadgeCounts/fleetline GETs; "
+                             "requires a new service-worker-blocked routed context; otherwise global fallback; CLI overrides TOML")
+
+
+def _delete_tuning_from_args(args: argparse.Namespace) -> DeleteOptions:
+    defaults = DeleteOptions()
+    recipe_path = getattr(args, "recipe", None)
+    if recipe_path is not None:
+        try:
+            recipe = load_recipe(recipe_path)
+        except RecipeError as error:
+            raise CliError(str(error), EXIT_USAGE) from error
+        if recipe.delete is None:
+            raise CliError("The tuning recipe requires an existing [delete] table; nothing was executed.", EXIT_USAGE)
+        defaults = recipe.delete
+    interval_override = getattr(args, "interval", None)
+    interval = defaults.interval if interval_override is None else interval_override
+    # Only pacing is inherited: profile, headless and confirmation remain the
+    # direct-delete command's existing explicit options.
+    return DeleteOptions(interval=interval, confirm=True,
+                         retry_policy=_retry_policy_from_args(args, defaults.retry_policy))
+
+
 def cmd_delete(args: argparse.Namespace) -> int:
+    options = _delete_tuning_from_args(args)
+    try:
+        options.retry_policy.validate()
+    except ValueError as error:
+        raise CliError(str(error), EXIT_USAGE) from error
     rows = read_rows(args.file)
-    targets = _post_action_request(post_targets_from_rows(rows), args.interval).targets
+    targets = _post_action_request(post_targets_from_rows(rows), options.interval).targets
     if args.dry_run:
         for target in targets:
             print(f"{action_label_for(target.kind)}\t{target.url}")
@@ -495,10 +601,11 @@ def cmd_delete(args: argparse.Namespace) -> int:
     _confirm(
         tr("{path} の {count} 件を削除/解除しますか？元に戻せません。", path=args.file, count=len(targets)), args.yes
     )
-    with browser_session(args.profile, headless=args.headless) as core:
-        results = _execute_post_actions(core, targets, args.interval, args.profile)
+    extra: _SessionOptions = {"retry_policy": options.retry_policy} if options.retry_policy.ancillary_rate_limit_mode == "isolate-known" else {}
+    with browser_session(args.profile, headless=args.headless, **extra) as core:
+        results = _execute_post_actions(core, targets, options.interval, args.profile, options.retry_policy)
         cancelled = core.is_cancel_requested()
-    return _report_post_actions(results, len(targets), cancelled, rows, args.failed_output)
+    return _report_post_actions(results, len(targets), cancelled, rows, args.failed_output, execution_error=_execution_failed(core))
 
 
 def cmd_following(args: argparse.Namespace) -> int:
@@ -607,10 +714,11 @@ def run_recipe(recipe: Recipe, *, interactive: bool) -> int:
 
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     list_path = recipe.output_path / f"posts-{stamp}.csv"
+    extra: _SessionOptions = {"retry_policy": recipe.delete.retry_policy} if recipe.delete is not None and recipe.delete.retry_policy.ancillary_rate_limit_mode == "isolate-known" else {}
     with ExitStack() as stack:
         core: XDeleterCore | None = None
         if archive_path is None:
-            core = _signed_in_core(stack, recipe.profile, headless=recipe.headless, interactive=interactive)
+            core = _signed_in_core(stack, recipe.profile, headless=recipe.headless, interactive=interactive, **extra)
             request = options.to_request(options.user or core.get_logged_in_username() or "")
             _validate(request)
             posts = _collect_posts(core, request)
@@ -642,11 +750,11 @@ def run_recipe(recipe: Recipe, *, interactive: bool) -> int:
             return 0
         targets = _post_action_request(post_targets_from_rows(rows), recipe.delete.interval).targets
         if core is None:
-            core = _signed_in_core(stack, recipe.profile, headless=recipe.headless, interactive=interactive)
-        results = _execute_post_actions(core, targets, recipe.delete.interval, recipe.profile)
+            core = _signed_in_core(stack, recipe.profile, headless=recipe.headless, interactive=interactive, **extra)
+        results = _execute_post_actions(core, targets, recipe.delete.interval, recipe.profile, recipe.delete.retry_policy)
         cancelled = core.is_cancel_requested()
     failed_path = list_path.with_name(f"failed-{list_path.name}")
-    return _report_post_actions(results, len(targets), cancelled, rows, failed_path)
+    return _report_post_actions(results, len(targets), cancelled, rows, failed_path, execution_error=_execution_failed(core))
 
 
 def _ask_yes_no(prompt: str) -> bool:
@@ -658,6 +766,18 @@ def cmd_run(args: argparse.Namespace) -> int:
         recipe = load_recipe(args.recipe)
     except RecipeError as error:
         raise CliError(str(error), EXIT_USAGE) from error
+    has_overrides = getattr(args, "interval", None) is not None or any(getattr(args, name, None) is not None for name, *_rest in RETRY_ARGUMENTS)
+    if has_overrides:
+        if recipe.delete is None:
+            raise CliError("Retry/batch overrides require an existing [delete] table; no deletion was enabled.", EXIT_USAGE)
+        retry_policy = _retry_policy_from_args(args, recipe.delete.retry_policy)
+        try:
+            retry_policy.validate()
+        except ValueError as error:
+            raise CliError(str(error), EXIT_USAGE) from error
+        interval_override = getattr(args, "interval", None)
+        interval = recipe.delete.interval if interval_override is None else interval_override
+        recipe = replace(recipe, delete=replace(recipe.delete, interval=interval, retry_policy=retry_policy))
     return run_recipe(recipe, interactive=sys.stdin.isatty())
 
 
@@ -723,6 +843,113 @@ def _add_confirm_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("-y", "--yes", action="store_true", help="skip the confirmation prompt")
 
 
+def _show_recipe_update(update: RecipeUpdate) -> None:
+    if update.unknown_keys:
+        _info(
+            f"{update.path}: Preserved unknown settings: " + ", ".join(update.unknown_keys)
+            + "; the normal recipe loader still rejects these settings."
+        )
+    if update.added_keys:
+        sys.stdout.write(update.diff)
+    else:
+        _info(f"{update.path}: Recipe already has all available defaults; nothing changed.")
+
+
+def _update_all_recipes(args: argparse.Namespace) -> int:
+    directory = Path.cwd()
+    try:
+        paths = discover_update_recipes(directory)
+    except OSError as error:
+        raise CliError(f"{directory}: recipe discovery failed: {error}") from error
+    print(f"Matched {len(paths)} recipe(s) in {directory}:")
+    for path in paths:
+        print(f"  {path}")
+    if not paths:
+        _info("No matching recipes; nothing changed.")
+        return 0
+
+    updates: list[RecipeUpdate] = []
+    errors = 0
+    # Validate every discovered file before writing any recipe or backup.
+    for path in paths:
+        try:
+            update = plan_recipe_update(path)
+        except RecipeError as error:
+            _info(f"{path}: validation failed: {error}")
+            errors += 1
+        else:
+            updates.append(update)
+            _show_recipe_update(update)
+    if errors:
+        _info(f"Validation failed for {errors} of {len(paths)} recipes; no recipes or backups were written.")
+        return EXIT_USAGE
+    if args.dry_run:
+        changed = sum(bool(update.added_keys) for update in updates)
+        _info(f"Preview only: {changed} would change, {len(updates) - changed} unchanged; no recipes or backups were written.")
+        return 0
+
+    changed = unchanged = 0
+    for index, update in enumerate(updates):
+        try:
+            backup = apply_recipe_update(update)
+        except RecipeError as error:
+            _info(f"{update.path}: update failed: {error}")
+            _info(
+                f"Stopped: {changed} updated, {unchanged} unchanged, 1 failed, "
+                f"{len(updates) - index - 1} not attempted. "
+                "Earlier successful updates remain in place with the backups listed above."
+            )
+            return EXIT_FAILURE
+        if backup is None:
+            unchanged += 1
+        else:
+            changed += 1
+            _info(f"Updated {update.path}; backup: {backup}")
+    _info(f"Complete: {changed} updated, {unchanged} unchanged, 0 failed.")
+    return 0
+
+
+def cmd_update_recipe(args: argparse.Namespace) -> int:
+    if args.all:
+        if args.recipe is not None:
+            raise CliError("--all cannot be combined with a recipe path", EXIT_USAGE)
+        return _update_all_recipes(args)
+    try:
+        update = plan_recipe_update(args.recipe or Path(DEFAULT_RECIPE_NAME))
+        _show_recipe_update(update)
+        if not update.added_keys:
+            return 0
+        if args.dry_run:
+            _info("Preview only; no recipe or backup was written.")
+        else:
+            backup = apply_recipe_update(update)
+            _info(f"Updated {update.path}; backup: {backup}")
+    except RecipeError as error:
+        raise CliError(str(error), EXIT_USAGE) from error
+    return 0
+
+
+def cmd_diagnostics(args: argparse.Namespace) -> int:
+    if not 1 <= args.max_events <= 1000:
+        raise CliError("--max-events must be between 1 and 1000", EXIT_USAGE)
+    if args.trace is not None and not re.fullmatch(r"[0-9a-f]{12}", args.trace):
+        raise CliError("--trace requires a 12-character diagnostic trace ID", EXIT_USAGE)
+    path = args.log or Path(user_log_dir("kusamushiri", appauthor=False)) / "kusamushiri.log"
+    try:
+        events = diagnostic_excerpt(path.expanduser(), trace=args.trace, max_events=None if getattr(args, "summary", False) else args.max_events)
+    except OSError as error:
+        raise CliError("Cannot read diagnostic log; check the path and permissions.") from error
+    if not events:
+        _info("No diagnostic events found; perform your intended operation with this version first.")
+        return 0
+    if getattr(args, "summary", False):
+        print(json.dumps(diagnostic_summary(events), separators=(",", ":")))
+    else:
+        for event in events:
+            print(json.dumps(event, separators=(",", ":")))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="kusamushiri-cli",
@@ -735,8 +962,36 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--lang", choices=("ja", "en"), default="ja", help="language of messages")
     commands = parser.add_subparsers(dest="command", metavar="COMMAND")
 
-    run = commands.add_parser("run", help="collect, review and delete as a saved recipe (TOML) says")
+    diagnostics = commands.add_parser("diagnostics", help="print a sanitized excerpt of the latest diagnostic trace")
+    diagnostics.add_argument("--log", type=Path, help="read this log and its rotations instead of the app log")
+    diagnostics.add_argument("--trace", help="select a specific 12-character trace ID instead of the latest")
+    diagnostics.add_argument("--max-events", type=int, default=300, help="last events to include (1..1000; default 300)")
+    diagnostics.add_argument("--summary", action="store_true", help="summarize all available sanitized events, unknown request groups and batch stop reason")
+    diagnostics.set_defaults(handler=cmd_diagnostics)
+
+    update = commands.add_parser(
+        "update-recipe",
+        help="add missing TOML defaults, preserving existing values/comments",
+        epilog="Shows a diff; writes an exclusive backup before atomic replacement. "
+        "--all scans kusamushiri*.toml only in the current directory, excluding artifacts and symlinks. "
+        "All files are validated first; validation failures write nothing (exit 2). "
+        "A write failure stops the batch (exit 1), reporting completed updates and backups. "
+        "Does not add [delete], choose unset optional values, run actions, or rewrite legacy aliases. "
+        "Unknown settings are preserved and reported. Ordinary loading never rewrites recipes.",
+    )
+    update.add_argument(
+        "recipe", type=Path, nargs="?", help=f"default: {DEFAULT_RECIPE_NAME}; cannot be combined with --all"
+    )
+    update.add_argument("--all", action="store_true", help="update discovered recipes in the current directory only")
+    update.add_argument("--dry-run", action="store_true", help="show the diff without writing the recipe or backup")
+    update.set_defaults(handler=cmd_update_recipe)
+
+    run = commands.add_parser("run", help="collect, review and delete as a saved recipe (TOML) says",
+                              epilog="Flags override TOML for this invocation without rewriting it or safety deadlines. No --dry-run here: preview a reviewed list with delete LIST --recipe FILE --dry-run.")
     run.add_argument("recipe", type=Path, nargs="?", default=Path(DEFAULT_RECIPE_NAME), help="default: %(default)s")
+    run.add_argument("--interval", type=_non_negative_float, default=None,
+                     help="override [delete].interval in seconds for this invocation; otherwise keep the recipe value")
+    _add_retry_args(run, recipe_overrides=True)
     run.set_defaults(handler=cmd_run)
 
     login = commands.add_parser("login", help="open a browser window and wait for you to sign in")
@@ -767,17 +1022,20 @@ def build_parser() -> argparse.ArgumentParser:
     archive.add_argument("-o", "--output", type=_output_path, required=True, help="output .csv or .json")
     archive.set_defaults(handler=cmd_archive)
 
-    delete = commands.add_parser("delete", help="delete posts, undo reposts or remove likes listed in a file")
+    delete = commands.add_parser("delete", help="delete posts, undo reposts or remove likes listed in a file",
+                                 epilog="Tuning precedence: explicit CLI flag > optional --recipe [delete] value > default. Saved safety deadlines still apply. --dry-run opens no browser and changes no account data.")
     delete.add_argument("file", type=Path, help="CSV/JSON from collect, archive or the GUI (needs url and kind)")
     _add_browser_args(delete)
     _add_confirm_args(delete)
+    delete.add_argument("--recipe", type=Path, help="read [delete] tuning only; does not inherit profile, headless or confirmation, or collect; flags override TOML")
     delete.add_argument(
         "--interval",
         type=_non_negative_float,
-        default=DEFAULT_ACTION_INTERVAL_SECONDS,
-        help="seconds between items (default: %(default)s)",
+        default=None,
+        help=f"seconds between items; flags override recipe settings (fallback: {DEFAULT_ACTION_INTERVAL_SECONDS:g})",
     )
-    delete.add_argument("--failed-output", type=_output_path, help="write rows that failed here for a retry")
+    delete.add_argument("--failed-output", type=_output_path, help="write failed and unprocessed rows; recorded unsafe outcomes remain held")
+    _add_retry_args(delete, recipe_overrides=True)
     delete.set_defaults(handler=cmd_delete)
 
     following = commands.add_parser("following", help="export the accounts you follow to a CSV/JSON file")
@@ -820,7 +1078,7 @@ def _pause_before_exit() -> None:
         input(tr("Enter キーで終了します…"))
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def _main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     _configure_console_logging(args.verbose)
@@ -829,9 +1087,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     if wizard and not sys.stdin.isatty():
         parser.print_help(sys.stderr)
         return EXIT_USAGE
-    if migrate_legacy_app_data():
-        logger.info("Moved profiles from the previous xposdeleter data directory.")
-    configure_frozen_browser_path()
+    if args.command not in {"update-recipe", "diagnostics"} and not getattr(args, "dry_run", False):
+        if migrate_legacy_app_data():
+            logger.info("Moved profiles from the previous xposdeleter data directory.")
+        configure_frozen_browser_path()
     try:
         if wizard:
             return cmd_wizard(Path())
@@ -856,6 +1115,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     finally:
         if wizard:
             _pause_before_exit()
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    original = [(handler, handler.stream, handler.level) for handler in logger.handlers if type(handler) is logging.StreamHandler]
+    try:
+        return _main(argv)
+    finally:
+        for handler, stream, level in original:
+            handler.stream = stream
+            handler.setLevel(level)
 
 
 if __name__ == "__main__":

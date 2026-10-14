@@ -1,17 +1,24 @@
 import subprocess
 import sys
+import time
 import warnings
 from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import Literal
 from urllib.parse import urljoin, urlparse
 
 from playwright._impl._driver import compute_driver_executable, get_driver_env
-from playwright.sync_api import Browser, BrowserContext, Locator, Page, Playwright, Response, sync_playwright
+from playwright.sync_api import Browser, BrowserContext, Locator, Page, Playwright, Request, Response, sync_playwright
 from playwright.sync_api import Error as PlaywrightError
 
+from kusamushiri.ancillary_isolation import AncillaryIsolation
+from kusamushiri.i18n import tr
 from kusamushiri.logger import logger
+from kusamushiri.network_diagnostics import NetworkDiagnostics
 from kusamushiri.parsing import extract_profile_username
 from kusamushiri.paths import ensure_private_directory, get_account_profile_dir
+from kusamushiri.progress import ActionJournal
 
 BASE_X_URL = "https://x.com/"
 HOME_PATH = "home"
@@ -73,16 +80,83 @@ class BrowserManager:
         self.context: BrowserContext | None = None
         self.page: Page | None = None
         self.profile_dir: Path | None = None
+        self.network_suspended = False
+        self.network_resume_at = 0.0
+        self.action_control_failed = False
+        self.post_actions_active = False
+        self.diagnostics = NetworkDiagnostics()
+        self.block_service_workers = False
+        self.ancillary_isolation = AncillaryIsolation(self.diagnostics, self._isolation_failed)
+        self.on_isolation_failed: Callable[[Response, float], None] | None = None
+        self.on_action_auth_failed: Callable[[], None] | None = None
         # Called with the response whenever X answers a request with a rate-limit status.
         self.on_rate_limited: Callable[[Response], None] | None = None
 
     def _watch_response(self, response: Response) -> None:
+        self.diagnostics.response(response)
+        if (self.post_actions_active and response.status in {401, 403}
+                and is_rate_limit_response(response.url, 429) and self.on_action_auth_failed is not None):
+            self.on_action_auth_failed()
         if self.on_rate_limited is not None and is_rate_limit_response(response.url, response.status):
             self.on_rate_limited(response)
 
+    def _isolation_failed(self, response: Response, deadline: float) -> None:
+        # Install cancellation/global refusal independently of network control.
+        try:
+            if self.on_isolation_failed is not None:
+                self.on_isolation_failed(response, deadline)
+        finally:
+            self.disable_action_network(deadline)
+
+    def disable_action_network(self, deadline: float) -> None:
+        self.action_control_failed = True
+        self.network_resume_at = max(self.network_resume_at, deadline)
+        try:
+            self.suspend_action_network(deadline)
+        except Exception:
+            logger.warning("Ancillary offline control failed; closing the context and disabling further actions.")
+            try:
+                if self.context is not None:
+                    self.context.close()
+            except Exception:
+                logger.warning("Context close failed; further automated actions remain disabled.")
+            finally:
+                self.page = None
+            raise RuntimeError("Ancillary offline control failure; further actions are disabled.") from None
+
+    def _watch_request(self, request: Request) -> None:
+        self.diagnostics.request(request)
+
+    def _watch_request_failed(self, request: Request) -> None:
+        self.diagnostics.request_failed(request)
+
+    def suspend_action_network(self, deadline: float) -> None:
+        self.diagnostics.phase("network_pause")
+        self.network_resume_at = max(self.network_resume_at, deadline)
+        if self.context is not None and not self.network_suspended:
+            self.context.set_offline(True)
+            self.network_suspended = True
+
+    def resume_action_network(self) -> None:
+        if self.action_control_failed:
+            raise RuntimeError("Action network control failed; start a new context after reviewing the saved deadline.")
+        if self.network_resume_at > time.time():
+            raise RuntimeError(tr("保存された待機期限 {deadline} まで通信を休止しています。期限後に再開してください。",
+                                  deadline=datetime.fromtimestamp(self.network_resume_at, UTC).isoformat(timespec="seconds")))
+        if self.context is not None and self.network_suspended:
+            self.diagnostics.phase("network_resume")
+            self.context.set_offline(False)
+        self.network_suspended = False
+        self.network_resume_at = 0.0
+        self.diagnostics.phase("idle")
+
     def _require_page(self) -> Page:
+        if self.action_control_failed:
+            raise RuntimeError("Action network control failed; further actions are disabled.")
         if self.page is None:
             raise RuntimeError("Browser page is not initialized.")
+        if self.network_suspended:
+            self.resume_action_network()
         return self.page
 
     def start(self, user_data_dir: str | Path | None = None, account_name: str | None = None) -> None:
@@ -93,7 +167,17 @@ class BrowserManager:
             account_name: アカウント名。profile_dirが指定されない場合に使用
         """
         profile_dir = Path(user_data_dir) if user_data_dir is not None else get_account_profile_dir(account_name)
+        # Read only the action receipt metadata, before launching/restoring tabs.
+        saved = ActionJournal(profile_dir / "action-progress.json", profile_dir.name.removeprefix("chromium-profile-"))
+        if self.action_control_failed or saved._lock_path.exists():
+            raise RuntimeError("Action journal is locked or network control failed; no browser was started.")
+        saved._load()
+        if saved.cooldown_until > time.time():
+            raise RuntimeError(tr("保存された待機期限 {deadline} まで通信を休止しています。期限後に再開してください。",
+                                  deadline=datetime.fromtimestamp(saved.cooldown_until, UTC).isoformat(timespec="seconds")))
         ensure_private_directory(profile_dir)
+        if self.network_suspended:
+            self.resume_action_network()
 
         if (
             self.context is not None
@@ -116,34 +200,46 @@ class BrowserManager:
             self.stop()
 
         logger.info("Starting browser with profile directory: %s", profile_dir)
+        self.diagnostics.phase("browser_start")
         try:
             if not self.playwright:
                 self.playwright = sync_playwright().start()
 
             try:
-                self.context = self._launch_context(self.playwright, profile_dir, headless=self.headless)
+                self.context = self._launch_action_context(self.playwright, profile_dir)
             except PlaywrightError as error:
                 if MISSING_BROWSER_MESSAGE not in str(error):
                     raise
                 install_chromium()
-                self.context = self._launch_context(self.playwright, profile_dir, headless=self.headless)
+                self.context = self._launch_action_context(self.playwright, profile_dir)
+            self.context.on("request", self._watch_request)
             self.context.on("response", self._watch_response)
+            self.context.on("requestfailed", self._watch_request_failed)
+            self.ancillary_isolation.install(self.context, service_workers_blocked=self.block_service_workers)
             self.browser = self.context.browser
             self.page = self.context.pages[0] if self.context.pages else self.context.new_page()
             self.profile_dir = profile_dir
             logger.info("Browser successfully launched.")
+            self.diagnostics.phase("idle")
         except Exception:
             logger.exception("Failed to start browser.")
             self.stop()
             raise
 
+    def _launch_action_context(self, playwright: Playwright, profile_dir: Path) -> BrowserContext:
+        if self.block_service_workers:
+            return self._launch_context(playwright, profile_dir, headless=self.headless, service_workers="block")
+        return self._launch_context(playwright, profile_dir, headless=self.headless)
+
     @staticmethod
-    def _launch_context(playwright: Playwright, profile_dir: Path, *, headless: bool = False) -> BrowserContext:
+    def _launch_context(playwright: Playwright, profile_dir: Path, *, headless: bool = False,
+                        service_workers: Literal["allow", "block"] | None = None) -> BrowserContext:
         return playwright.chromium.launch_persistent_context(
             user_data_dir=str(profile_dir),
             headless=headless,
             viewport={"width": VIEWPORT_WIDTH, "height": VIEWPORT_HEIGHT},
             args=["--disable-blink-features=AutomationControlled"],
+            service_workers=service_workers,
         )
 
     def stop(self) -> None:
@@ -164,10 +260,17 @@ class BrowserManager:
             self.page = None
             self.playwright = None
             self.profile_dir = None
+            self.network_suspended = False
+            self.network_resume_at = 0.0
+            self.action_control_failed = False
+            self.post_actions_active = False
+            self.ancillary_isolation = AncillaryIsolation(self.diagnostics, self._isolation_failed)
+            self.diagnostics.phase("idle")
 
     def go_to_home(self) -> None:
         """X のホームへ遷移"""
         page = self._require_page()
+        self.diagnostics.phase("home_load")
         home_url = urljoin(BASE_X_URL, HOME_PATH)
         logger.debug("Navigating to %s", home_url)
         try:
@@ -175,6 +278,8 @@ class BrowserManager:
         except Exception:
             logger.exception("Failed to navigate to home page.")
             raise
+        finally:
+            self.diagnostics.phase("idle")
 
     def go_to_twitter(self) -> None:
         warnings.warn("go_to_twitter() is deprecated, use go_to_home()", DeprecationWarning, stacklevel=2)

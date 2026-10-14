@@ -16,7 +16,13 @@ from kusamushiri.follows import (
     UnfollowResult,
 )
 from kusamushiri.last_posts import FetchLastPostsRequest, LastPostResult
-from kusamushiri.models import CollectRequest, ExecuteActionsRequest, PostActionResult, PostActionTarget, PostRecord
+from kusamushiri.models import (
+    CollectRequest,
+    ExecuteActionsRequest,
+    PostActionResult,
+    PostActionTarget,
+    PostRecord,
+)
 
 
 class FakeCore:
@@ -57,6 +63,12 @@ class FakeCore:
 
     def request_cancel(self) -> None:
         self.cancel_requested = True
+
+    def is_cancel_requested(self) -> bool:
+        return self.cancel_requested
+
+    def wait_for_cancel(self, seconds: float) -> bool:
+        return self.cancel_requested
 
     def clear_cancel(self) -> None:
         self.cancel_requested = False
@@ -197,6 +209,8 @@ def test_worker_dispatches_collect_posts_when_enqueued(qtbot: object) -> None:
     wait_until(qtbot, lambda: collected_events == [core.collected_posts])
     assert core.calls == ["search_and_collect_posts:tester"]
     worker.shutdown()
+
+
 
 
 def test_worker_dispatches_delete_posts_when_enqueued(qtbot: object) -> None:
@@ -573,3 +587,54 @@ def test_fetch_last_posts_request_rejects_empty_targets_and_negative_interval() 
         FetchLastPostsRequest(targets=[]).validate()
     with pytest.raises(ValueError):
         FetchLastPostsRequest(targets=[_follow("alice")], interval_seconds=-1).validate()
+
+
+
+def test_worker_auth_failure_invalidates_already_queued_actions(qtbot, monkeypatch):
+    core = FakeCore()
+    worker = XDeleterWorker(core=core)
+    completed = []
+    worker.events.delete_completed.connect(completed.append)
+    second = ExecuteActionsRequest([PostActionTarget("https://x.com/tester/status/2", "post")], 0)
+
+    def auth_failure(target):
+        core.executed_targets.append(target)
+        worker.enqueue_delete_posts(second)
+        return PostActionResult(target, "delete", False, "HTTP 401", "auth")
+
+    monkeypatch.setattr(core, "execute_post_action", auth_failure)
+    try:
+        worker.enqueue_delete_posts(build_delete_request())
+        wait_until(qtbot, lambda: len(completed) == 1 and worker._commands.empty())
+        assert len(core.executed_targets) == 1
+        assert completed[0][0].failure_kind == "auth"
+        assert core.cancel_requested
+    finally:
+        worker.shutdown()
+
+
+def test_worker_unexpected_fault_retains_partial_results_and_invalidates_queued_actions(qtbot, monkeypatch):
+    core = FakeCore()
+    worker = XDeleterWorker(core=core)
+    completed, errors = [], []
+    worker.events.delete_completed.connect(completed.append)
+    worker.events.error_occurred.connect(errors.append)
+    targets = [PostActionTarget(f"https://x.com/tester/status/{index}", "post") for index in (1, 2, 3)]
+
+    def perform(target):
+        core.executed_targets.append(target)
+        if target == targets[1]:
+            worker.enqueue_delete_posts(ExecuteActionsRequest([targets[2]], 0))
+            raise RuntimeError("PRIVATE_WORKER_CANARY")
+        return PostActionResult(target, "delete", True, None)
+
+    monkeypatch.setattr(core, "execute_post_action", perform)
+    try:
+        worker.enqueue_delete_posts(ExecuteActionsRequest(targets, 0))
+        wait_until(qtbot, lambda: len(completed) == 1 and len(errors) == 1 and worker._commands.empty())
+        assert core.executed_targets == targets[:2] and core.cancel_requested
+        assert [result.success for result in completed[0]] == [True, False]
+        assert completed[0][1].failure_kind == "ambiguous"
+        assert "PRIVATE_WORKER_CANARY" not in errors[0]
+    finally:
+        worker.shutdown()

@@ -32,7 +32,10 @@ def test_start_reuses_only_open_page(monkeypatch, tmp_path, page_state):
         old_playwright.stop.assert_called_once()
         assert manager.context is new_context
         assert manager.page is new_context.pages[0]
-        new_context.on.assert_called_once_with("response", manager._watch_response)
+        assert new_context.on.call_count == 3
+        new_context.on.assert_any_call("request", manager._watch_request)
+        new_context.on.assert_any_call("response", manager._watch_response)
+        new_context.on.assert_any_call("requestfailed", manager._watch_request_failed)
     else:
         old_context.close.assert_not_called()
         old_playwright.stop.assert_not_called()

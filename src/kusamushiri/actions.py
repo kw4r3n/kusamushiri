@@ -1,5 +1,6 @@
 import re
 from collections.abc import Callable
+from dataclasses import dataclass
 from urllib.parse import urljoin, urlparse
 
 from playwright.sync_api import Locator, Page, Request, Response
@@ -8,8 +9,12 @@ from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from kusamushiri.browser import BASE_X_URL, NAVIGATION_TIMEOUT_MS, find_first_visible_locator, is_rate_limit_response
 from kusamushiri.i18n import tr
 from kusamushiri.logger import logger
-from kusamushiri.models import PostActionResult, PostActionTarget, PostKind
+from kusamushiri.models import FailureKind, PostActionResult, PostActionTarget, PostKind
+from kusamushiri.network_diagnostics import NetworkDiagnostics
 from kusamushiri.parsing import USERNAME_PATTERN, extract_post_id
+from kusamushiri.rate_limits import classify_rate_limit
+from kusamushiri.retry import parse_retry_after
+from kusamushiri.view_cache import PendingView
 
 ACTION_STATE_TIMEOUT_MS = 10_000
 UNREPOST_CONFIRM_SELECTORS = (
@@ -93,7 +98,27 @@ def _own_control(test_id: str) -> str:
 
 
 def _is_mutation_request(request: Request, mutation_name: str) -> bool:
-    return urlparse(request.url).path.rstrip("/").endswith(f"/{mutation_name}")
+    try:
+        parsed = urlparse(request.url)
+        if parsed.scheme != "https" or request.method != "POST" or parsed.hostname not in {"x.com", "www.x.com", "twitter.com"}:
+            return False
+        if mutation_name == UNFOLLOW_MUTATION:
+            return parsed.path.rstrip("/") == "/i/api/1.1/friendships/destroy.json"
+        return re.fullmatch(r"/i/api/graphql/[A-Za-z0-9_-]+/" + re.escape(mutation_name), parsed.path.rstrip("/")) is not None
+    except Exception:
+        return False
+
+
+def _valid_error_envelope(body: object) -> bool:
+    if not isinstance(body, dict):
+        return False
+    if "errors" not in body:
+        return True
+    errors = body["errors"]
+    return isinstance(errors, list) and all(
+        isinstance(item, dict) and isinstance(item.get("code"), (int, str, type(None)))
+        for item in errors
+    )
 
 
 def _mutation_error(requests: list[Request], mutation_name: str) -> str | None:
@@ -104,11 +129,15 @@ def _mutation_error(requests: list[Request], mutation_name: str) -> str | None:
             return tr("{mutation} の通信に失敗しました: {detail}", mutation=mutation_name, detail=request.failure or tr("応答なし"))
         if response.status >= 400:
             return tr("{mutation} がエラーを返しました (HTTP {status})。", mutation=mutation_name, status=response.status)
+        if not 200 <= response.status < 300 or not _is_mutation_request(response.request, mutation_name):
+            return tr("{mutation} の応答を確認できませんでした。結果不明です。", mutation=mutation_name)
         try:
             body = response.json()
-        except Exception as error:
-            logger.debug("Failed to read %s response body: %s", mutation_name, error)
-            continue
+        except Exception:
+            logger.debug("Unreadable %s response; completion is unknown.", mutation_name)
+            return tr("{mutation} の応答を確認できませんでした。結果不明です。", mutation=mutation_name)
+        if not _valid_error_envelope(body):
+            return tr("{mutation} の応答を確認できませんでした。結果不明です。", mutation=mutation_name)
         errors = body.get("errors") if isinstance(body, dict) else None
         if errors:
             first = errors[0] if isinstance(errors, list) else errors
@@ -173,13 +202,48 @@ def _target_article(page: Page, post_url: str) -> Locator:
     )
 
 
+@dataclass
+class ActionEvidence:
+    submitted: bool = False
+    transient_before_submission: bool = False
+    blocked: bool = False
+    rate_blocked: bool = False
+    rate_limit_pending: Callable[[], bool] = lambda: False
+    cancelled: bool = False
+    should_cancel: Callable[[], bool] = lambda: False
+    diagnostics: NetworkDiagnostics | None = None
+    reuse_view: PendingView | None = None
+    on_target_loaded: Callable[[Locator], None] = lambda _: None
+    view_reuse_invalid: bool = False
+
+    def phase(self, phase: str) -> None:
+        if self.diagnostics is not None:
+            self.diagnostics.phase(phase)
+
+    def can_submit(self) -> bool:
+        self.cancelled = self.should_cancel()
+        self.rate_blocked = self.rate_blocked or self.rate_limit_pending()
+        return not (self.blocked or self.cancelled or self.rate_blocked)
+
+
 class TargetPostUnavailableError(Exception):
     """The post page never showed the target post; the message says why, for the user."""
 
 
-def _open_target_article(page: Page, post_url: str) -> Locator:
+class CachedTargetChangedError(TargetPostUnavailableError):
+    """A positively unsent target can no longer be revalidated without a reload."""
+
+
+def _open_target_article(page: Page, post_url: str, *, diagnostics: NetworkDiagnostics | None = None,
+                         reuse_view: PendingView | None = None) -> Locator:
     """Open the post page and wait for its own article."""
     article = _target_article(page, post_url)
+    if reuse_view is not None:
+        if not reuse_view.validate(page, post_url, article):
+            raise CachedTargetChangedError(tr("保存した対象表示を確認できないため停止します。再読込や再送はしません。"))
+        if diagnostics is not None:
+            diagnostics.view_reused()
+        return article
     rate_limited: list[Response] = []
 
     def record_rate_limit(response: Response) -> None:
@@ -188,7 +252,11 @@ def _open_target_article(page: Page, post_url: str) -> Locator:
 
     page.on("response", record_rate_limit)
     try:
-        page.goto(post_url, timeout=NAVIGATION_TIMEOUT_MS)
+        if diagnostics is not None:
+            diagnostics.navigation()
+        navigation = page.goto(post_url, timeout=NAVIGATION_TIMEOUT_MS)
+        if navigation is not None and navigation.status in {401, 403, 404, 410}:
+            raise TargetPostUnavailableError(f"HTTP {navigation.status}: target unavailable")
         article.wait_for(state="visible", timeout=NAVIGATION_TIMEOUT_MS)
     except PlaywrightTimeoutError as error:
         # X stops showing posts after many actions in a short time; say so instead of dumping the locator.
@@ -211,33 +279,153 @@ def execute_post_action(
     page: Page,
     target: PostActionTarget,
     find_locator: LocatorFinder = find_first_visible_locator,
+    *,
+    should_cancel: Callable[[], bool] = lambda: False,
+    rate_limit_pending: Callable[[], bool] = lambda: False,
+    rate_limit_blocking: Callable[[Response], bool] = lambda _: True,
+    isolated_dependency_failed: Callable[[], None] = lambda: None,
+    isolation_pending: Callable[[], bool] = lambda: False,
+    diagnostics: NetworkDiagnostics | None = None,
+    reuse_view: PendingView | None = None,
+    on_target_loaded: Callable[[Locator], None] = lambda _: None,
 ) -> PostActionResult:
     action_label = action_label_for(target.kind)
-    if target.kind == "repost":
-        success, error_message = undo_repost(page, target.url, find_locator)
-    elif target.kind == "like":
-        success, error_message = unlike_post(page, target.url, find_locator)
-    else:
-        success, error_message = delete_post(page, target.url, find_locator)
+    mutation = {"post": DELETE_POST_MUTATION, "repost": UNDO_REPOST_MUTATION, "like": UNLIKE_MUTATION}[target.kind]
+    requests: list[Request] = []
+    responses: list[Response] = []
+    evidence = ActionEvidence(should_cancel=should_cancel, rate_limit_pending=rate_limit_pending, diagnostics=diagnostics,
+                              reuse_view=reuse_view, on_target_loaded=on_target_loaded)
 
-    return PostActionResult(
-        target=target,
-        action_label=action_label,
-        success=success,
-        error_message=error_message,
-    )
+    def record_request(request: Request) -> None:
+        if _is_mutation_request(request, mutation):
+            requests.append(request)
+            if diagnostics is not None:
+                diagnostics.request(request)
+
+    def record_response(response: Response) -> None:
+        if diagnostics is not None:
+            diagnostics.response(response)
+        host = urlparse(response.url).hostname or ""
+        if host in {"x.com", "twitter.com"} or host.endswith((".x.com", ".twitter.com")):
+            responses.append(response)
+            rate_blocks = response.status in {420, 429} and rate_limit_blocking(response)
+            if response.status in {401, 403} or rate_blocks:
+                evidence.blocked = True
+            if rate_blocks:
+                evidence.rate_blocked = True
+
+    page.on("request", record_request)
+    page.on("response", record_response)
+    try:
+        action = {"post": delete_post, "repost": undo_repost, "like": unlike_post}[target.kind]
+        if evidence.can_submit():
+            success, error_message = action(page, target.url, find_locator, _evidence=evidence)
+        else:
+            evidence.phase("submission_blocked")
+            success, error_message = False, tr("送信前に中断しました。待機またはログイン確認が必要です。")
+        if success and evidence.submitted and len(requests) != 1:
+            # DOM changes alone can be optimistic. The batch requires a receipt
+            # for the actual mutation before recording a confirmed success.
+            success = False
+        if (not success and not evidence.submitted and not requests and not evidence.cancelled and not evidence.blocked
+                and (isolation_pending() or any(response.status in {420, 429} and not rate_limit_blocking(response)
+                                               for response in responses))):
+            # No proof that the quarantined endpoint is dispensable for this DOM.
+            # Restore the global signal and stop; retain this positively unsent item.
+            isolated_dependency_failed()
+            evidence.rate_blocked = evidence.rate_blocked or rate_limit_pending()
+        kind: FailureKind = "permanent"
+        retry_after = None
+        mutation_rate_refused = False
+        graphql_code88 = False
+        if not success:
+            if evidence.submitted or requests:
+                # An absent response, 5xx, or unconfirmed 2xx may follow a committed
+                # deletion. Only an explicit refusal proves it safe to repeat.
+                kind = "ambiguous"
+                for request in requests if len(requests) == 1 else []:
+                    response = request.response()
+                    if response is None:
+                        break
+                    if response.status in {420, 429}:
+                        mutation_rate_refused = True
+                        kind = "retryable"
+                        retry_after = parse_retry_after(response.headers.get("retry-after"))
+                    elif response.status in {401, 403}:
+                        kind = "auth"
+                    elif 400 <= response.status < 500:
+                        kind = "permanent"
+                    elif 200 <= response.status < 300 and _is_mutation_request(response.request, mutation):
+                        try:
+                            body = response.json()
+                        except Exception:
+                            continue
+                        if not _valid_error_envelope(body):
+                            continue
+                        errors = body.get("errors") if isinstance(body, dict) else None
+                        if errors:
+                            codes = {item.get("code") for item in errors if isinstance(item, dict)} if isinstance(errors, list) else set()
+                            if codes == {88}:
+                                mutation_rate_refused = True
+                                graphql_code88 = True
+                                kind = "retryable"
+                                retry_after = parse_retry_after(response.headers.get("retry-after"))
+                            elif codes & {32, 89, 99, 135, 215, 220, 326}:
+                                kind = "auth"
+                            else:
+                                kind = "permanent"
+            else:
+                statuses = {response.status for response in responses
+                            if response.status not in {420, 429} or rate_limit_blocking(response)}
+                if statuses & {401, 403}:
+                    kind = "auth"
+                elif evidence.cancelled:
+                    kind = "retryable"
+                elif statuses & {404, 410}:
+                    kind = "permanent"
+                elif statuses & {420, 429, 500, 502, 503, 504} or evidence.transient_before_submission:
+                    kind = "retryable"
+                    retry_after = max((parse_retry_after(r.headers.get("retry-after")) or 0.0
+                                       for r in responses if r.status in {420, 429, 503}), default=0.0) or None
+            if kind == "ambiguous":
+                error_message = tr("結果不明のため再試行しません。X で確認してください。") + " " + (error_message or "")
+        limited = [response for response in responses if response.status in {420, 429} and rate_limit_blocking(response)]
+        rate_scope, rate_endpoint = None, None
+        if limited:
+            priority = {"ancillary": 0, "unknown": 1, "target": 2, "mutation": 3}
+            rate_scope, rate_endpoint = max((classify_rate_limit(response.url) for response in limited),
+                                           key=lambda pair: priority[pair[0]])
+        if mutation_rate_refused:
+            rate_scope, rate_endpoint = "mutation", mutation
+        deferred = not success and not evidence.submitted and not requests and (evidence.rate_blocked or evidence.view_reuse_invalid) and kind not in {"auth", "ambiguous"} and not any(response.status in {404, 410} for response in responses)
+        if deferred:
+            kind = "retryable"
+            if not evidence.view_reuse_invalid:
+                error_message = tr("利用制限を検知したため送信せず保留しました。削除失敗には数えません。")
+        result = PostActionResult(target, action_label, success, error_message, kind, retry_after,
+                                  deferred=deferred, rate_limit_scope=rate_scope, rate_limit_endpoint=rate_endpoint,
+                                  view_reuse_invalid=evidence.view_reuse_invalid)
+        if diagnostics is not None:
+            diagnostics.outcome(result, requests, submitted=evidence.submitted, graphql_code88=graphql_code88)
+        return result
+    finally:
+        page.remove_listener("request", record_request)
+        page.remove_listener("response", record_response)
 
 
 def undo_repost(
     page: Page,
     post_url: str,
     find_locator: LocatorFinder = find_first_visible_locator,
+    *,
+    _evidence: ActionEvidence | None = None,
 ) -> tuple[bool, str | None]:
     """指定されたポストのリポストを解除する"""
     return _toggle_off_post(
         page,
         post_url,
         find_locator,
+        evidence=_evidence,
         action_name="undo repost",
         undo_id="unretweet",
         do_id="retweet",
@@ -251,6 +439,8 @@ def unlike_post(
     page: Page,
     post_url: str,
     find_locator: LocatorFinder = find_first_visible_locator,
+    *,
+    _evidence: ActionEvidence | None = None,
 ) -> tuple[bool, str | None]:
     """指定されたポストのいいねを取り消す"""
     # Unliking has no confirmation step; the first click sends the mutation.
@@ -258,6 +448,7 @@ def unlike_post(
         page,
         post_url,
         find_locator,
+        evidence=_evidence,
         action_name="unlike",
         undo_id="unlike",
         do_id="like",
@@ -271,6 +462,7 @@ def _toggle_off_post(
     post_url: str,
     find_locator: LocatorFinder,
     *,
+    evidence: ActionEvidence | None = None,
     action_name: str,
     undo_id: str,
     do_id: str,
@@ -288,7 +480,9 @@ def _toggle_off_post(
 
     listening = False
     try:
-        main_tweet_article = _open_target_article(page, post_url)
+        main_tweet_article = _open_target_article(page, post_url, diagnostics=evidence.diagnostics if evidence else None)
+        if evidence is not None:
+            evidence.phase("menu")
         undo_button = find_locator(main_tweet_article, (_own_control(undo_id),))
         if undo_button is None:
             logger.warning("%s URL=%s", button_missing, post_url)
@@ -298,8 +492,16 @@ def _toggle_off_post(
         if confirm is None:
             page.on("request", record_mutation)
             listening = True
+            if evidence is not None:
+                if not evidence.can_submit():
+                    evidence.phase("submission_blocked")
+                    return False, tr("送信前に中断しました。待機またはログイン確認が必要です。")
+                evidence.phase("mutation_submit")
+                evidence.submitted = True
             undo_button.click()
         else:
+            if evidence is not None:
+                evidence.phase("confirmation")
             confirm_selectors, confirm_missing = confirm
             undo_button.click()
             page.wait_for_selector(", ".join(confirm_selectors), state="visible", timeout=ACTION_STATE_TIMEOUT_MS)
@@ -309,8 +511,16 @@ def _toggle_off_post(
                 return False, confirm_missing
             page.on("request", record_mutation)
             listening = True
+            if evidence is not None:
+                if not evidence.can_submit():
+                    evidence.phase("submission_blocked")
+                    return False, tr("送信前に中断しました。待機またはログイン確認が必要です。")
+                evidence.phase("mutation_submit")
+                evidence.submitted = True
             confirm_button.click()
 
+        if evidence is not None:
+            evidence.phase("mutation_wait")
         error_message = _wait_for_mutation_result(
             mutation_requests,
             mutation,
@@ -326,9 +536,13 @@ def _toggle_off_post(
         logger.info("Completed %s: %s", action_name, post_url)
         return True, None
     except TargetPostUnavailableError as error:
+        if evidence is not None:
+            evidence.transient_before_submission = isinstance(error.__cause__, PlaywrightTimeoutError)
         logger.warning("%s URL=%s", error, post_url)
         return False, str(error)
     except Exception as error:
+        if evidence is not None:
+            evidence.transient_before_submission = not evidence.submitted and isinstance(error, PlaywrightTimeoutError)
         logger.exception("Exception during %s for %s.", action_name, post_url)
         return False, f"{type(error).__name__}: {error}"
     finally:
@@ -340,6 +554,8 @@ def delete_post(
     page: Page,
     post_url: str,
     find_locator: LocatorFinder = find_first_visible_locator,
+    *,
+    _evidence: ActionEvidence | None = None,
 ) -> tuple[bool, str | None]:
     """指定されたポストのURLに直接アクセスし、削除操作を行う"""
     logger.info("Initiating delete for: %s", post_url)
@@ -352,7 +568,15 @@ def delete_post(
 
     listening = False
     try:
-        main_tweet_article = _open_target_article(page, post_url)
+        main_tweet_article = _open_target_article(page, post_url, diagnostics=_evidence.diagnostics if _evidence else None,
+                                                   reuse_view=_evidence.reuse_view if _evidence else None)
+        if _evidence is not None:
+            _evidence.on_target_loaded(main_tweet_article)
+            if not _evidence.can_submit():
+                _evidence.phase("submission_blocked")
+                return False, tr("送信前に中断しました。待機またはログイン確認が必要です。")
+        if _evidence is not None:
+            _evidence.phase("menu")
         stage = tr("「…」メニューボタンの表示待ち")
         main_tweet_article.locator(_own_control('caret')).wait_for(
             state="visible", timeout=ACTION_STATE_TIMEOUT_MS
@@ -368,6 +592,9 @@ def delete_post(
             return False, message
 
         article_element = main_tweet_article.element_handle()
+        if _evidence is not None and not _evidence.can_submit():
+            _evidence.phase("submission_blocked")
+            return False, tr("送信前に中断しました。待機またはログイン確認が必要です。")
         menu_btn.click()
         stage = tr("削除メニュー項目の表示待ち")
         # The dropdown container can appear before its menu items are rendered.
@@ -390,7 +617,13 @@ def delete_post(
             logger.warning("%s URL=%s", message, post_url)
             return False, message
 
+        if _evidence is not None and not _evidence.can_submit():
+            _evidence.phase("submission_blocked")
+            return False, tr("送信前に中断しました。待機またはログイン確認が必要です。")
+
         stage = tr("削除確認画面の表示")
+        if _evidence is not None:
+            _evidence.phase("confirmation")
         delete_menu_item.click()
         page.wait_for_selector(
             CONFIRMATION_SHEET_CONFIRM_SELECTOR,
@@ -406,7 +639,15 @@ def delete_post(
             stage = tr("削除確定後の完了確認（結果不明。再試行前にXで確認してください）")
             page.on("request", record_mutation)
             listening = True
+            if _evidence is not None:
+                if not _evidence.can_submit():
+                    _evidence.phase("submission_blocked")
+                    return False, tr("送信前に中断しました。待機またはログイン確認が必要です。")
+                _evidence.phase("mutation_submit")
+                _evidence.submitted = True
             confirm_btn.click()
+            if _evidence is not None:
+                _evidence.phase("mutation_wait")
             error_message = _wait_for_mutation_result(
                 mutation_requests,
                 DELETE_POST_MUTATION,
@@ -427,9 +668,14 @@ def delete_post(
         return False, message
 
     except TargetPostUnavailableError as error:
+        if _evidence is not None:
+            _evidence.transient_before_submission = isinstance(error.__cause__, PlaywrightTimeoutError)
+            _evidence.view_reuse_invalid = isinstance(error, CachedTargetChangedError)
         logger.warning("%s URL=%s", error, post_url)
         return False, str(error)
     except Exception as error:
+        if _evidence is not None:
+            _evidence.transient_before_submission = not _evidence.submitted and isinstance(error, PlaywrightTimeoutError)
         logger.exception("Exception during deletion of post %s at %s.", post_url, stage)
         return False, f"{stage}: {type(error).__name__}: {error}"
     finally:
