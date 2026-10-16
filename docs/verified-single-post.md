@@ -7,7 +7,6 @@ Deleting exactly one of your own posts runs through an extra identity check befo
 - **GUI, current view** – enter the post URL in the target field and press *Delete this one displayed post…*. No collection or table is needed. The dialog shows the URL and one item, defaults to No, and nothing is sent before Yes. The expected viewer is the account the GUI confirmed at login, and it must also match the URL author. The post must already be displayed in the browser tab. The tool does not navigate, reload or reopen it, and stops if the post is not there.
 - **GUI, table** – a table selection of one post uses the same checks.
 - **CLI** – `delete` with a list of one `post` item uses the same checks. `--expected-viewer NAME` sets the expected account, and the default is the URL author. A value that differs from the URL author is rejected before the browser starts. The CLI uses its existing owned navigation, opens the post, then verifies the loaded page. It does not attach to a running GUI session. `--dry-run` still opens no browser and no journal.
-- **Target check** – read-only. It checks that the displayed post and the account match the request.
 - **Menu diagnostic** – never deletes. An already open menu is read with zero clicks. If no menu is open, it clicks the post's caret once and then reads the menu.
 
 ## Guards

@@ -23,7 +23,7 @@ from kusamushiri.paths import configure_frozen_browser_path, migrate_legacy_app_
 from kusamushiri.progress import ActionJournal
 from kusamushiri.retry import ActionBatchError, run_post_actions
 from kusamushiri.settings import AccountSettingsManager, migrate_legacy_settings
-from kusamushiri.target_read_probe import TargetReadRequest, TargetReadResult
+from kusamushiri.target_read_probe import TargetReadRequest
 
 
 def apply_dark_palette(app: QApplication) -> None:
@@ -66,12 +66,6 @@ class StopBrowserCommand:
 @dataclass(frozen=True, slots=True)
 class CheckLoginCommand:
     action: str = "check_login"
-
-
-@dataclass(frozen=True, slots=True)
-class TargetReadProbeCommand:
-    request: TargetReadRequest
-    action: str = "target_read_probe"
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,7 +114,6 @@ WorkerCommand = (
     StartBrowserCommand
     | StopBrowserCommand
     | CheckLoginCommand
-    | TargetReadProbeCommand
     | MenuDiagnosticCommand
     | CollectPostsCommand
     | DeletePostsCommand
@@ -142,7 +135,6 @@ class XDeleterWorkerEvents(QObject):
     browser_ready = Signal()
     browser_stopped = Signal()
     login_checked = Signal(bool, str)
-    target_read_probed = Signal(object)
     menu_diagnosed = Signal(object)
     posts_collected = Signal(list)
     collection_progress = Signal(int, int, int)
@@ -190,9 +182,6 @@ class XDeleterWorker:
 
     def enqueue_check_login(self) -> None:
         self._enqueue(CheckLoginCommand())
-
-    def enqueue_target_read_probe(self, request: TargetReadRequest) -> None:
-        self._enqueue(TargetReadProbeCommand(request))
 
     def enqueue_menu_diagnostic(self, request: TargetReadRequest) -> None:
         self._enqueue(MenuDiagnosticCommand(request))
@@ -283,29 +272,6 @@ class XDeleterWorker:
 
             command = queued.command
             try:
-                if isinstance(command, TargetReadProbeCommand):
-                    # Do not use _clear_cancel: it clears stored rate-limit state.
-                    # Always return a result, even for a stale queued probe.
-                    def is_current(queued_probe: _QueuedCommand = queued) -> bool:
-                        with self._command_lock:
-                            return (
-                                queued_probe.generation == self._generation and self._active_core is core
-                                and not self._cancel_event.is_set()
-                            )
-                    try:
-                        if not is_current():
-                            result = TargetReadResult("cancelled_or_stale")
-                        else:
-                            result = core.probe_current_target(
-                                command.request, worker_thread_id=self._thread.ident, is_current=is_current,
-                            )
-                        result.safe_fields()
-                        if not is_current():
-                            result = TargetReadResult("cancelled_or_stale")
-                    except Exception:
-                        result = TargetReadResult("read_failed")
-                    self.events.target_read_probed.emit(result)
-                    continue
                 if isinstance(command, MenuDiagnosticCommand):
                     def menu_current(queued_menu: _QueuedCommand = queued) -> bool:
                         with self._command_lock:
@@ -557,7 +523,6 @@ def main() -> int:
     window.start_browser_requested.connect(worker.enqueue_start_browser)
     window.stop_browser_requested.connect(worker.enqueue_stop_browser)
     window.check_login_requested.connect(worker.enqueue_check_login)
-    window.target_read_probe_requested.connect(worker.enqueue_target_read_probe)
     window.menu_diagnostic_requested.connect(worker.enqueue_menu_diagnostic)
     window.collect_requested.connect(worker.enqueue_collect_posts)
     window.delete_requested.connect(worker.enqueue_delete_posts)
@@ -570,7 +535,6 @@ def main() -> int:
     worker.events.browser_ready.connect(window.show_login_wait_dialog)
     worker.events.browser_stopped.connect(window.on_browser_stopped)
     worker.events.login_checked.connect(window.on_login_checked)
-    worker.events.target_read_probed.connect(window.on_target_read_probed)
     worker.events.menu_diagnosed.connect(window.on_menu_diagnosed)
     worker.events.posts_collected.connect(window.display_posts)
     worker.events.collection_progress.connect(window.on_collection_progress)

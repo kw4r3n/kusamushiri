@@ -28,7 +28,7 @@ from kusamushiri.models import (
 )
 from kusamushiri.paths import list_saved_accounts
 from kusamushiri.settings import AccountSettingsManager
-from kusamushiri.target_read_probe import READ_PATHS, TargetReadRequest, TargetReadResult
+from kusamushiri.target_read_probe import TargetReadRequest
 
 
 @pytest.fixture(autouse=True)
@@ -76,61 +76,6 @@ def window(qtbot, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> XDeleterWi
     w.hide()
     w.deleteLater()
     QApplication.instance().processEvents()
-
-
-def test_target_probe_uses_confirmed_viewer_and_does_not_emit_actions(window, monkeypatch):
-    received, other = [], []
-    window.target_read_probe_requested.connect(received.append)
-    window.start_browser_requested.connect(lambda *args: other.append("start"))
-    window.collect_requested.connect(lambda *args: other.append("collect"))
-    window.delete_requested.connect(lambda *args: other.append("delete"))
-    window._browser_running = True
-    window._login_verified = True
-    window._last_logged_in_username = "viewer"
-    window.username_input.setText("unrelated")
-    window.target_read_url_input.setText("https://x.com/author/status/123")
-    window.set_busy(False)
-    assert window.target_read_probe_button.isEnabled()
-    window._handle_target_read_probe()
-    assert received == [TargetReadRequest("https://x.com/author/status/123", "viewer")]
-    assert window._busy and not window.target_read_probe_button.isEnabled() and not other
-    window._handle_target_read_probe()
-    assert len(received) == 1
-    # A new field is transient; existing settings autosave has no URL/viewer entry.
-    window._save_settings()
-    settings = window._settings_manager._settings
-    assert not any("target_read" in key for key in settings.allKeys())
-
-
-@pytest.mark.parametrize("state", ["no_browser", "unverified", "no_viewer", "invalid"])
-def test_target_probe_gui_gates_without_dispatch(window, monkeypatch, state):
-    received, warnings = [], []
-    window.target_read_probe_requested.connect(received.append)
-    monkeypatch.setattr(QMessageBox, "warning", lambda *args: warnings.append(args))
-    window._browser_running = state != "no_browser"
-    window._login_verified = state != "unverified"
-    window._last_logged_in_username = None if state == "no_viewer" else "viewer"
-    window.target_read_url_input.setText("https://x.com/author/status/123?private=secret" if state == "invalid" else "https://x.com/author/status/123")
-    window.set_busy(False)
-    window._handle_target_read_probe()
-    assert not received and not window._busy
-    assert bool(warnings) == (state == "invalid")
-    assert "secret" not in str(warnings)
-
-
-@pytest.mark.parametrize("case", ["matched", "invalid", "stopping"])
-def test_target_probe_gui_fixed_result_and_stop_lock(window, monkeypatch, case):
-    messages = []
-    monkeypatch.setattr(QMessageBox, "information", lambda *args: messages.append(args[2]))
-    result = TargetReadResult("SECRET URL viewer") if case == "invalid" else TargetReadResult("matched", "complete", READ_PATHS, True, True, True)
-    window._stop_pending = case == "stopping"
-    window.set_busy(True)
-    window.on_target_read_probed(result)
-    fields = json.loads(messages[0].split("\n\n", 1)[1])
-    assert fields["reason"] == {"matched": "matched", "invalid": "read_failed", "stopping": "cancelled_or_stale"}[case]
-    assert not fields["ready_for_live"] and not fields["strict_adapter_validated"]
-    assert "SECRET" not in messages[0]
-    assert window._busy == (case == "stopping")
 
 
 def test_window_title(window: XDeleterWindow, qtbot) -> None:
@@ -851,6 +796,8 @@ def test_retry_failed_rechecks_account_match(window, monkeypatch) -> None:
     # A one-post retry keeps the confirmed-viewer and current-view guards.
     assert emitted[0].expected_viewer == "user" and emitted[0].current_view_only
 
+    # Complete the first dispatched operation before exercising another retry.
+    window.set_busy(False)
     other = PostActionResult(PostActionTarget("https://x.com/user/status/2", "post"), "削除", False, "failed", "retryable")
     window._retry_failed([failure, other])
     assert len(emitted) == 2
@@ -1403,7 +1350,6 @@ def test_current_post_entry_needs_no_table_or_collection(window, monkeypatch, ap
     window.on_login_checked(True, "user")
     window.target_read_url_input.setText("https://x.com/user/status/42")
     window.delete_requested.connect(received.append)
-    window.target_read_probe_requested.connect(lambda _: other.append("probe"))
     window.menu_diagnostic_requested.connect(lambda _: other.append("menu"))
 
     def confirm(*args):
@@ -1429,7 +1375,6 @@ def test_menu_diagnostic_gui_dispatches_only_dedicated_command_and_shows_closed_
     window.target_read_url_input.setText("https://x.com/author/status/123")
     window.menu_diagnostic_requested.connect(requests.append)
     window.delete_requested.connect(lambda _: other.append("delete"))
-    window.target_read_probe_requested.connect(lambda _: other.append("probe"))
     window.menu_diagnostic_button.click()
     assert requests == [TargetReadRequest("https://x.com/author/status/123", "author")]
     assert not other and window._busy and not window.menu_diagnostic_button.isEnabled()

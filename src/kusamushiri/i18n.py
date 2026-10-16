@@ -542,16 +542,9 @@ ENGLISH: Final[dict[str, str]] = {
     "元のブラウザタブで表示中の投稿URL。ページ移動や投稿の保存は行いません。": (
         "URL of the post shown in the original browser tab. Nothing is navigated or saved."
     ),
-    "表示中の対象投稿を確認": "Check the displayed target post",
-    "表示中の対象投稿を確認しています...": "Checking the displayed target post...",
     "対象投稿の確認": "Target post check",
-    "対象投稿の確認結果: {reason}": "Target post check result: {reason}",
     "https://x.com/author/status/123 形式の投稿URLを入力してください。": (
         "Enter a post URL in the form https://x.com/author/status/123."
-    ),
-    "この時点の対象投稿とアカウント表示の照合結果です。一投稿の操作時にも同じsession・対象・アカウントを再照合します。通信最小性や削除権限の証明ではありません。": (
-        "Result of matching the target post and the shown account at this moment. A one-post action "
-        "rechecks the same session, target and account. This does not prove minimal traffic or permission to delete."
     ),
     "メニューを診断（削除しません）": "Diagnose the menu (does not delete)",
     "開いたメニューはそのまま読みます。閉じていれば本人投稿の「…」だけを1回開きます。削除項目は押しません。": (

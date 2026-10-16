@@ -23,65 +23,6 @@ from kusamushiri.models import (
     PostActionTarget,
     PostRecord,
 )
-from kusamushiri.target_read_probe import READ_PATHS, TargetReadRequest, TargetReadResult
-
-
-def test_target_probe_worker_preserves_cancel_and_rate_state(qtbot):
-    core = FakeCore()
-    core.rate_limit_status = 429
-    core.cancel_requested = True
-    observed = []
-    results = []
-
-    def probe(request, *, worker_thread_id, is_current):
-        observed.append((request, threading.get_ident(), worker_thread_id, is_current()))
-        assert core.rate_limit_status == 429 and core.cancel_requested
-        return TargetReadResult("rate_limited")
-
-    core.probe_current_target = probe
-    worker = XDeleterWorker(core)
-    worker.events.target_read_probed.connect(results.append)
-    try:
-        request = TargetReadRequest("https://x.com/author/status/123", "viewer")
-        worker.enqueue_target_read_probe(request)
-        qtbot.waitUntil(lambda: len(results) == 1, timeout=1000)
-        assert results == [TargetReadResult("rate_limited")]
-        assert observed == [(request, worker._thread.ident, worker._thread.ident, True)]
-        assert core.rate_limit_status == 429 and core.cancel_requested and core.calls == []
-    finally:
-        worker.shutdown()
-
-
-@pytest.mark.parametrize("case", ["stale", "cancel_during", "exception", "invalid_result"])
-def test_target_probe_worker_sanitizes_and_rechecks_generation(qtbot, case):
-    core = FakeCore()
-    results, errors, calls = [], [], []
-    worker = XDeleterWorker(core)
-
-    def probe(request, **kwargs):
-        calls.append("probe")
-        if case == "cancel_during":
-            worker.cancel_current_operation()
-        elif case == "exception":
-            raise RuntimeError("SECRET URL cookie-token")
-        elif case == "invalid_result":
-            return TargetReadResult("SECRET")
-        return TargetReadResult("matched", "complete", READ_PATHS, True, True, True)
-
-    core.probe_current_target = probe
-    worker.events.target_read_probed.connect(results.append)
-    worker.events.error_occurred.connect(errors.append)
-    try:
-        if case == "stale":
-            worker.cancel_current_operation()
-        worker.enqueue_target_read_probe(TargetReadRequest("https://x.com/author/status/123", "viewer"))
-        qtbot.waitUntil(lambda: len(results) == 1, timeout=1000)
-        expected = "cancelled_or_stale" if case in {"stale", "cancel_during"} else "read_failed"
-        assert results == [TargetReadResult(expected)]
-        assert calls == ([] if case == "stale" else ["probe"])
-        assert not errors and not core.calls
-    finally:
-        worker.shutdown()
 
 
 class FakeCore:
