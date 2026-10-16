@@ -5,6 +5,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Verify the live session, target, viewer and pinned controls before a single-post delete;
+  the GUI reuses the current view without navigation, single-post actions disable automatic
+  retries and unknown outcomes stay held in the existing action journal.
+- Verify delete menu dialog ancestors by ownership and retain the specific unsent control failure reason.
+- Match delete menu fallback labels exactly across selection, control verification and diagnostics;
+  reject ambiguous controls on every action path.
+- GUI target URL check, one-post delete and a menu diagnostic that reads an already open menu
+  without clicking, or opens only the owned caret once; it never selects a menu item or uses the journal.
+
 - Report validated public operation names and fixed route templates in sanitized diagnostics;
   retain unavailable identities and safe digests without changing 403/429 stop or retry gates.
 

@@ -119,10 +119,22 @@ class ExecuteActionsRequest:
     targets: list[PostActionTarget]
     interval_seconds: float = DEFAULT_ACTION_INTERVAL_SECONDS
     retry_policy: RetryPolicy = field(default_factory=RetryPolicy)
+    expected_viewer: str | None = None
+    current_view_only: bool = False
 
     def validate(self) -> None:
         if not self.targets:
             raise ValueError(tr("実行対象が選択されていません。"))
+        if type(self.current_view_only) is not bool or self.current_view_only and (
+            len(self.targets) != 1 or self.targets[0].kind != "post" or self.expected_viewer is None
+        ):
+            raise ValueError("A current-view action requires one post and an expected viewer")
+        if self.expected_viewer is not None and (
+            type(self.expected_viewer) is not str
+            or re.fullmatch(r"[A-Za-z0-9_]{1,15}", self.expected_viewer) is None
+            or len(self.targets) != 1 or self.targets[0].kind != "post"
+        ):
+            raise ValueError("Invalid expected viewer or single-post action")
         self.retry_policy.validate()
         if not math.isfinite(self.interval_seconds) or self.interval_seconds < 0:
             raise ValueError(tr("削除/解除間隔は0秒以上で指定してください。"))

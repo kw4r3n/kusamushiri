@@ -1,3 +1,4 @@
+import json
 import threading
 from collections import Counter
 from datetime import date, datetime
@@ -48,6 +49,7 @@ from kusamushiri.gui_table import URL_COLUMN_WIDTH, PostTableManager, ask_export
 from kusamushiri.i18n import LANGUAGE_NAMES, get_language, tr, translate
 from kusamushiri.last_posts import FetchLastPostsRequest, LastPostEntry, LastPostResult, LastPostStore
 from kusamushiri.logger import logger
+from kusamushiri.menu_diagnostic import MenuDiagnosticResult
 from kusamushiri.models import (
     DEFAULT_ACTION_INTERVAL_SECONDS,
     CollectRequest,
@@ -61,6 +63,7 @@ from kusamushiri.models import (
 from kusamushiri.parsing import USERNAME_PATTERN, extract_post_id
 from kusamushiri.paths import DEFAULT_ACCOUNT_NAME, get_account_profile_dir, normalize_account_name
 from kusamushiri.settings import AccountSettings, AccountSettingsManager
+from kusamushiri.target_read_probe import TargetReadRequest, TargetReadResult
 
 APP_STYLE_SHEET = """
 QWidget {
@@ -175,6 +178,8 @@ class XDeleterWindow(QMainWindow):
     start_browser_requested = Signal(str)  # account_name を渡す
     stop_browser_requested = Signal()
     check_login_requested = Signal()
+    target_read_probe_requested = Signal(object)
+    menu_diagnostic_requested = Signal(object)
     collect_requested = Signal(object)
     delete_requested = Signal(object)
     export_following_requested = Signal(object)
@@ -390,6 +395,19 @@ class XDeleterWindow(QMainWindow):
             tr("フォロー一覧を取得して確認し、選んだアカウントだけフォローを解除します。")
         )
         self.manage_following_button.clicked.connect(self._handle_manage_following)
+        self.target_read_url_input = QLineEdit()
+        self.target_read_url_input.setPlaceholderText("https://x.com/author/status/123")
+        self.target_read_url_input.setToolTip(tr("元のブラウザタブで表示中の投稿URL。ページ移動や投稿の保存は行いません。"))
+        self.target_read_probe_button = QPushButton(tr("表示中の対象投稿を確認"))
+        self.target_read_probe_button.setObjectName("secondaryButton")
+        self.target_read_probe_button.clicked.connect(self._handle_target_read_probe)
+        self.menu_diagnostic_button = QPushButton(tr("メニューを診断（削除しません）"))
+        self.menu_diagnostic_button.setObjectName("secondaryButton")
+        self.menu_diagnostic_button.setToolTip(tr("開いたメニューはそのまま読みます。閉じていれば本人投稿の「…」だけを1回開きます。削除項目は押しません。"))
+        self.menu_diagnostic_button.clicked.connect(self._handle_menu_diagnostic)
+        self.current_post_action_button = QPushButton(tr("表示中のこの1投稿を削除…"))
+        self.current_post_action_button.setObjectName("dangerButton")
+        self.current_post_action_button.clicked.connect(self._handle_current_post_delete)
 
         layout.addWidget(QLabel(tr("プロファイル選択")), 0, 0, 1, 2)
         layout.addWidget(self.account_combo, 1, 0, 1, 2)
@@ -414,6 +432,10 @@ class XDeleterWindow(QMainWindow):
         layout.addWidget(self.start_button, 10, 0, 1, 2)
         layout.addWidget(self.export_following_button, 11, 0, 1, 2)
         layout.addWidget(self.manage_following_button, 12, 0, 1, 2)
+        layout.addWidget(self.target_read_url_input, 13, 0, 1, 2)
+        layout.addWidget(self.target_read_probe_button, 14, 0, 1, 2)
+        layout.addWidget(self.menu_diagnostic_button, 15, 0, 1, 2)
+        layout.addWidget(self.current_post_action_button, 16, 0, 1, 2)
         layout.setContentsMargins(0, 12, 0, 0)
         layout.setColumnStretch(0, 1)
         layout.setColumnStretch(1, 1)
@@ -743,6 +765,16 @@ class XDeleterWindow(QMainWindow):
             if self._login_verified and self._last_logged_in_username else tr("ログイン未確認")
         )
         self.start_button.setEnabled(enabled)
+        self.target_read_url_input.setEnabled(enabled)
+        self.target_read_probe_button.setEnabled(
+            enabled and self._browser_running and self._login_verified and bool(self._last_logged_in_username)
+        )
+        self.menu_diagnostic_button.setEnabled(
+            enabled and self._browser_running and self._login_verified and bool(self._last_logged_in_username)
+        )
+        self.current_post_action_button.setEnabled(
+            enabled and self._browser_running and self._login_verified and bool(self._last_logged_in_username)
+        )
         self.collect_button.setEnabled(enabled and self._login_verified)
         self.import_archive_button.setEnabled(enabled)
         self.export_following_button.setEnabled(enabled and self._login_verified)
@@ -1166,6 +1198,68 @@ class XDeleterWindow(QMainWindow):
             QMessageBox.StandardButton.No,
         )
         return result == QMessageBox.StandardButton.Yes
+
+    def _handle_menu_diagnostic(self) -> None:
+        if self._busy or not self._browser_running or not self._login_verified or not self._last_logged_in_username:
+            return
+        request = TargetReadRequest(self.target_read_url_input.text().strip(), self._last_logged_in_username)
+        try:
+            request.validate()
+        except ValueError:
+            QMessageBox.warning(self, tr("メニュー診断"), tr("https://x.com/author/status/123 形式の投稿URLを入力してください。"))
+            return
+        self.set_busy(True)
+        self.update_status(tr("メニュー候補を診断しています..."))
+        self.menu_diagnostic_requested.emit(request)
+
+    def on_menu_diagnosed(self, result: object) -> None:
+        try:
+            if type(result) is not MenuDiagnosticResult:
+                raise ValueError("invalid_menu_diagnostic")
+            fields = result.safe_fields()
+        except Exception:
+            fields = MenuDiagnosticResult("read_failed").safe_fields()
+        if self._stop_pending:
+            fields = MenuDiagnosticResult("cancelled_or_stale", fields["stage"], fields["caret_click_attempted"],
+                                          inspection_mode=fields["inspection_mode"]).safe_fields()
+        self.set_busy(False)
+        self.update_status(tr("メニュー診断結果: {reason}", reason=fields["reason"]))
+        dialog = QMessageBox(self)
+        dialog.setWindowTitle(tr("メニュー診断（削除しません）"))
+        dialog.setText(tr("開いたメニューはクリックせずに読みます。閉じていた場合も「…」だけの診断です。削除項目・確認ボタンは押していません。結果の詳細をコピーして共有できます。"))
+        dialog.setDetailedText(json.dumps(fields, ensure_ascii=True, indent=2))
+        dialog.setStandardButtons(QMessageBox.StandardButton.Ok)
+        dialog.exec()
+
+    def _handle_target_read_probe(self) -> None:
+        if self._busy or not self._browser_running or not self._login_verified or not self._last_logged_in_username:
+            return
+        request = TargetReadRequest(self.target_read_url_input.text().strip(), self._last_logged_in_username)
+        try:
+            request.validate()
+        except ValueError:
+            QMessageBox.warning(self, tr("対象投稿の確認"), tr("https://x.com/author/status/123 形式の投稿URLを入力してください。"))
+            return
+        self.set_busy(True)
+        self.update_status(tr("表示中の対象投稿を確認しています..."))
+        self.target_read_probe_requested.emit(request)
+
+    def on_target_read_probed(self, result: object) -> None:
+        try:
+            if type(result) is not TargetReadResult:
+                raise ValueError("invalid_result")
+            fields = result.safe_fields()
+        except Exception:
+            fields = TargetReadResult("read_failed").safe_fields()
+        if self._stop_pending:
+            fields = TargetReadResult("cancelled_or_stale").safe_fields()
+        self.set_busy(False)
+        self.update_status(tr("対象投稿の確認結果: {reason}", reason=fields["reason"]))
+        QMessageBox.information(
+            self, tr("対象投稿の確認"),
+            tr("この時点の対象投稿とアカウント表示の照合結果です。一投稿の操作時にも同じsession・対象・アカウントを再照合します。通信最小性や削除権限の証明ではありません。")
+            + "\n\n" + json.dumps(fields, ensure_ascii=True, indent=2),
+        )
 
     def on_login_checked(self, is_logged_in: bool, current_username: str) -> None:
         if not is_logged_in:
@@ -1692,14 +1786,25 @@ class XDeleterWindow(QMainWindow):
             rate_limit_interval_seconds=self.action_rate_limit_interval_seconds_input.value(),
         )
 
-    def _handle_delete(self) -> None:
+    def _handle_current_post_delete(self) -> None:
+        if self._busy or not self._browser_running or not self._login_verified or not self._last_logged_in_username:
+            return
+        request = TargetReadRequest(self.target_read_url_input.text().strip(), self._last_logged_in_username)
+        try:
+            request.validate()
+        except ValueError:
+            QMessageBox.warning(self, tr("対象投稿の確認"), tr("https://x.com/author/status/123 形式の投稿URLを入力してください。"))
+            return
+        self._handle_delete(current_target=PostActionTarget(request.url, "post"))
+
+    def _handle_delete(self, *, current_target: PostActionTarget | None = None) -> None:
         logger.info("GUI: Delete button clicked.")
         if self._busy:
             return
         if not self._login_verified:
             QMessageBox.information(self, tr("ログイン確認が必要"), tr("現在のアカウントでログインを確認してください。"))
             return
-        targets = self._selected_targets()
+        targets = [current_target] if current_target is not None else self._selected_targets()
         if not targets:
             QMessageBox.information(self, tr("情報"), tr("実行対象が選択されていません。"))
             return
@@ -1718,7 +1823,7 @@ class XDeleterWindow(QMainWindow):
         result = QMessageBox.question(
             self,
             tr("確認"),
-            tr(
+            (tr("表示中の同じ一投稿とアカウントを操作前に再照合します。再表示・自動再試行はしません。\n") + targets[0].url + "\n" if len(targets) == 1 and targets[0].kind == "post" else "") + tr(
                 "選択された {count} 件の項目に対して、{summary} を実行しますか？\n（この操作は元に戻せません）",
                 count=len(targets),
                 summary=summary,
@@ -1734,6 +1839,8 @@ class XDeleterWindow(QMainWindow):
             targets=targets,
             interval_seconds=self.delete_interval_input.value(),
             retry_policy=self._action_retry_policy(),
+            expected_viewer=self._last_logged_in_username if len(targets) == 1 and targets[0].kind == "post" else None,
+            current_view_only=len(targets) == 1 and targets[0].kind == "post",
         )
         try:
             request.validate()
@@ -1839,6 +1946,8 @@ class XDeleterWindow(QMainWindow):
             targets=[result.target for result in failures],
             interval_seconds=self.delete_interval_input.value(),
             retry_policy=self._action_retry_policy(),
+            expected_viewer=self._last_logged_in_username if len(failures) == 1 and failures[0].target.kind == "post" else None,
+            current_view_only=len(failures) == 1 and failures[0].target.kind == "post",
         )
         self._submit_delete(retry_request, tr("失敗分を再試行しています..."))
 

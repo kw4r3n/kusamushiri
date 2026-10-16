@@ -1,6 +1,7 @@
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import NoReturn
 from urllib.parse import urljoin, urlparse
 
 from playwright.sync_api import Locator, Page, Request, Response
@@ -36,6 +37,29 @@ DELETE_MENU_ITEM_SELECTORS = (
     '[data-testid="Dropdown"] [role="menuitem"]:has-text("削除"):not(:has-text("リスト")):visible',
     '[data-testid="Dropdown"] [role="menuitem"]:has-text("삭제"):not(:has-text("리스트")):not(:has-text("목록")):visible',
 )
+# CSS above is only a coarse prefilter. All selected candidates also
+# pass this full-item text filter (descendant spans included), except the
+# existing explicit delete test id. A substring is never a label fallback.
+DELETE_MENU_ITEM_LABELS = (None, "Delete", "削除", "삭제")
+
+
+def delete_menu_item_locators(page: Page) -> tuple[Locator, ...]:
+    return tuple(
+        page.locator(selector) if label is None else page.locator(selector).filter(
+            has_text=re.compile(r"^\s*" + re.escape(label) + r"\s*$"),
+        )
+        for selector, label in zip(DELETE_MENU_ITEM_SELECTORS, DELETE_MENU_ITEM_LABELS, strict=True)
+    )
+
+
+def delete_menu_items(page: Page) -> Locator:
+    candidates = delete_menu_item_locators(page)
+    union = candidates[0]
+    for candidate in candidates[1:]:
+        union = union.or_(candidate)
+    return union
+
+
 CONFIRMATION_SHEET_CONFIRM_SELECTOR = '[data-testid="confirmationSheetConfirm"]'
 DELETE_POST_MUTATION = "DeleteTweet"
 UNDO_REPOST_MUTATION = "DeleteRetweet"
@@ -216,6 +240,10 @@ class ActionEvidence:
     reuse_view: PendingView | None = None
     on_target_loaded: Callable[[Locator], None] = lambda _: None
     view_reuse_invalid: bool = False
+    identity_check: Callable[[], bool] = lambda: True
+    identity_failed: bool = False
+    control_failed: bool = False
+    prepare_control: Callable[[Locator, str], Callable[[], None]] = lambda locator, _: locator.click
 
     def phase(self, phase: str) -> None:
         if self.diagnostics is not None:
@@ -224,7 +252,31 @@ class ActionEvidence:
     def can_submit(self) -> bool:
         self.cancelled = self.should_cancel()
         self.rate_blocked = self.rate_blocked or self.rate_limit_pending()
+        if not (self.blocked or self.cancelled or self.rate_blocked):
+            try:
+                self.identity_failed = self.identity_failed or self.identity_check() is not True
+            except Exception:
+                self.identity_failed = True
+            self.blocked = self.blocked or self.identity_failed
         return not (self.blocked or self.cancelled or self.rate_blocked)
+
+    def prepared_click(self, locator: Locator, stage: str) -> Callable[[], None]:
+        def failed() -> NoReturn:
+            self.control_failed = self.blocked = True
+            raise TargetPostUnavailableError(tr("操作対象のメニューまたは確認ボタンを一意に照合できないため停止しました。")) from None
+
+        try:
+            click = self.prepare_control(locator, stage)
+        except Exception:
+            failed()
+
+        def invoke() -> None:
+            try:
+                click()
+            except Exception:
+                failed()
+
+        return invoke
 
 
 class TargetPostUnavailableError(Exception):
@@ -289,6 +341,8 @@ def execute_post_action(
     diagnostics: NetworkDiagnostics | None = None,
     reuse_view: PendingView | None = None,
     on_target_loaded: Callable[[Locator], None] = lambda _: None,
+    identity_check: Callable[[], bool] = lambda: True,
+    prepare_control: Callable[[Locator, str], Callable[[], None]] = lambda locator, _: locator.click,
 ) -> PostActionResult:
     action_label = action_label_for(target.kind)
     mutation = {"post": DELETE_POST_MUTATION, "repost": UNDO_REPOST_MUTATION, "like": UNLIKE_MUTATION}[target.kind]
@@ -296,7 +350,8 @@ def execute_post_action(
     responses: list[Response] = []
     classify_http = diagnostics.http_failure_for if diagnostics is not None else http_failure
     evidence = ActionEvidence(should_cancel=should_cancel, rate_limit_pending=rate_limit_pending, diagnostics=diagnostics,
-                              reuse_view=reuse_view, on_target_loaded=on_target_loaded)
+                              reuse_view=reuse_view, on_target_loaded=on_target_loaded, identity_check=identity_check,
+                              prepare_control=prepare_control)
 
     def record_request(request: Request) -> None:
         if _is_mutation_request(request, mutation):
@@ -397,9 +452,14 @@ def execute_post_action(
                     kind = "retryable"
                     retry_after = max((parse_retry_after(r.headers.get("retry-after")) or 0.0
                                        for r in responses if r.status in {420, 429, 503}), default=0.0) or None
+                if evidence.control_failed:
+                    kind = "blocked"
+                elif evidence.identity_failed:
+                    kind = "blocked"
+                    error_message = tr("操作前のsession・対象投稿・アカウント照合を確認できないため、送信せず停止しました。")
             if kind == "ambiguous":
                 error_message = tr("結果不明のため再試行しません。X で確認してください。") + " " + (error_message or "")
-            if kind == "blocked":
+            if kind == "blocked" and not (evidence.identity_failed or evidence.control_failed):
                 error_message = tr("HTTP {status} の通信拒否で停止しました。認証原因は未確認です。diagnostics --summary で通信先と理由を確認してください。",
                                    status=failure_evidence.status if failure_evidence is not None else 403)
         limited = [response for response in responses if response.status in {420, 429} and rate_limit_blocking(response)]
@@ -609,36 +669,39 @@ def delete_post(
         if _evidence is not None and not _evidence.can_submit():
             _evidence.phase("submission_blocked")
             return False, tr("送信前に中断しました。待機またはログイン確認が必要です。")
-        menu_btn.click()
+        (_evidence.prepared_click(menu_btn, "caret") if _evidence is not None else menu_btn.click)()
         stage = tr("削除メニュー項目の表示待ち")
         # The dropdown container can appear before its menu items are rendered.
         # Wait for a positively identified delete action, never a generic menu item.
+        delete_candidates = delete_menu_items(page)
         try:
-            page.wait_for_selector(
-                ", ".join(DELETE_MENU_ITEM_SELECTORS),
-                state="visible",
-                timeout=ACTION_STATE_TIMEOUT_MS,
-            )
+            # .first is readiness only. The complete union is checked below and
+            # again by the verified control scope, never truncated for identity.
+            delete_candidates.first.wait_for(state="visible", timeout=ACTION_STATE_TIMEOUT_MS)
         except PlaywrightTimeoutError:
             message = tr("削除メニュー項目が見つかりませんでした。自分のポストではない可能性があります。")
             logger.warning("%s URL=%s", message, post_url)
             return False, message
 
-        delete_menu_item = find_locator(page, DELETE_MENU_ITEM_SELECTORS)
-
-        if delete_menu_item is None:
-            message = tr("削除メニュー項目が見つかりませんでした。自分のポストではない可能性があります。")
+        count = delete_candidates.count()
+        if count != 1:
+            message = tr("操作対象のメニューまたは確認ボタンを一意に照合できないため停止しました。")
+            if _evidence is not None:
+                _evidence.control_failed = _evidence.blocked = True
+                if _evidence.diagnostics is not None:
+                    _evidence.diagnostics.verification_stop("delete_menu", "control_count")
             logger.warning("%s URL=%s", message, post_url)
             return False, message
+        delete_menu_item = delete_candidates
 
         if _evidence is not None and not _evidence.can_submit():
             _evidence.phase("submission_blocked")
             return False, tr("送信前に中断しました。待機またはログイン確認が必要です。")
 
         stage = tr("削除確認画面の表示")
+        (_evidence.prepared_click(delete_menu_item, "delete_menu") if _evidence is not None else delete_menu_item.click)()
         if _evidence is not None:
             _evidence.phase("confirmation")
-        delete_menu_item.click()
         page.wait_for_selector(
             CONFIRMATION_SHEET_CONFIRM_SELECTOR,
             state="visible",
@@ -653,13 +716,14 @@ def delete_post(
             stage = tr("削除確定後の完了確認（結果不明。再試行前にXで確認してください）")
             page.on("request", record_mutation)
             listening = True
+            click_confirm = _evidence.prepared_click(confirm_btn, "confirm") if _evidence is not None else confirm_btn.click
             if _evidence is not None:
                 if not _evidence.can_submit():
                     _evidence.phase("submission_blocked")
                     return False, tr("送信前に中断しました。待機またはログイン確認が必要です。")
                 _evidence.phase("mutation_submit")
                 _evidence.submitted = True
-            confirm_btn.click()
+            click_confirm()
             if _evidence is not None:
                 _evidence.phase("mutation_wait")
             error_message = _wait_for_mutation_result(
