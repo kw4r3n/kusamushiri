@@ -274,8 +274,10 @@ def test_action_targets_primary_timestamp_article_not_preceding_article(
     monkeypatch,
     action_name: str,
 ) -> None:
-    monkeypatch.setattr(x_deleter_actions, "ACTION_STATE_TIMEOUT_MS", 100)
-    monkeypatch.setattr(x_deleter_actions, "NAVIGATION_TIMEOUT_MS", 100)
+    # Successful rendering must tolerate a loaded CI runner; assertions below
+    # still require the exact target, untouched preceding article and one navigation.
+    monkeypatch.setattr(x_deleter_actions, "ACTION_STATE_TIMEOUT_MS", 1_000)
+    monkeypatch.setattr(x_deleter_actions, "NAVIGATION_TIMEOUT_MS", 1_000)
     page, navigations = local_page(_document([_article("999"), _article(TARGET_ID)]))
 
     success, error_message = _run_action(page, action_name)

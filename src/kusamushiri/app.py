@@ -1,7 +1,8 @@
 import queue
 import sys
 import threading
-from dataclasses import dataclass
+from contextlib import nullcontext
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 
 from PySide6.QtCore import QObject, Signal
@@ -16,11 +17,13 @@ from kusamushiri.gui import XDeleterWindow
 from kusamushiri.i18n import set_language, tr
 from kusamushiri.last_posts import FetchLastPostsRequest, LastPostResult, apply_last_post_entries
 from kusamushiri.logger import logger
+from kusamushiri.menu_diagnostic import MenuDiagnosticResult
 from kusamushiri.models import CollectRequest, ExecuteActionsRequest
 from kusamushiri.paths import configure_frozen_browser_path, migrate_legacy_app_data
 from kusamushiri.progress import ActionJournal
 from kusamushiri.retry import ActionBatchError, run_post_actions
 from kusamushiri.settings import AccountSettingsManager, migrate_legacy_settings
+from kusamushiri.target_read_probe import TargetReadRequest
 
 
 def apply_dark_palette(app: QApplication) -> None:
@@ -66,6 +69,12 @@ class CheckLoginCommand:
 
 
 @dataclass(frozen=True, slots=True)
+class MenuDiagnosticCommand:
+    request: TargetReadRequest
+    action: str = "menu_diagnostic"
+
+
+@dataclass(frozen=True, slots=True)
 class CollectPostsCommand:
     request: CollectRequest
     action: str = "collect_posts"
@@ -105,6 +114,7 @@ WorkerCommand = (
     StartBrowserCommand
     | StopBrowserCommand
     | CheckLoginCommand
+    | MenuDiagnosticCommand
     | CollectPostsCommand
     | DeletePostsCommand
     | ExportFollowingCommand
@@ -125,6 +135,7 @@ class XDeleterWorkerEvents(QObject):
     browser_ready = Signal()
     browser_stopped = Signal()
     login_checked = Signal(bool, str)
+    menu_diagnosed = Signal(object)
     posts_collected = Signal(list)
     collection_progress = Signal(int, int, int)
     delete_progress = Signal(str, str, int, int)
@@ -171,6 +182,9 @@ class XDeleterWorker:
 
     def enqueue_check_login(self) -> None:
         self._enqueue(CheckLoginCommand())
+
+    def enqueue_menu_diagnostic(self, request: TargetReadRequest) -> None:
+        self._enqueue(MenuDiagnosticCommand(request))
 
     def enqueue_stop_browser(self) -> None:
         with self._command_lock:
@@ -258,7 +272,27 @@ class XDeleterWorker:
 
             command = queued.command
             try:
-                if not isinstance(command, StopBrowserCommand) and not self._clear_cancel(core, queued):
+                if isinstance(command, MenuDiagnosticCommand):
+                    def menu_current(queued_menu: _QueuedCommand = queued) -> bool:
+                        with self._command_lock:
+                            return (queued_menu.generation == self._generation and self._active_core is core
+                                    and not self._cancel_event.is_set())
+                    try:
+                        result = core.diagnose_post_menu(
+                            command.request, worker_thread_id=self._thread.ident, is_current=menu_current,
+                        ) if menu_current() else MenuDiagnosticResult("cancelled_or_stale")
+                        if type(result) is not MenuDiagnosticResult:
+                            raise ValueError("invalid_menu_diagnostic")
+                        result.safe_fields()
+                        if not menu_current():
+                            result = MenuDiagnosticResult("cancelled_or_stale", result.stage, result.caret_click_attempted,
+                                                          inspection_mode=result.inspection_mode)
+                    except Exception:
+                        result = MenuDiagnosticResult("read_failed")
+                    self.events.menu_diagnosed.emit(result)
+                    continue
+                guarded_post = isinstance(command, DeletePostsCommand) and command.request.expected_viewer is not None
+                if not isinstance(command, StopBrowserCommand) and not guarded_post and not self._clear_cancel(core, queued):
                     continue
 
                 if isinstance(command, StartBrowserCommand):
@@ -329,15 +363,31 @@ class XDeleterWorker:
                             raise RuntimeError("Browser profile is unknown; cannot safely record actions")
                         known_successes = {f"post:{post_id}" for post_id in DeletedPostStore(profile_dir / "deleted-posts.json").load()}
                         journal = ActionJournal(profile_dir / "action-progress.json", profile_dir.name.removeprefix("chromium-profile-"))
-                    results = run_post_actions(
-                        active_core, command.request.targets, command.request.interval_seconds, command.request.retry_policy,
-                        journal=journal, wait_for_cancel=None if isinstance(active_core, XDeleterCore) else self._cancel_event.wait,
-                        known_successes=known_successes,
-                        on_progress=lambda target, index, total: self.events.delete_progress.emit(
-                            action_label_for(target.kind),
-                            target.url, index, total),
-                        on_status=self.events.status_changed.emit,
-                    )
+                    def action_current(queued_action: _QueuedCommand = queued) -> bool:
+                        with self._command_lock:
+                            return (queued_action.generation == self._generation and self._active_core is core
+                                    and not self._cancel_event.is_set())
+
+                    expected_viewer = command.request.expected_viewer
+                    policy = command.request.retry_policy
+                    identity_scope = nullcontext()
+                    if expected_viewer is not None:
+                        policy = replace(policy, max_retries=0, max_cooldowns=0)
+                        identity_scope = active_core.verified_single_post_scope(
+                            command.request.targets[0], expected_viewer,
+                            current_view_only=command.request.current_view_only,
+                            worker_thread_id=self._thread.ident, is_current=action_current,
+                        )
+                    with identity_scope:
+                        results = run_post_actions(
+                            active_core, command.request.targets, command.request.interval_seconds, policy,
+                            journal=journal, wait_for_cancel=None if isinstance(active_core, XDeleterCore) else self._cancel_event.wait,
+                            known_successes=known_successes,
+                            on_progress=lambda target, index, total: self.events.delete_progress.emit(
+                                action_label_for(target.kind),
+                                target.url, index, total),
+                            on_status=self.events.status_changed.emit,
+                        )
                     logger.info("Finished delete batch: %s/%s succeeded",
                                 sum(result.success for result in results), len(command.request.targets))
                     if core.is_cancel_requested() and not self._cancel_event.is_set():
@@ -473,6 +523,7 @@ def main() -> int:
     window.start_browser_requested.connect(worker.enqueue_start_browser)
     window.stop_browser_requested.connect(worker.enqueue_stop_browser)
     window.check_login_requested.connect(worker.enqueue_check_login)
+    window.menu_diagnostic_requested.connect(worker.enqueue_menu_diagnostic)
     window.collect_requested.connect(worker.enqueue_collect_posts)
     window.delete_requested.connect(worker.enqueue_delete_posts)
     window.export_following_requested.connect(worker.enqueue_export_following)
@@ -484,6 +535,7 @@ def main() -> int:
     worker.events.browser_ready.connect(window.show_login_wait_dialog)
     worker.events.browser_stopped.connect(window.on_browser_stopped)
     worker.events.login_checked.connect(window.on_login_checked)
+    worker.events.menu_diagnosed.connect(window.on_menu_diagnosed)
     worker.events.posts_collected.connect(window.display_posts)
     worker.events.collection_progress.connect(window.on_collection_progress)
     worker.events.delete_progress.connect(window.on_delete_progress)

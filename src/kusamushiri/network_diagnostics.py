@@ -68,6 +68,7 @@ EVENTS = {
     "isolation_fallback",
     "view_reused",
     "batch_summary",
+    "verification_stop",
 }
 METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "OTHER"}
 ENDPOINTS = MUTATIONS | TARGET_READS | ANCILLARY_READS | {"target-document", "unclassified"}
@@ -121,6 +122,10 @@ def sanitize_event(value: object) -> dict[str, object] | None:
         if key in value and (item is None or _identifier(item, prefix)):
             clean[key] = item
     enum_fields = {
+        "verification_stage": {"caret", "delete_menu", "confirm"},
+        "verification_reason": {"wrong_control_stage", "identity_unestablished", "control_changed", "overlay_present",
+                                "menu_count", "control_count", "menu_changed", "dialog_ownership_changed",
+                                "control_reused", "read_failed"},
         "phase": PHASES,
         "origin_phase": PHASES,
         "request_event_phase": PHASES,
@@ -310,6 +315,10 @@ class NetworkDiagnostics:
         if phase in PHASES:
             self._context = replace(self._context, phase=phase)
             self._emit("phase")
+
+    def verification_stop(self, stage: str, reason: str) -> None:
+        """Closed control metadata only; no DOM text, URLs or exception strings."""
+        self._emit("verification_stop", verification_stage=stage, verification_reason=reason)
 
     def navigation(self) -> None:
         try:

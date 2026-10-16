@@ -54,5 +54,21 @@ jobs:
       - name: Install browser for offline DOM regressions
         run: uv run playwright install chromium
 
+      - name: Permit sandboxed test Chromium on AppArmor runners
+        run: |
+          if [ -f /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            # Chromium's documented per-executable allowance keeps its sandbox enabled:
+            # https://chromium.googlesource.com/chromium/src/+/main/docs/security/apparmor-userns-restrictions.md
+            chromium_executable="$(uv run python -c 'from playwright.sync_api import sync_playwright; p = sync_playwright().start(); print(p.chromium.executable_path); p.stop()')"
+            sudo tee /etc/apparmor.d/kusamushiri-test-chromium >/dev/null <<EOF
+          abi <abi/4.0>,
+          include <tunables/global>
+          profile kusamushiri-test-chromium "$chromium_executable" flags=(unconfined) {
+            userns,
+          }
+          EOF
+            sudo apparmor_parser -r /etc/apparmor.d/kusamushiri-test-chromium
+          fi
+
       - name: Run tests
         run: uv run pytest -q

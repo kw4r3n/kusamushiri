@@ -363,6 +363,19 @@ class ActionLocator:
         self.page = page
         self.selector = selector
 
+    @property
+    def first(self):
+        return self
+
+    def filter(self, **kwargs):
+        return self
+
+    def or_(self, other):
+        return self
+
+    def count(self):
+        return 1
+
     def locator(self, selector):
         return ActionLocator(self.page, selector)
 

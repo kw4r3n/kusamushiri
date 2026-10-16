@@ -15,7 +15,7 @@ import signal
 import sys
 import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from contextlib import ExitStack, contextmanager, suppress
+from contextlib import ExitStack, contextmanager, nullcontext, suppress
 from dataclasses import asdict, replace
 from datetime import date, datetime
 from pathlib import Path
@@ -25,6 +25,7 @@ from typing import TypedDict, TypeVar
 from platformdirs import user_log_dir
 
 from kusamushiri.actions import action_label_for
+from kusamushiri.active_target_session import TargetReadStopError
 from kusamushiri.archive import ArchiveError, load_archive_posts, select_archive_posts
 from kusamushiri.core import XDeleterCore, rate_limit_message
 from kusamushiri.deleted_posts import DeletedPostStore
@@ -50,7 +51,7 @@ from kusamushiri.models import (
     parse_keywords,
 )
 from kusamushiri.network_diagnostics import diagnostic_excerpt, diagnostic_summary
-from kusamushiri.parsing import extract_post_id
+from kusamushiri.parsing import extract_post_author_username, extract_post_id
 from kusamushiri.paths import (
     configure_frozen_browser_path,
     get_account_profile_dir,
@@ -427,6 +428,7 @@ def _select_archive_posts(
 def _execute_post_actions(
     core: XDeleterCore, targets: Sequence[PostActionTarget], interval_seconds: float, profile: str | None,
     retry_policy: RetryPolicy | None = None,
+    expected_viewer: str | None = None,
 ) -> list[PostActionResult]:
     # One receipt file per browser profile is shared by CLI files, recipes and GUI.
     journal = ActionJournal(get_account_profile_dir(profile) / "action-progress.json", normalize_account_name(profile))
@@ -440,12 +442,23 @@ def _execute_post_actions(
 
     known_successes = {f"post:{post_id}" for post_id in DeletedPostStore.for_account(profile).load()}
     try:
-        return run_post_actions(
-            core, targets, interval_seconds, retry_policy or RetryPolicy(), journal=journal,
-            on_progress=lambda target, index, total: _progress(
-                f"[{index}/{total}] {action_label_for(target.kind)} {target.url}"),
-            on_status=_info, on_result=remember, known_successes=known_successes,
-        )
+        policy = retry_policy or RetryPolicy()
+        identity_scope = nullcontext()
+        if len(targets) == 1 and targets[0].kind == "post":
+            viewer = expected_viewer or extract_post_author_username(targets[0].url)
+            if not viewer:
+                raise TargetReadStopError("account_unmatched")
+            policy = replace(policy, max_retries=0, max_cooldowns=0)
+            identity_scope = core.verified_single_post_scope(targets[0], viewer, current_view_only=False)
+        with identity_scope:
+            return run_post_actions(
+                core, targets, interval_seconds, policy, journal=journal,
+                on_progress=lambda target, index, total: _progress(
+                    f"[{index}/{total}] {action_label_for(target.kind)} {target.url}"),
+                on_status=_info, on_result=remember, known_successes=known_successes,
+            )
+    except TargetReadStopError:
+        raise CliError("Single-post session/target/viewer verification failed; nothing was sent.") from None
     except ActionBatchError as error:
         _info(str(error))
         return error.results
@@ -593,6 +606,13 @@ def cmd_delete(args: argparse.Namespace) -> int:
         raise CliError(str(error), EXIT_USAGE) from error
     rows = read_rows(args.file)
     targets = _post_action_request(post_targets_from_rows(rows), options.interval).targets
+    expected_viewer = getattr(args, "expected_viewer", None)
+    if expected_viewer is not None and (
+        len(targets) != 1 or targets[0].kind != "post"
+        or re.fullmatch(r"[A-Za-z0-9_]{1,15}", expected_viewer) is None
+        or (extract_post_author_username(targets[0].url) or "").casefold() != expected_viewer.casefold()
+    ):
+        raise CliError("--expected-viewer requires one own post with the matching URL author.", EXIT_USAGE)
     if args.dry_run:
         for target in targets:
             print(f"{action_label_for(target.kind)}\t{target.url}")
@@ -603,7 +623,7 @@ def cmd_delete(args: argparse.Namespace) -> int:
     )
     extra: _SessionOptions = {"retry_policy": options.retry_policy} if options.retry_policy.ancillary_rate_limit_mode == "isolate-known" else {}
     with browser_session(args.profile, headless=args.headless, **extra) as core:
-        results = _execute_post_actions(core, targets, options.interval, args.profile, options.retry_policy)
+        results = _execute_post_actions(core, targets, options.interval, args.profile, options.retry_policy, expected_viewer)
         cancelled = core.is_cancel_requested()
     return _report_post_actions(results, len(targets), cancelled, rows, args.failed_output, execution_error=_execution_failed(core))
 
@@ -1026,6 +1046,7 @@ def build_parser() -> argparse.ArgumentParser:
                                  epilog="Tuning precedence: explicit CLI flag > optional --recipe [delete] value > default. Saved safety deadlines still apply. --dry-run opens no browser and changes no account data.")
     delete.add_argument("file", type=Path, help="CSV/JSON from collect, archive or the GUI (needs url and kind)")
     _add_browser_args(delete)
+    delete.add_argument("--expected-viewer", help="for one own post: exact expected account; defaults to its URL author; rechecked on the action view")
     _add_confirm_args(delete)
     delete.add_argument("--recipe", type=Path, help="read [delete] tuning only; does not inherit profile, headless or confirmation, or collect; flags override TOML")
     delete.add_argument(

@@ -28,6 +28,7 @@ from kusamushiri.models import (
 )
 from kusamushiri.paths import list_saved_accounts
 from kusamushiri.settings import AccountSettingsManager
+from kusamushiri.target_read_probe import TargetReadRequest
 
 
 @pytest.fixture(autouse=True)
@@ -172,6 +173,7 @@ def test_handle_delete_confirmation_emits_request(
     assert len(emitted_requests) == 1
     request = emitted_requests[0]
     assert request.targets == [PostActionTarget(url="https://x.com/user/status/42", kind="post")]
+    assert request.expected_viewer == "user" and request.current_view_only
 
 
 def test_ctrl_return_shortcut_triggers_delete(
@@ -791,6 +793,15 @@ def test_retry_failed_rechecks_account_match(window, monkeypatch) -> None:
     window.username_input.setText("user")
     window._retry_failed([failure])
     assert len(emitted) == 1
+    # A one-post retry keeps the confirmed-viewer and current-view guards.
+    assert emitted[0].expected_viewer == "user" and emitted[0].current_view_only
+
+    # Complete the first dispatched operation before exercising another retry.
+    window.set_busy(False)
+    other = PostActionResult(PostActionTarget("https://x.com/user/status/2", "post"), "削除", False, "failed", "retryable")
+    window._retry_failed([failure, other])
+    assert len(emitted) == 2
+    assert emitted[1].expected_viewer is None and not emitted[1].current_view_only
 
 
 def test_log_starts_collapsed_and_can_expand(window, qtbot) -> None:
@@ -1319,3 +1330,86 @@ def test_gui_cooldown_controls_match_policy_and_request(window):
     window.action_rate_limit_interval_seconds_input.setValue(7)
     policy = window._action_retry_policy()
     assert (policy.max_cooldowns, policy.cooldown_delay_seconds, policy.rate_limit_interval_seconds) == (2, 300, 7)
+
+
+def test_ambiguous_result_never_becomes_a_retry_request(window):
+    received = []
+    window.delete_requested.connect(received.append)
+    window._login_verified = True
+    window._last_logged_in_username = "user"
+    window._retry_failed([PostActionResult(PostActionTarget("https://x.com/user/status/1", "post"),
+                                         "delete", False, "unknown", "ambiguous")])
+    assert not received
+
+
+@pytest.mark.parametrize("approve", [True, False])
+def test_current_post_entry_needs_no_table_or_collection(window, monkeypatch, approve):
+    received, prompts, other = [], [], []
+    window.username_input.setText("user")
+    window._browser_running = True
+    window.on_login_checked(True, "user")
+    window.target_read_url_input.setText("https://x.com/user/status/42")
+    window.delete_requested.connect(received.append)
+    window.menu_diagnostic_requested.connect(lambda _: other.append("menu"))
+
+    def confirm(*args):
+        prompts.append(args[2])
+        return QMessageBox.StandardButton.Yes if approve else QMessageBox.StandardButton.No
+
+    monkeypatch.setattr("PySide6.QtWidgets.QMessageBox.question", confirm)
+    assert window.table.rowCount() == 0 and window.current_post_action_button.isEnabled()
+    window.current_post_action_button.click()
+    assert len(received) == int(approve) and not other
+    assert "https://x.com/user/status/42" in prompts[0]
+    if approve:
+        assert received[0].targets == [PostActionTarget("https://x.com/user/status/42", "post")]
+        assert received[0].expected_viewer == "user" and received[0].current_view_only
+
+
+def test_menu_diagnostic_gui_dispatches_only_dedicated_command_and_shows_closed_details(window, monkeypatch):
+    from kusamushiri.menu_diagnostic import MenuDiagnosticResult
+
+    requests, other, details = [], [], []
+    window._browser_running = True
+    window.on_login_checked(True, "author")
+    window.target_read_url_input.setText("https://x.com/author/status/123")
+    window.menu_diagnostic_requested.connect(requests.append)
+    window.delete_requested.connect(lambda _: other.append("delete"))
+    window.menu_diagnostic_button.click()
+    assert requests == [TargetReadRequest("https://x.com/author/status/123", "author")]
+    assert not other and window._busy and not window.menu_diagnostic_button.isEnabled()
+    monkeypatch.setattr(QMessageBox, "exec", lambda self: details.append(self.detailedText()))
+    window.on_menu_diagnosed(MenuDiagnosticResult("read_failed", "caret", True))
+    fields = json.loads(details[0])
+    assert fields["caret_click_attempted"] and not fields["delete_requested"] and not fields["journal_used"]
+    assert not window._busy
+    window.on_menu_diagnosed(MenuDiagnosticResult("PRIVATE_CANARY"))
+    assert "PRIVATE" not in details[-1] and "read_failed" in details[-1]
+
+
+def test_menu_diagnostic_stop_keeps_caret_attempt_and_discards_snapshot(window, monkeypatch):
+    from kusamushiri.menu_diagnostic import MenuDiagnosticResult
+
+    details = []
+    monkeypatch.setattr(QMessageBox, "exec", lambda self: details.append(self.detailedText()))
+    snapshot = {"dropdown_total": 1, "dropdown_visible": 1, "menuitem_total": 0, "union_visible": 0,
+                "dialog_visible": 0, "selector_counts": [0]*4, "truncated": False, "stable": True, "rows": []}
+    window._stop_pending = True
+    window.on_menu_diagnosed(MenuDiagnosticResult("captured", "complete", True, snapshot))
+    fields = json.loads(details[0])
+    assert fields["reason"] == "cancelled_or_stale" and fields["caret_click_attempted"]
+    assert fields["stage"] == "complete" and fields["snapshot"] is None and window._busy
+
+
+def test_passive_menu_gui_stop_retains_existing_mode_without_caret_attempt(window, monkeypatch):
+    from kusamushiri.menu_diagnostic import MenuDiagnosticResult
+
+    details = []
+    monkeypatch.setattr(QMessageBox, "exec", lambda self: details.append(self.detailedText()))
+    snapshot = {"dropdown_total": 1, "dropdown_visible": 1, "menuitem_total": 0, "union_visible": 0,
+                "dialog_visible": 0, "selector_counts": [0]*4, "truncated": False, "stable": True, "rows": []}
+    window._stop_pending = True
+    window.on_menu_diagnosed(MenuDiagnosticResult("captured", "complete", False, snapshot, "existing_overlay_read_only"))
+    fields = json.loads(details[0])
+    assert fields["reason"] == "cancelled_or_stale" and not fields["caret_click_attempted"]
+    assert fields["inspection_mode"] == "existing_overlay_read_only" and fields["snapshot"] is None

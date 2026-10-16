@@ -28,6 +28,7 @@ from kusamushiri.follows import FollowCollectionResult, collect_following
 from kusamushiri.i18n import tr
 from kusamushiri.last_posts import LastPostResult, fetch_last_post
 from kusamushiri.logger import logger
+from kusamushiri.menu_diagnostic import MenuDiagnosticResult, diagnose_post_menu
 from kusamushiri.models import (
     CollectRequest,
     PostActionResult,
@@ -49,6 +50,8 @@ from kusamushiri.parsing import (
 from kusamushiri.progress import ActionJournal
 from kusamushiri.rate_limits import classify_rate_limit
 from kusamushiri.retry import parse_retry_after
+from kusamushiri.target_read_probe import TargetReadRequest, TargetReadResult, probe_current_target
+from kusamushiri.verified_post_action import VerifiedSinglePost
 from kusamushiri.view_cache import PendingView
 
 SEARCH_PATH = "search"
@@ -121,6 +124,7 @@ class XDeleterCore:
     def __init__(self, *, headless: bool = False) -> None:
         self._browser = BrowserManager(headless=headless)
         self._cancel_event = threading.Event()
+        self._verified_post_action: VerifiedSinglePost | None = None
         self.collection_limit_reached = False
         # Status of the first rate-limited response since the last clear_cancel(), if any.
         self.rate_limit_status: int | None = None
@@ -731,6 +735,18 @@ class XDeleterCore:
     def get_logged_in_username(self) -> str | None:
         return self._browser.get_logged_in_username()
 
+    def probe_current_target(
+        self, request: TargetReadRequest, *, worker_thread_id: int | None,
+        is_current: Callable[[], bool] = lambda: True,
+    ) -> TargetReadResult:
+        return probe_current_target(self, request, worker_thread_id=worker_thread_id, is_current=is_current)
+
+    def diagnose_post_menu(
+        self, request: TargetReadRequest, *, worker_thread_id: int | None,
+        is_current: Callable[[], bool] = lambda: True,
+    ) -> MenuDiagnosticResult:
+        return diagnose_post_menu(self, request, worker_thread_id=worker_thread_id, is_current=is_current)
+
     def start_browser(self, user_data_dir: str | Path | None = None, account_name: str | None = None) -> None:
         self._browser.start(user_data_dir, account_name)
 
@@ -889,15 +905,44 @@ class XDeleterCore:
         page = self._require_page()
         return fetch_last_post(page, username, self._cancel_event)
 
+    @contextmanager
+    def verified_single_post_scope(
+        self, target: PostActionTarget, expected_viewer: str, *, current_view_only: bool,
+        worker_thread_id: int | None = None, is_current: Callable[[], bool] = lambda: True,
+    ):
+        scope = VerifiedSinglePost(
+            self, target, expected_viewer, current_view_only=current_view_only,
+            worker_thread_id=threading.get_ident() if worker_thread_id is None else worker_thread_id,
+            is_current=is_current,
+        )
+        self._verified_post_action = scope
+        try:
+            scope.prepare()
+            yield
+        except Exception:
+            self.request_cancel()
+            raise
+        finally:
+            self._pending_view = None
+            self._verified_post_action = None
+
     def execute_post_action(self, target: PostActionTarget) -> PostActionResult:
+        verified = self._verified_post_action
+        if verified is not None and not verified.begin(target):
+            return PostActionResult(target, actions.action_label_for(target.kind), False,
+                                    tr("一投稿の実行範囲は使用済みか、対象が一致しません。再送しません。"), "blocked")
         diagnostics = self._browser.diagnostics
         with diagnostics.operation(target):
-            page = self._browser._require_page()
+            if verified is not None:
+                verified.check(target_required=verified.loaded)
+            page = verified.session.page if verified is not None else self._browser._require_page()
             loaded: Locator | None = None
 
             def record_loaded(locator: Locator) -> None:
                 nonlocal loaded
                 loaded = locator
+                if verified is not None:
+                    verified.target_loaded(locator)
 
             reuse = self._pending_view if target.kind == "post" and self._pending_view is not None and self._pending_view.target_url == target.url else None
             self._pending_view = None
@@ -907,7 +952,9 @@ class XDeleterCore:
                                         rate_limit_blocking=self.is_action_rate_blocking,
                                         isolated_dependency_failed=self._browser.ancillary_isolation.fail,
                                         isolation_pending=lambda: bool(self._browser.ancillary_isolation.deadlines),
-                                        diagnostics=diagnostics, reuse_view=reuse, on_target_loaded=record_loaded)
+                                        diagnostics=diagnostics, reuse_view=reuse, on_target_loaded=record_loaded,
+                                        identity_check=verified.can_submit if verified is not None else lambda: True,
+                                        prepare_control=verified.prepare_control if verified is not None else lambda locator, _: locator.click)
             if result.view_reuse_invalid:
                 self.request_cancel()
             if result.deferred and self._defer_rate_limit_stop and target.kind == "post" and self._rate_limits_reusable and loaded is not None:
