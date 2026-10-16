@@ -58,7 +58,7 @@ def _role(response: object) -> tuple[str, str]:
                 return "mutation", operation
             if method == "GET" and operation in {"TweetDetail", "TweetResultByRestId", "TweetResultsByRestIds"}:
                 return "target", operation
-            if method == "GET" and operation == "ViewerBadgeCounts":
+            if method == "GET" and operation in {"ViewerBadgeCounts", "CreatorStudioTabBarItemQuery"}:
                 return "ancillary", operation
         if method == "POST" and parsed.path.rstrip("/") == "/i/api/1.1/friendships/destroy.json":
             return "mutation", "destroy.json"

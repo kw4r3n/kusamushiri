@@ -22,6 +22,8 @@ from kusamushiri.retry import run_post_actions
 BADGES = "https://x.com/i/api/graphql/fixture/ViewerBadgeCounts"
 FLEETS = "https://x.com/i/api/fleets/v1/fleetline?only_spaces=true"
 DELETE = "https://x.com/i/api/graphql/fixture/DeleteTweet"
+CREATOR = "https://x.com/i/api/graphql/fixture/CreatorStudioTabBarItemQuery"
+SETTINGS = "https://api.x.com/1.1/account/settings.json?include_mention_filter=true"
 
 
 class Context:
@@ -97,12 +99,20 @@ def emit_ancillary(isolated, url=FLEETS, *, status=429, after="120", request=Non
     ("https://x.com/i/api/fleets/v1/fleetline?only_spaces=true&only_spaces=false", "GET", None),
     (BADGES + "/dependency", "GET", None),
     ("https://x.com/i/api/unknown/ViewerBadgeCounts", "GET", None),
+    ("https://x.com/i/api/graphql/fixture/CreatorStudioTabBarItemQuery?variables=%7B%7D", "GET", "CreatorStudioTabBarItemQuery"),
+    ("https://x.com/i/api/graphql/fixture/CreatorStudioTabBarItemQuery", "POST", None),
+    ("https://api.x.com/1.1/account/settings.json?include_mention_filter=true", "GET", "account/settings.json"),
+    ("https://api.twitter.com/1.1/account/settings.json", "GET", "account/settings.json"),
+    ("https://api.x.com/1.1/account/settings.json", "POST", None),
+    ("https://api.x.com/1.1/help/settings.json", "GET", None),
+    ("https://api.x.com/i/api/graphql/fixture/ViewerBadgeCounts", "GET", None),
+    ("https://x.com/1.1/account/settings.json", "GET", None),
 ])
 def test_only_exact_nonessential_gets_qualify(url, method, expected):
     assert isolatable_endpoint(url, method) == expected
 
 
-@pytest.mark.parametrize("url", [FLEETS, BADGES])
+@pytest.mark.parametrize("url", [FLEETS, BADGES, CREATOR, SETTINGS])
 @pytest.mark.parametrize("before", [True, False])
 def test_isolated_ancillary_before_or_after_success_does_not_defer(isolated, url, before):
     core, page, context, clock, events = isolated
@@ -129,6 +139,7 @@ def test_isolated_ancillary_before_or_after_success_does_not_defer(isolated, url
     outcome = by_event(events, "operation_outcome")[0]
     assert outcome["owned_mutation_requests"] and not outcome["blocking_responses"]
     assert by_event(events, "ancillary_quarantine")[0]["response"]
+    assert by_event(events, "ancillary_quarantine")[0]["endpoint"] == isolatable_endpoint(url, "GET")
 
 
 @pytest.mark.parametrize("safe,route_failure", [(False, False), (True, True)])

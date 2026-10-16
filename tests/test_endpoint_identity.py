@@ -143,16 +143,19 @@ def test_late_response_keeps_public_identity_origin_without_reading_429_body(sta
 def test_unmatched_response_still_records_method_and_validated_fixed_route():
     clock, events = Clock(), []
     trace = NetworkDiagnostics(sink=events.append, wall=clock.wall, monotonic=clock.monotonic)
-    request = Request(clock, "https://api.x.com/1.1/account/settings.json?screen_name=" + SECRET)
+    request = Request(clock, "https://api.x.com/1.1/help/settings.json?screen_name=" + SECRET)
     trace.response(Response(request))
     reply = next(event for event in events if event["event"] == "response")
     assert reply["method"] == "GET" and reply["identity_status"] == "fixed_route"
     assert reply["origin_operation"] is None and reply["role"] == "unknown"
+    trace.response(Response(Request(clock, "https://api.x.com/1.1/account/settings.json?screen_name=" + SECRET)))
+    settings = [event for event in events if event["event"] == "response"][-1]
+    assert settings["identity_status"] == "fixed_route" and settings["role"] == "ancillary"
     assert SECRET not in json.dumps(events)
 
 
 @pytest.mark.parametrize("url", [GRAPH + UNKNOWN_PUBLIC, GRAPH + SECRET,
-                                 "https://api.x.com/1.1/account/settings.json?token=" + SECRET])
+                                 "https://api.x.com/1.1/help/settings.json?token=" + SECRET])
 @pytest.mark.parametrize("mode", ["global", "isolate-known"])
 def test_known_public_or_unavailable_unknown429_preserves_exact_finite_cooldown_stop(scenario, tmp_path, url, mode):
     core, page, context, clock, events, emit = scenario

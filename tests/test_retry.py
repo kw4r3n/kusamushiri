@@ -529,6 +529,9 @@ def test_dom_only_completion_without_observed_mutation_is_held(monkeypatch):
         ("/tester/status/34", "target", "target-document"),
         ("/i/api/fleetline", "ancillary", "fleetline"),
         ("/i/api/graphql/hash/ViewerBadgeCounts", "ancillary", "ViewerBadgeCounts"),
+        ("/i/api/graphql/hash/CreatorStudioTabBarItemQuery", "ancillary", "CreatorStudioTabBarItemQuery"),
+        ("/1.1/account/settings.json", "ancillary", "account/settings.json"),
+        ("/1.1/help/settings.json", "unknown", "unclassified"),
         ("/new/api/secret-123456789", "unknown", "unclassified"),
     ],
 )

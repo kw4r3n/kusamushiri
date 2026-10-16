@@ -575,7 +575,7 @@ def _add_retry_args(parser: argparse.ArgumentParser, *, recipe_overrides: bool =
                             help=f"{description} ({note})" if name == "retry_max_wait" else argparse.SUPPRESS)
     parser.add_argument("--ancillary-rate-limit-mode", choices=("global", "isolate-known"),
                         default=None if recipe_overrides else "global",
-                        help="global (safe default) or isolate-known: quarantine exact ViewerBadgeCounts/fleetline GETs; "
+                        help="global (safe default) or isolate-known: quarantine exact ViewerBadgeCounts/CreatorStudioTabBarItemQuery/account settings/fleetline GETs; "
                              "requires a new service-worker-blocked routed context; otherwise global fallback; CLI overrides TOML")
 
 

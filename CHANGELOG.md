@@ -5,6 +5,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- `isolate-known` also quarantines `CreatorStudioTabBarItemQuery` GraphQL GETs and `api.x.com`
+  `/1.1/account/settings.json` GETs. Both load on every target page and hit HTTP 429 after about
+  49 loads, which exhausted the cooldowns and stopped long delete batches.
 - Verify the live session, target, viewer and pinned controls before a single-post delete;
   the GUI reuses the current view without navigation, single-post actions disable automatic
   retries and unknown outcomes stay held in the existing action journal.

@@ -23,12 +23,18 @@ def isolatable_endpoint(url: str, method: str) -> str | None:
         parsed = urlparse(url)
     except (ValueError, TypeError):
         return None
-    if parsed.scheme != "https" or parsed.netloc not in {"x.com", "twitter.com"} or method != "GET":
+    if parsed.scheme != "https" or method != "GET":
+        return None
+    if parsed.netloc in {"api.x.com", "api.twitter.com"}:
+        # Boot-time settings read; repeats on every target load.
+        return "account/settings.json" if parsed.path == "/1.1/account/settings.json" else None
+    if parsed.netloc not in {"x.com", "twitter.com"}:
         return None
     if parsed.path == "/i/api/fleets/v1/fleetline" and parse_qsl(parsed.query, keep_blank_values=True) == [("only_spaces", "true")]:
         return "fleetline"
-    if re.fullmatch(r"/i/api/graphql/[A-Za-z0-9_-]+/ViewerBadgeCounts", parsed.path):
-        return "ViewerBadgeCounts"
+    graph = re.fullmatch(r"/i/api/graphql/[A-Za-z0-9_-]+/(ViewerBadgeCounts|CreatorStudioTabBarItemQuery)", parsed.path)
+    if graph:
+        return graph.group(1)
     return None
 
 

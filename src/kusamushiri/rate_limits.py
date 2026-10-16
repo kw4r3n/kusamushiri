@@ -7,7 +7,8 @@ from urllib.parse import urlparse
 RateLimitScope = Literal["mutation", "target", "ancillary", "unknown"]
 MUTATIONS = {"DeleteTweet", "DeleteRetweet", "UnfavoriteTweet", "destroy.json"}
 TARGET_READS = {"TweetDetail", "TweetResultByRestId", "TweetResultsByRestIds"}
-ANCILLARY_READS = {"fleetline", "fleetline.json", "ViewerBadgeCounts"}
+ANCILLARY_READS = {"fleetline", "fleetline.json", "ViewerBadgeCounts", "CreatorStudioTabBarItemQuery",
+                   "account/settings.json"}
 
 
 def classify_rate_limit(url: str) -> tuple[RateLimitScope, str]:
@@ -22,4 +23,6 @@ def classify_rate_limit(url: str) -> tuple[RateLimitScope, str]:
         return "target", "target-document"
     if name in ANCILLARY_READS:
         return "ancillary", name
+    if path == "/1.1/account/settings.json":
+        return "ancillary", "account/settings.json"
     return "unknown", "unclassified"

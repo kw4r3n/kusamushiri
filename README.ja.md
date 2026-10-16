@@ -230,7 +230,7 @@ confirm = true
 閾値ではなく、控えめな出発点です。既存の設定ファイルやGUIに明示して保存した値は保持します。
 GUIの「待機・再試行設定」、CLIの `delete` / `run`、設定ファイルの `[delete]` で調整できます。
 
-削除API・対象読込・周辺通信（`fleetline` / `ViewerBadgeCounts`）・分類不能な通信の429を
+削除API・対象読込・周辺通信（`fleetline` / `ViewerBadgeCounts` / `CreatorStudioTabBarItemQuery` / `account/settings.json`）・分類不能な通信の429を
 区別して記録します。ただし役割の分類であり、Xの利用制限枠が別だと断定するものではありません。
 既定の `global` モードでは、いずれのHTTP 420/429も全体の通信休止の契機にします。送信前に止めた削除は失敗に数えず、未処理として
 保持します。削除の再試行回数と通信休止回数は独立しています。
@@ -277,7 +277,8 @@ CLIフラグと設定ファイルのキーは次の対応です：
 確認は `--dry-run` のまま行い、再レビューが済むまで実操作への有効化は保留します。
 
 個別休止の対象は `x.com` / `twitter.com` のHTTPS GETのうち、
-`/i/api/graphql/<hash>/ViewerBadgeCounts` と `/i/api/fleets/v1/fleetline?only_spaces=true`（このクエリのみで、他のパラメータを含まないもの）だけです。
+`/i/api/graphql/<hash>/ViewerBadgeCounts`・`/i/api/graphql/<hash>/CreatorStudioTabBarItemQuery` と `/i/api/fleets/v1/fleetline?only_spaces=true`（このクエリのみで、他のパラメータを含まないもの）、
+および `api.x.com` / `api.twitter.com` の `/1.1/account/settings.json` だけです。
 HTTP 420/429を受けた通信先への次の要求をローカルで止め、コンテキスト終了まで再送しません。
 期限が過ぎても自動再送せず、成功応答も捏造しません。別のfleetlineパス・クエリ、GET以外、
 不明な通信先、対象読込、削除APIは従来の全体休止を保ちます。対象DOM、通常の操作UI、
@@ -407,7 +408,7 @@ TOML／CLIの変更でその期限を消したり、`Retry-After` より早く�
 ## 無駄な再読込と診断の改善
 
 通信制限・中止を、ページ遷移前とメニュー操作前にも確認します。同じポストを未送信で保留し、
-原因が既知のViewerBadgeCounts／Spaces用fleetline GETだけの場合は、期限を守ってから表示を再利用できます。
+原因が既知の周辺通信GET（上記の個別休止の対象）だけの場合は、期限を守ってから表示を再利用できます。
 同じページとURL、唯一の見える対象記事、同一の接続済みDOM、開いたダイアログ・メニューがないことを確認します。
 未知・対象読込・削除APIの制限には適用しません。表示が変われば未処理のまま止め、再読込や削除はしません。
 追加設定はありません。
