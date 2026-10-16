@@ -4,7 +4,6 @@ from urllib.parse import parse_qs, urlparse
 import pytest
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
-from kusamushiri.actions import DELETE_MENU_ITEM_SELECTORS
 from kusamushiri.browser import BrowserManager
 from kusamushiri.core import POST_ARTICLE_SELECTOR, XDeleterCore
 from kusamushiri.models import CollectRequest, PostKind
@@ -90,6 +89,18 @@ class ClickableLocator:
 
 
 class ArticleLocator:
+    def filter(self, **kwargs):
+        return self
+
+    def or_(self, other):
+        return self
+
+    def count(self):
+        return 1
+
+    def click(self):
+        return None
+
     @property
     def first(self) -> "ArticleLocator":
         return self
@@ -493,25 +504,32 @@ def test_browser_manager_restarts_when_profile_changes(monkeypatch, tmp_path) ->
     assert manager.profile_dir == tmp_path / "new"
 
 
-def test_delete_post_uses_only_explicit_delete_menu_selectors(monkeypatch) -> None:
+def test_delete_post_uses_shared_delete_candidates(monkeypatch) -> None:
+    from kusamushiri import actions
+
     core = XDeleterCore()
     core._browser.page = DeletePage()
     selector_calls: list[tuple[str, ...]] = []
+    selected = []
+    candidates = ArticleLocator()
+
+    def delete_candidates(page):
+        selected.append(page)
+        return candidates
 
     def find_first_visible_locator(root: object, selectors: tuple[str, ...]) -> ClickableLocator:
         selector_calls.append(selectors)
         return ClickableLocator()
 
     monkeypatch.setattr(core, "_find_first_visible_locator", find_first_visible_locator)
+    monkeypatch.setattr(actions, "delete_menu_items", delete_candidates)
 
     success, error_message = core.delete_post("https://x.com/user/status/12345")
 
-    delete_selectors = selector_calls[1]
     assert success is True
     assert error_message is None
-    assert '[data-testid="Dropdown"] [role="menuitem"]:has-text("삭제"):not(:has-text("리스트")):not(:has-text("목록")):visible' in delete_selectors
-    assert '[data-testid="Dropdown"] [role="menuitem"][data-testid="delete"]:visible' in delete_selectors
-    assert '[data-testid="Dropdown"] [role="menuitem"]' not in delete_selectors
+    assert selected == [core._browser.page]
+    assert selector_calls[-1] == ('[data-testid="confirmationSheetConfirm"]',)
 
 
 def test_delete_post_fails_when_delete_menu_item_is_not_identified(monkeypatch) -> None:
@@ -525,24 +543,26 @@ def test_delete_post_fails_when_delete_menu_item_is_not_identified(monkeypatch) 
         return ClickableLocator() if call_count == 1 else None
 
     monkeypatch.setattr(core, "_find_first_visible_locator", find_first_visible_locator)
+    monkeypatch.setattr("kusamushiri.actions.delete_menu_items", lambda _: type(
+        "Missing", (ArticleLocator,), {"count": lambda self: 0},
+    )())
 
     success, error_message = core.delete_post("https://x.com/user/status/12345")
 
     assert success is False
-    assert error_message == "削除メニュー項目が見つかりませんでした。自分のポストではない可能性があります。"
+    assert error_message == "操作対象のメニューまたは確認ボタンを一意に照合できないため停止しました。"
 
 
 def test_delete_post_waits_for_identified_menu_item_and_does_not_guess_on_timeout(monkeypatch) -> None:
-    class SlowMenuPage(DeletePage):
-        def __init__(self) -> None:
-            self.waited_for: list[str] = []
+    waited = []
 
-        def wait_for_selector(self, selector: str, *, state: str, timeout: int) -> None:
-            self.waited_for.append(selector)
+    class SlowMenu(ArticleLocator):
+        def wait_for(self, *, state: str, timeout: int) -> None:
+            waited.append((state, timeout))
             raise PlaywrightTimeoutError("menu item did not appear")
 
     core = XDeleterCore()
-    page = SlowMenuPage()
+    page = DeletePage()
     core._browser.page = page
     selector_calls: list[tuple[str, ...]] = []
 
@@ -551,12 +571,13 @@ def test_delete_post_waits_for_identified_menu_item_and_does_not_guess_on_timeou
         return ClickableLocator()
 
     monkeypatch.setattr(core, "_find_first_visible_locator", find_first_visible_locator)
+    monkeypatch.setattr("kusamushiri.actions.delete_menu_items", lambda _: SlowMenu())
 
     success, error = core.delete_post("https://x.com/user/status/12345")
 
     assert success is False
     assert error == "削除メニュー項目が見つかりませんでした。自分のポストではない可能性があります。"
-    assert page.waited_for == [", ".join(DELETE_MENU_ITEM_SELECTORS)]
+    assert waited == [("visible", 10000)]
     assert len(selector_calls) == 1  # Only the caret was selected, not an unknown menu item.
 
 

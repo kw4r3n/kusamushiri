@@ -28,6 +28,7 @@ from kusamushiri.models import (
 )
 from kusamushiri.paths import list_saved_accounts
 from kusamushiri.settings import AccountSettingsManager
+from kusamushiri.target_read_probe import READ_PATHS, TargetReadRequest, TargetReadResult
 
 
 @pytest.fixture(autouse=True)
@@ -75,6 +76,61 @@ def window(qtbot, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> XDeleterWi
     w.hide()
     w.deleteLater()
     QApplication.instance().processEvents()
+
+
+def test_target_probe_uses_confirmed_viewer_and_does_not_emit_actions(window, monkeypatch):
+    received, other = [], []
+    window.target_read_probe_requested.connect(received.append)
+    window.start_browser_requested.connect(lambda *args: other.append("start"))
+    window.collect_requested.connect(lambda *args: other.append("collect"))
+    window.delete_requested.connect(lambda *args: other.append("delete"))
+    window._browser_running = True
+    window._login_verified = True
+    window._last_logged_in_username = "viewer"
+    window.username_input.setText("unrelated")
+    window.target_read_url_input.setText("https://x.com/author/status/123")
+    window.set_busy(False)
+    assert window.target_read_probe_button.isEnabled()
+    window._handle_target_read_probe()
+    assert received == [TargetReadRequest("https://x.com/author/status/123", "viewer")]
+    assert window._busy and not window.target_read_probe_button.isEnabled() and not other
+    window._handle_target_read_probe()
+    assert len(received) == 1
+    # A new field is transient; existing settings autosave has no URL/viewer entry.
+    window._save_settings()
+    settings = window._settings_manager._settings
+    assert not any("target_read" in key for key in settings.allKeys())
+
+
+@pytest.mark.parametrize("state", ["no_browser", "unverified", "no_viewer", "invalid"])
+def test_target_probe_gui_gates_without_dispatch(window, monkeypatch, state):
+    received, warnings = [], []
+    window.target_read_probe_requested.connect(received.append)
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: warnings.append(args))
+    window._browser_running = state != "no_browser"
+    window._login_verified = state != "unverified"
+    window._last_logged_in_username = None if state == "no_viewer" else "viewer"
+    window.target_read_url_input.setText("https://x.com/author/status/123?private=secret" if state == "invalid" else "https://x.com/author/status/123")
+    window.set_busy(False)
+    window._handle_target_read_probe()
+    assert not received and not window._busy
+    assert bool(warnings) == (state == "invalid")
+    assert "secret" not in str(warnings)
+
+
+@pytest.mark.parametrize("case", ["matched", "invalid", "stopping"])
+def test_target_probe_gui_fixed_result_and_stop_lock(window, monkeypatch, case):
+    messages = []
+    monkeypatch.setattr(QMessageBox, "information", lambda *args: messages.append(args[2]))
+    result = TargetReadResult("SECRET URL viewer") if case == "invalid" else TargetReadResult("matched", "complete", READ_PATHS, True, True, True)
+    window._stop_pending = case == "stopping"
+    window.set_busy(True)
+    window.on_target_read_probed(result)
+    fields = json.loads(messages[0].split("\n\n", 1)[1])
+    assert fields["reason"] == {"matched": "matched", "invalid": "read_failed", "stopping": "cancelled_or_stale"}[case]
+    assert not fields["ready_for_live"] and not fields["strict_adapter_validated"]
+    assert "SECRET" not in messages[0]
+    assert window._busy == (case == "stopping")
 
 
 def test_window_title(window: XDeleterWindow, qtbot) -> None:
@@ -172,6 +228,7 @@ def test_handle_delete_confirmation_emits_request(
     assert len(emitted_requests) == 1
     request = emitted_requests[0]
     assert request.targets == [PostActionTarget(url="https://x.com/user/status/42", kind="post")]
+    assert request.expected_viewer == "user" and request.current_view_only
 
 
 def test_ctrl_return_shortcut_triggers_delete(
@@ -1319,3 +1376,88 @@ def test_gui_cooldown_controls_match_policy_and_request(window):
     window.action_rate_limit_interval_seconds_input.setValue(7)
     policy = window._action_retry_policy()
     assert (policy.max_cooldowns, policy.cooldown_delay_seconds, policy.rate_limit_interval_seconds) == (2, 300, 7)
+
+
+def test_ambiguous_result_never_becomes_a_retry_request(window):
+    received = []
+    window.delete_requested.connect(received.append)
+    window._login_verified = True
+    window._last_logged_in_username = "user"
+    window._retry_failed([PostActionResult(PostActionTarget("https://x.com/user/status/1", "post"),
+                                         "delete", False, "unknown", "ambiguous")])
+    assert not received
+
+
+@pytest.mark.parametrize("approve", [True, False])
+def test_current_post_entry_needs_no_table_or_collection(window, monkeypatch, approve):
+    received, prompts, other = [], [], []
+    window.username_input.setText("user")
+    window._browser_running = True
+    window.on_login_checked(True, "user")
+    window.target_read_url_input.setText("https://x.com/user/status/42")
+    window.delete_requested.connect(received.append)
+    window.target_read_probe_requested.connect(lambda _: other.append("probe"))
+    window.menu_diagnostic_requested.connect(lambda _: other.append("menu"))
+
+    def confirm(*args):
+        prompts.append(args[2])
+        return QMessageBox.StandardButton.Yes if approve else QMessageBox.StandardButton.No
+
+    monkeypatch.setattr("PySide6.QtWidgets.QMessageBox.question", confirm)
+    assert window.table.rowCount() == 0 and window.current_post_action_button.isEnabled()
+    window.current_post_action_button.click()
+    assert len(received) == int(approve) and not other
+    assert "https://x.com/user/status/42" in prompts[0]
+    if approve:
+        assert received[0].targets == [PostActionTarget("https://x.com/user/status/42", "post")]
+        assert received[0].expected_viewer == "user" and received[0].current_view_only
+
+
+def test_menu_diagnostic_gui_dispatches_only_dedicated_command_and_shows_closed_details(window, monkeypatch):
+    from kusamushiri.menu_diagnostic import MenuDiagnosticResult
+
+    requests, other, details = [], [], []
+    window._browser_running = True
+    window.on_login_checked(True, "author")
+    window.target_read_url_input.setText("https://x.com/author/status/123")
+    window.menu_diagnostic_requested.connect(requests.append)
+    window.delete_requested.connect(lambda _: other.append("delete"))
+    window.target_read_probe_requested.connect(lambda _: other.append("probe"))
+    window.menu_diagnostic_button.click()
+    assert requests == [TargetReadRequest("https://x.com/author/status/123", "author")]
+    assert not other and window._busy and not window.menu_diagnostic_button.isEnabled()
+    monkeypatch.setattr(QMessageBox, "exec", lambda self: details.append(self.detailedText()))
+    window.on_menu_diagnosed(MenuDiagnosticResult("read_failed", "caret", True))
+    fields = json.loads(details[0])
+    assert fields["caret_click_attempted"] and not fields["delete_requested"] and not fields["journal_used"]
+    assert not window._busy
+    window.on_menu_diagnosed(MenuDiagnosticResult("PRIVATE_CANARY"))
+    assert "PRIVATE" not in details[-1] and "read_failed" in details[-1]
+
+
+def test_menu_diagnostic_stop_keeps_caret_attempt_and_discards_snapshot(window, monkeypatch):
+    from kusamushiri.menu_diagnostic import MenuDiagnosticResult
+
+    details = []
+    monkeypatch.setattr(QMessageBox, "exec", lambda self: details.append(self.detailedText()))
+    snapshot = {"dropdown_total": 1, "dropdown_visible": 1, "menuitem_total": 0, "union_visible": 0,
+                "dialog_visible": 0, "selector_counts": [0]*4, "truncated": False, "stable": True, "rows": []}
+    window._stop_pending = True
+    window.on_menu_diagnosed(MenuDiagnosticResult("captured", "complete", True, snapshot))
+    fields = json.loads(details[0])
+    assert fields["reason"] == "cancelled_or_stale" and fields["caret_click_attempted"]
+    assert fields["stage"] == "complete" and fields["snapshot"] is None and window._busy
+
+
+def test_passive_menu_gui_stop_retains_existing_mode_without_caret_attempt(window, monkeypatch):
+    from kusamushiri.menu_diagnostic import MenuDiagnosticResult
+
+    details = []
+    monkeypatch.setattr(QMessageBox, "exec", lambda self: details.append(self.detailedText()))
+    snapshot = {"dropdown_total": 1, "dropdown_visible": 1, "menuitem_total": 0, "union_visible": 0,
+                "dialog_visible": 0, "selector_counts": [0]*4, "truncated": False, "stable": True, "rows": []}
+    window._stop_pending = True
+    window.on_menu_diagnosed(MenuDiagnosticResult("captured", "complete", False, snapshot, "existing_overlay_read_only"))
+    fields = json.loads(details[0])
+    assert fields["reason"] == "cancelled_or_stale" and not fields["caret_click_attempted"]
+    assert fields["inspection_mode"] == "existing_overlay_read_only" and fields["snapshot"] is None

@@ -1,4 +1,5 @@
 import json
+from contextlib import nullcontext
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -75,6 +76,10 @@ class FakeCore:
     def search_and_collect_posts(self, request, on_progress=None) -> list[PostRecord]:
         self.request = request
         return [make_post("1"), make_post("2", "repost")]
+
+    def verified_single_post_scope(self, target, expected_viewer, **kwargs):
+        self.verified_scope = (target, expected_viewer, kwargs)
+        return nullcontext()
 
     def execute_post_action(self, target: PostActionTarget) -> PostActionResult:
         self.actions.append(target)
@@ -513,7 +518,7 @@ def test_archive_order_picks_newest_or_oldest(fake_core, tmp_path, flags: list[s
 
 def test_delete_retry_options_reach_shared_runner(fake_core, tmp_path, monkeypatch):
     path = tmp_path / "posts.json"
-    write_post_list(path, [make_post("1")])
+    write_post_list(path, [make_post("1"), make_post("2")])
     policies = []
     real_run = cli.run_post_actions
 
@@ -665,7 +670,7 @@ def tuning_recipe(tmp_path):
 @pytest.mark.parametrize("override", [False, True])
 def test_direct_delete_reads_all_toml_tuning_and_explicit_flags_win(fake_core, tmp_path, monkeypatch, override):
     path = tmp_path / "posts.json"
-    write_post_list(path, [make_post("1")])
+    write_post_list(path, [make_post("1"), make_post("2")])
     recipe, text = tuning_recipe(tmp_path)
     calls = []
     real_run = cli.run_post_actions
@@ -768,3 +773,27 @@ def test_state_deadline_is_not_a_recipe_setting(tmp_path):
     recipe.write_text("[delete]\ncooldown_until = 0\n")
     with pytest.raises(RecipeError, match="unknown setting delete.cooldown_until"):
         load_recipe(recipe)
+
+
+def test_single_post_checks_viewer_and_disables_automatic_retries(fake_core, tmp_path, monkeypatch):
+    path = tmp_path / "one.json"
+    write_post_list(path, [make_post("9")])
+    policies = []
+    real_run = cli.run_post_actions
+
+    def capture(core, targets, interval, policy, **kwargs):
+        policies.append(policy)
+        return real_run(core, targets, interval, policy, **kwargs)
+
+    monkeypatch.setattr(cli, "run_post_actions", capture)
+    assert cli.main(["delete", str(path), "--expected-viewer", "alice", "--yes", "--max-retries", "8"]) == 0
+    target, viewer, options = fake_core.instances[0].verified_scope
+    assert target.url.endswith("/9") and viewer == "alice" and options == {"current_view_only": False}
+    assert policies[0].max_retries == policies[0].max_cooldowns == 0
+
+
+def test_wrong_expected_viewer_is_rejected_before_browser(fake_core, tmp_path):
+    path = tmp_path / "one.json"
+    write_post_list(path, [make_post("9")])
+    assert cli.main(["delete", str(path), "--expected-viewer", "other", "--yes"]) == cli.EXIT_USAGE
+    assert not fake_core.instances
