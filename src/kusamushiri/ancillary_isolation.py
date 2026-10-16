@@ -4,7 +4,7 @@ import re
 import time
 from collections import OrderedDict
 from collections.abc import Callable
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qsl, urlparse
 
 from playwright.sync_api import BrowserContext, Response, Route
 
@@ -25,7 +25,7 @@ def isolatable_endpoint(url: str, method: str) -> str | None:
         return None
     if parsed.scheme != "https" or parsed.netloc not in {"x.com", "twitter.com"} or method != "GET":
         return None
-    if parsed.path == "/i/api/fleets/v1/fleetline" and parse_qs(parsed.query, keep_blank_values=True).get("only_spaces") == ["true"]:
+    if parsed.path == "/i/api/fleets/v1/fleetline" and parse_qsl(parsed.query, keep_blank_values=True) == [("only_spaces", "true")]:
         return "fleetline"
     if re.fullmatch(r"/i/api/graphql/[A-Za-z0-9_-]+/ViewerBadgeCounts", parsed.path):
         return "ViewerBadgeCounts"
@@ -45,6 +45,7 @@ class AncillaryIsolation:
         self.failed = False
         self.deadlines: dict[str, float] = {}
         self.suppressed = 0
+        self._operation_item: object = None
         self._responses: OrderedDict[int, object] = OrderedDict()
         self._last_response: Response | None = None
         self.persist_deadline: Callable[[float], None] | None = None
@@ -62,6 +63,13 @@ class AncillaryIsolation:
             logger.warning("Ancillary isolation unavailable; retaining global rate-limit handling.")
             return
         self.ready = True
+
+    def begin_operation(self, item: object) -> None:
+        # The storm cap is per item: polling across a long batch must not exhaust it,
+        # while retries of the same item keep accumulating toward the cap.
+        if item != self._operation_item:
+            self._operation_item = item
+            self.suppressed = 0
 
     def owns(self, response: Response) -> bool:
         identity = _identity(response)

@@ -22,6 +22,9 @@ isolated = isolated_fixture  # Reuse the in-memory context with a temporary dura
     'only_spaces=true&only_spaces=',
     'only_spaces=&only_spaces=true',
     'only_spaces=true&only_spaces',
+    'only_spaces=true&cursor=x',
+    'cursor=x&only_spaces=true',
+    'only_spaces=true&only_spaces=true',
 ])
 def test_blank_duplicate_query_is_not_known_spaces_only(query):
     assert isolatable_endpoint('https://x.com/i/api/fleets/v1/fleetline?' + query, 'GET') is None
@@ -338,3 +341,33 @@ def test_malformed_routing_input_remains_unknown_and_does_not_raise(isolated):
     route = Route(url)
     context.handler(route)
     assert route.continued and not route.aborted
+
+
+def test_quarantine_during_a_pause_keeps_its_deadline_on_disk(isolated, tmp_path):
+    core, page, context, clock, events = isolated
+    journal = ActionJournal(tmp_path / 'action-progress.json', 'synthetic')
+    durable_at_second_item = []
+    execute = core.execute_post_action
+    emitted = []
+
+    def perform(item):
+        if item == target(2):
+            durable_at_second_item.append(json.loads(journal.path.read_text())['cooldown_until'])
+        return execute(item)
+
+    def wait(seconds):
+        if not emitted:
+            # An ancillary 429 dispatched while the proactive pause is waiting.
+            emitted.append(True)
+            emit_ancillary(isolated, BADGES, after='999')
+        clock.tick(seconds)
+        return core.is_cancel_requested()
+
+    page.goto = lambda *args, **kwargs: None
+    core.execute_post_action = perform
+    run_post_actions(core, [target(1), target(2)], 0,
+                     RetryPolicy(ancillary_rate_limit_mode='isolate-known', batch_size=1, batch_pause_seconds=30.0),
+                     journal=journal, wait_for_cancel=wait)
+    assert emitted and core._browser.ancillary_isolation.deadlines
+    assert len(durable_at_second_item) == 1
+    assert durable_at_second_item[0] >= core._browser.ancillary_isolation.deadline > clock.wall()

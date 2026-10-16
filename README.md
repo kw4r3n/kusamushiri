@@ -336,7 +336,7 @@ This Unreleased mode is awaiting independent re-review of its stop/storage corre
 Keep previews in `--dry-run`; live activation is withheld pending that review.
 
 The opt-in mode quarantines only HTTPS GETs on `x.com` / `twitter.com` at
-`/i/api/graphql/<hash>/ViewerBadgeCounts` and `/i/api/fleets/v1/fleetline?only_spaces=true`
+`/i/api/graphql/<hash>/ViewerBadgeCounts` and `/i/api/fleets/v1/fleetline?only_spaces=true` (that exact query, no other parameters)
 after their HTTP 420/429. It blocks further matching browser requests locally until the
 context closes, even after the retry deadline; it never fabricates a successful response or
 automatically retries that endpoint. Other fleetline paths/queries, non-GETs, unknown endpoints,
@@ -347,7 +347,7 @@ This classification does not establish independent server quotas or guarantee de
 Reliable routing requires a new context with Service Workers blocked. Opt-in CLI starts that
 context; a locked action journal with durable deadline storage is also required. Missing storage,
 existing contexts or routing-install failures fall back to `global`. Playwright routing
-also disables the context's HTTP cache. An abort failure or 128 locally suppressed requests
+also disables the context's HTTP cache. An abort failure or 128 locally suppressed requests within one item
 stops conservatively and preserves the deadline. Already-sent responses remain observable;
 diagnostic origin IDs are retained, with quarantine/suppression/fallback events added.
 Direct deletion 420/429, GraphQL code88, authentication/lock errors, ambiguous results and

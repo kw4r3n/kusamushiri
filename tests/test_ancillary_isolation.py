@@ -387,3 +387,21 @@ def test_quarantine_export_preserves_sanitized_endpoint_deadline(isolated, tmp_p
     assert quarantine["endpoint"] == "ViewerBadgeCounts" and quarantine["retry_after_seconds"] == 999
     assert quarantine["retry_until_utc"]
     assert by_event(exported, "request_suppressed")
+
+
+def test_suppression_cap_counts_per_item_not_per_batch(isolated):
+    core, page, context, clock, events = isolated
+    page.goto = lambda *args, **kwargs: None
+    with core.post_action_retry_scope():
+        emit_ancillary(isolated, after="999")
+        for item in range(3):
+            core.execute_post_action(target(item + 1))
+            for _ in range(MAX_SUPPRESSED_REQUESTS - 1):
+                route = Route()
+                context.handler(route)
+                assert route.aborted
+        isolation = core._browser.ancillary_isolation
+        assert not isolation.failed and not core.is_cancel_requested()
+        core.execute_post_action(target(3))  # A retry of the same item keeps its count.
+        context.handler(Route())  # The current item reaches the cap and still stops.
+        assert isolation.failed and core.is_cancel_requested()
