@@ -16,7 +16,13 @@ from kusamushiri import actions
 from kusamushiri.core import XDeleterCore
 from kusamushiri.models import PostActionResult, PostActionTarget, RetryPolicy
 from kusamushiri.progress import ActionJournal
-from kusamushiri.retry import ActionBatchError, parse_retry_after, run_post_actions
+from kusamushiri.retry import (
+    ActionBatchError,
+    parse_rate_limit_remaining,
+    parse_rate_limit_reset,
+    parse_retry_after,
+    run_post_actions,
+)
 
 
 def target(number=1, kind="post"):
@@ -872,3 +878,117 @@ def test_after_rate_limit_item_spacing_has_configured_floor(monkeypatch):
     results = run_post_actions(core, [target(), target(2)], 3, RetryPolicy(rate_limit_interval_seconds=7))
     assert len(results) == 2 and all(result.success for result in results)
     assert core.waits == [(1, 120), (2, 7)]
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [("1900", 900), (" 1900 ", 900), ("1000", None), ("500", None), ("1900000", None), ("1900.5", None),
+     ("bad", None), (None, None), ("87400", 86400), ("87401", None)],
+)
+def test_rate_limit_reset_is_a_future_epoch_within_range(value, expected):
+    assert parse_rate_limit_reset(value, now=1000.0) == expected
+
+
+@pytest.mark.parametrize("value, expected", [("0", 0), (" 1 ", 1), ("-1", None), ("1.0", None), (None, None)])
+def test_rate_limit_remaining_is_a_nonnegative_integer(value, expected):
+    assert parse_rate_limit_remaining(value) == expected
+
+
+def rate_response(url, *, status=429, headers=None):
+    response = Mock(url=url, status=status, headers=dict(headers or {}))
+    response.request.method = "GET"
+    return response
+
+
+def header_core(monkeypatch, now=1700000000.0):
+    monkeypatch.setattr("kusamushiri.core.time.time", lambda: now)
+    core = XDeleterCore()
+    core._browser.diagnostics = Mock(describe_response=lambda response: {})
+    core._defer_rate_limit_stop = True
+    return core
+
+
+TWEET_DETAIL = "https://x.com/i/api/graphql/fixture/TweetDetail"
+
+
+@pytest.mark.parametrize(
+    "headers, expected",
+    [
+        ({"x-rate-limit-reset": "1700000900"}, 900),
+        ({"x-rate-limit-reset": "1700000900", "retry-after": "1200"}, 1200),
+        ({"x-rate-limit-reset": "1700000900", "retry-after": "60"}, 900),
+        ({"x-rate-limit-reset": "1699999000"}, 0),
+        ({"x-rate-limit-reset": "1700000900000"}, 0),
+        ({"x-rate-limit-reset": "bad"}, 0),
+    ],
+)
+def test_429_window_reset_is_a_retry_floor(monkeypatch, headers, expected):
+    core = header_core(monkeypatch)
+    core._stop_on_rate_limit(rate_response(TWEET_DETAIL, headers=headers))
+    assert core.rate_limit_status == 429
+    assert core.rate_limit_retry_until == (1700000000.0 + expected if expected else 0.0)
+    assert core.rate_limit_retry_after == (float(headers["retry-after"]) if "retry-after" in headers else None)
+
+
+def test_cooldown_waits_for_window_reset_without_retry_after(monkeypatch):
+    core = FakeCore(monkeypatch)
+    core.rate_limit_retry_until = 0.0
+    attempts = []
+
+    def behavior(item):
+        attempts.append(item)
+        if len(attempts) == 1:
+            core.rate_limit_status = 429
+            core.rate_limit_retry_until = core.clock + 900
+            return PostActionResult(item, "delete", False, "unsubmitted", "retryable", deferred=True)
+        return PostActionResult(item, "delete", True, None)
+
+    core.behavior = behavior
+    results = run_post_actions(core, [target()], 0, RetryPolicy(max_cooldowns=1))
+    assert [result.success for result in results] == [True]
+    assert core.waits[0] == (1, 900)
+
+
+@pytest.mark.parametrize(
+    "url, status, remaining, recorded",
+    [
+        (TWEET_DETAIL, 200, "0", True),
+        (TWEET_DETAIL, 200, "1", True),
+        ("https://x.com/tester/status/1", 200, "1", True),
+        (TWEET_DETAIL, 200, "2", False),
+        (TWEET_DETAIL, 200, None, False),
+        (TWEET_DETAIL, 429, "0", False),
+        ("https://x.com/i/api/graphql/fixture/ViewerBadgeCounts", 200, "0", False),
+        ("https://x.com/i/api/graphql/fixture/Unknown", 200, "0", False),
+    ],
+)
+def test_nearly_exhausted_target_read_records_pace_deadline(monkeypatch, url, status, remaining, recorded):
+    core = header_core(monkeypatch)
+    headers = {"x-rate-limit-reset": "1700000600"}
+    if remaining is not None:
+        headers["x-rate-limit-remaining"] = remaining
+    core._browser.post_actions_active = True
+    core._browser._watch_response(rate_response(url, status=status, headers=headers))
+    assert core.rate_limit_pace_until == (1700000600.0 if recorded else 0.0)
+
+
+def test_pace_callback_only_runs_during_post_actions(monkeypatch):
+    core = header_core(monkeypatch)
+    headers = {"x-rate-limit-reset": "1700000600", "x-rate-limit-remaining": "0"}
+    core._browser._watch_response(rate_response(TWEET_DETAIL, status=200, headers=headers))
+    assert core.rate_limit_pace_until == 0.0
+
+
+@pytest.mark.parametrize("pace, cooldowns, waits", [(600, 3, [(1, 600)]), (5000, 3, []), (600, 0, [])])
+def test_pauses_before_next_item_until_reset_within_wait_budget(monkeypatch, pace, cooldowns, waits):
+    core = FakeCore(monkeypatch)
+    core.rate_limit_pace_until = 0.0
+
+    def behavior(item):
+        core.calls and setattr(core, "rate_limit_pace_until", core.clock + pace)
+        return PostActionResult(item, "delete", True, None)
+
+    core.behavior = behavior
+    results = run_post_actions(core, [target(), target(2)], 0, RetryPolicy(max_cooldowns=cooldowns))
+    assert [result.success for result in results] == [True, True]
+    assert core.waits == waits and not core.cancelled

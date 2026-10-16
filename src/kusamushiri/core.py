@@ -21,6 +21,7 @@ from kusamushiri.ancillary_isolation import isolatable_endpoint
 from kusamushiri.browser import (
     BASE_X_URL,
     NAVIGATION_TIMEOUT_MS,
+    RATE_LIMIT_STATUSES,
     BrowserManager,
     find_first_visible_locator,
 )
@@ -49,7 +50,7 @@ from kusamushiri.parsing import (
 )
 from kusamushiri.progress import ActionJournal
 from kusamushiri.rate_limits import classify_rate_limit
-from kusamushiri.retry import parse_retry_after
+from kusamushiri.retry import parse_rate_limit_remaining, parse_rate_limit_reset, parse_retry_after
 from kusamushiri.target_read_probe import TargetReadRequest, TargetReadResult, probe_current_target
 from kusamushiri.verified_post_action import VerifiedSinglePost
 from kusamushiri.view_cache import PendingView
@@ -130,6 +131,8 @@ class XDeleterCore:
         self.rate_limit_status: int | None = None
         self.rate_limit_retry_after: float | None = None
         self.rate_limit_retry_until = 0.0
+        # Reset of a nearly exhausted target-read window seen on a successful response.
+        self.rate_limit_pace_until = 0.0
         self.rate_limit_seen_at = 0.0
         self.rate_limit_generation = 0
         self.rate_limit_scope = "unknown"
@@ -146,6 +149,7 @@ class XDeleterCore:
         # Also called on a rate limit, so a caller with its own cancellation stops too.
         self.on_rate_limited: Callable[[], None] | None = None
         self._browser.on_rate_limited = self._stop_on_rate_limit
+        self._browser.on_action_response = self._note_rate_budget
         self._browser.on_isolation_failed = self._isolation_failed
         self._browser.on_action_auth_failed = self.request_cancel
 
@@ -222,14 +226,32 @@ class XDeleterCore:
         if delay is not None:
             self.rate_limit_retry_after = max(self.rate_limit_retry_after or 0.0, delay)
             self.rate_limit_retry_until = max(self.rate_limit_retry_until, self.rate_limit_seen_at + delay)
-        logger.warning("X rate limit: HTTP %s; role=%s endpoint=%s Retry-After seconds=%s; %s",
-                       response.status, scope, endpoint, delay,
+        # X often omits Retry-After; its window reset is a floor like Retry-After.
+        reset = parse_rate_limit_reset(response.headers.get("x-rate-limit-reset"), now=self.rate_limit_seen_at)
+        if reset is not None:
+            self.rate_limit_retry_until = max(self.rate_limit_retry_until, self.rate_limit_seen_at + reset)
+        logger.warning("X rate limit: HTTP %s; role=%s endpoint=%s Retry-After seconds=%s reset seconds=%s; %s",
+                       response.status, scope, endpoint, delay, None if reset is None else round(reset, 1),
                        "Cooling down" if self._defer_rate_limit_stop else "Stopping")
         if self._defer_rate_limit_stop:
             return
         self.request_cancel()
         if self.on_rate_limited is not None:
             self.on_rate_limited()
+
+    def _note_rate_budget(self, response: Response) -> None:
+        try:
+            if response.status in RATE_LIMIT_STATUSES or classify_rate_limit(response.url)[0] != "target":
+                return
+            remaining = parse_rate_limit_remaining(response.headers.get("x-rate-limit-remaining"))
+            if remaining is None or remaining > 1:
+                return
+            now = time.time()
+            reset = parse_rate_limit_reset(response.headers.get("x-rate-limit-reset"), now=now)
+        except Exception:
+            return
+        if reset is not None:
+            self.rate_limit_pace_until = max(self.rate_limit_pace_until, now + reset)
 
     def request_cancel(self) -> None:
         self._pending_view = None

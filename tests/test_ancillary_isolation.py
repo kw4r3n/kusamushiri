@@ -416,3 +416,24 @@ def test_suppression_cap_counts_per_item_not_per_batch(isolated):
         core.execute_post_action(target(3))  # A retry of the same item keeps its count.
         context.handler(Route())  # The current item reaches the cap and still stops.
         assert isolation.failed and core.is_cancel_requested()
+
+
+@pytest.mark.parametrize("after, reset, expected", [
+    (None, 900, 900), ("999", 900, 999), ("60", 900, 900),
+    (None, -100, 120), (None, "millis", 120), (None, "bad", 120),
+])
+def test_quarantine_deadline_uses_window_reset_floor(isolated, after, reset, expected):
+    core, page, context, clock, events = isolated
+    start = clock.wall()
+    if reset == "millis":
+        value = str(int(start + 900) * 1000)
+    else:
+        value = reset if isinstance(reset, str) else str(int(start) + reset)
+    with core.post_action_retry_scope():
+        request = Request(clock, FLEETS)
+        core._browser._watch_request(request)
+        response = Response(request, status=429, after=after)
+        response.headers["x-rate-limit-reset"] = value
+        page.emit("response", response)
+        assert core._browser.ancillary_isolation.deadline == pytest.approx(start + expected, abs=1)
+        assert core.rate_limit_status is None

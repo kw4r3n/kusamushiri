@@ -40,6 +40,7 @@ ENGLISH: Final[dict[str, str]] = {
     '周辺通信の休止期限を保持': 'Retaining the ancillary request deadline',
     '記録済みの項目をスキップ: {state}': 'Skipping a recorded item: {state}',
     '完了件数による定期休止': 'Scheduled pause after confirmed completions',
+    '利用枠の残りが少ないため先回り休止': 'Pausing ahead of a nearly exhausted rate-limit window',
     '再試行上限に達しました。処理を停止します。': 'Retry limit reached. Stopping the batch.',
     '記録された {state} のため再実行しません。X と実行記録を確認してください。': 'Recorded {state}; this item will not run again. Verify its state on X and review the action journal.',
     '結果不明のため再試行しません。X で確認してください。': 'The outcome is uncertain; no retry will be sent. Check its state on X.',

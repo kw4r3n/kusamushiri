@@ -10,7 +10,7 @@ from playwright.sync_api import BrowserContext, Response, Route
 
 from kusamushiri.logger import logger
 from kusamushiri.network_diagnostics import NetworkDiagnostics
-from kusamushiri.retry import parse_retry_after
+from kusamushiri.retry import parse_rate_limit_reset, parse_retry_after
 
 MAX_SUPPRESSED_REQUESTS = 128
 
@@ -90,12 +90,14 @@ class AncillaryIsolation:
             endpoint = isolatable_endpoint(response.url, response.request.method)
             if endpoint is None or response.status not in {420, 429}:
                 return False
-            after = parse_retry_after(response.headers.get("retry-after"))
+            now = time.time()
+            after = parse_retry_after(response.headers.get("retry-after"), now=now)
+            reset = parse_rate_limit_reset(response.headers.get("x-rate-limit-reset"), now=now)
         except Exception:
             return False
         # No expiry-triggered retry: this endpoint stays quarantined until context
         # close. Persist the latest server deadline before closing/restarting.
-        deadline = time.time() + max(fallback_seconds, after or 0.0)
+        deadline = now + max(fallback_seconds, after or 0.0, reset or 0.0)
         self.deadlines[endpoint] = max(self.deadlines.get(endpoint, 0.0), deadline)
         self._last_response = response
         try:
