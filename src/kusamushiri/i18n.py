@@ -539,6 +539,46 @@ ENGLISH: Final[dict[str, str]] = {
         "Collecting posts: {scanned} scanned ({current}/{total})"
     ),
     "走査 {scanned} 件、該当 {current}/{total} 件": "scanned {scanned}, matched {current}/{total}",
+    "元のブラウザタブで表示中の投稿URL。ページ移動や投稿の保存は行いません。": (
+        "URL of the post shown in the original browser tab. Nothing is navigated or saved."
+    ),
+    "表示中の対象投稿を確認": "Check the displayed target post",
+    "表示中の対象投稿を確認しています...": "Checking the displayed target post...",
+    "対象投稿の確認": "Target post check",
+    "対象投稿の確認結果: {reason}": "Target post check result: {reason}",
+    "https://x.com/author/status/123 形式の投稿URLを入力してください。": (
+        "Enter a post URL in the form https://x.com/author/status/123."
+    ),
+    "この時点の対象投稿とアカウント表示の照合結果です。一投稿の操作時にも同じsession・対象・アカウントを再照合します。通信最小性や削除権限の証明ではありません。": (
+        "Result of matching the target post and the shown account at this moment. A one-post action "
+        "rechecks the same session, target and account. This does not prove minimal traffic or permission to delete."
+    ),
+    "メニューを診断（削除しません）": "Diagnose the menu (does not delete)",
+    "開いたメニューはそのまま読みます。閉じていれば本人投稿の「…」だけを1回開きます。削除項目は押しません。": (
+        "Reads an already open menu as is. If it is closed, opens only your post's \"…\" once. "
+        "Never clicks the delete item."
+    ),
+    "メニュー診断": "Menu diagnostic",
+    "メニュー候補を診断しています...": "Diagnosing menu candidates...",
+    "メニュー診断結果: {reason}": "Menu diagnostic result: {reason}",
+    "メニュー診断（削除しません）": "Menu diagnostic (does not delete)",
+    "開いたメニューはクリックせずに読みます。閉じていた場合も「…」だけの診断です。削除項目・確認ボタンは押していません。結果の詳細をコピーして共有できます。": (
+        "An open menu is read without clicking. If it was closed, only \"…\" was opened. The delete item and "
+        "confirmation button were not clicked. You can copy the details to share them."
+    ),
+    "表示中のこの1投稿を削除…": "Delete this one displayed post…",
+    "表示中の同じ一投稿とアカウントを操作前に再照合します。再表示・自動再試行はしません。\n": (
+        "The same displayed post and account are rechecked before the action. No reload or automatic retry.\n"
+    ),
+    "一投稿の実行範囲は使用済みか、対象が一致しません。再送しません。": (
+        "The one-post scope was already used or the target does not match. Nothing is resent."
+    ),
+    "操作前のsession・対象投稿・アカウント照合を確認できないため、送信せず停止しました。": (
+        "Stopped without sending: the session, target post and account could not be verified before the action."
+    ),
+    "操作対象のメニューまたは確認ボタンを一意に照合できないため停止しました。": (
+        "Stopped: the menu item or confirmation button could not be matched uniquely."
+    ),
 }
 
 TRANSLATIONS: Final[dict[str, dict[str, str]]] = {"en": ENGLISH}
