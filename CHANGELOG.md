@@ -15,7 +15,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   without clicking, or opens only the owned caret once; it never selects a menu item or uses the journal.
 
 - `isolate-known`: keep a deadline quarantined during a pause on disk, count the 128 local
-  suppression cap per item instead of per batch, and match only the exact `only_spaces=true` query.
+  suppression cap per item instead of per batch (retries of one item keep their count), and match only the exact `only_spaces=true` query.
 
 - Report validated public operation names and fixed route templates in sanitized diagnostics;
   retain unavailable identities and safe digests without changing 403/429 stop or retry gates.
