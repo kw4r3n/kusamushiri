@@ -45,6 +45,7 @@ class AncillaryIsolation:
         self.failed = False
         self.deadlines: dict[str, float] = {}
         self.suppressed = 0
+        self._operation_item: object = None
         self._responses: OrderedDict[int, object] = OrderedDict()
         self._last_response: Response | None = None
         self.persist_deadline: Callable[[float], None] | None = None
@@ -63,9 +64,12 @@ class AncillaryIsolation:
             return
         self.ready = True
 
-    def begin_operation(self) -> None:
-        # The storm cap is per item: polling across a long batch must not exhaust it.
-        self.suppressed = 0
+    def begin_operation(self, item: object) -> None:
+        # The storm cap is per item: polling across a long batch must not exhaust it,
+        # while retries of the same item keep accumulating toward the cap.
+        if item != self._operation_item:
+            self._operation_item = item
+            self.suppressed = 0
 
     def owns(self, response: Response) -> bool:
         identity = _identity(response)
