@@ -233,7 +233,12 @@ def _run_post_actions(
                 waited += max(0.0, time.time() - started)
                 _state.waited = waited
             if journal is not None:
-                journal.defer_until(0.0)
+                # A quarantine during this wait persisted a later deadline; keep it on disk.
+                isolated = number("isolated_rate_limit_deadline")
+                if isolated > time.time():
+                    journal.persist_isolated_deadline(isolated)
+                else:
+                    journal.defer_until(0.0)
             if core.rate_limit_status is None:
                 resume()
             return True

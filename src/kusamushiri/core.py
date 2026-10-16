@@ -933,6 +933,7 @@ class XDeleterCore:
                                     tr("一投稿の実行範囲は使用済みか、対象が一致しません。再送しません。"), "blocked")
         diagnostics = self._browser.diagnostics
         with diagnostics.operation(target):
+            self._browser.ancillary_isolation.begin_operation()
             if verified is not None:
                 verified.check(target_required=verified.loaded)
             page = verified.session.page if verified is not None else self._browser._require_page()
