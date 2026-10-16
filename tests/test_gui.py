@@ -848,6 +848,13 @@ def test_retry_failed_rechecks_account_match(window, monkeypatch) -> None:
     window.username_input.setText("user")
     window._retry_failed([failure])
     assert len(emitted) == 1
+    # A one-post retry keeps the confirmed-viewer and current-view guards.
+    assert emitted[0].expected_viewer == "user" and emitted[0].current_view_only
+
+    other = PostActionResult(PostActionTarget("https://x.com/user/status/2", "post"), "削除", False, "failed", "retryable")
+    window._retry_failed([failure, other])
+    assert len(emitted) == 2
+    assert emitted[1].expected_viewer is None and not emitted[1].current_view_only
 
 
 def test_log_starts_collapsed_and_can_expand(window, qtbot) -> None:
