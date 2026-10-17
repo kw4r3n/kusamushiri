@@ -34,6 +34,7 @@ from kusamushiri.request_metadata import (
     runtime_source_fingerprint,
 )
 from kusamushiri.retry import parse_retry_after
+from kusamushiri.traffic_policy import HOST_CLASSES, TRAFFIC_DECISIONS, TRAFFIC_RULES
 
 PREFIX = "KS_DIAG "
 PHASES = {
@@ -69,6 +70,7 @@ EVENTS = {
     "view_reused",
     "batch_summary",
     "verification_stop",
+    "traffic_decision",
 }
 METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "OTHER"}
 ENDPOINTS = MUTATIONS | TARGET_READS | ANCILLARY_READS | {"target-document", "unclassified"}
@@ -138,6 +140,9 @@ def sanitize_event(value: object) -> dict[str, object] | None:
         "resource_type": RESOURCE_TYPES,
         "request_family": REQUEST_FAMILIES,
         "api_label": API_LABELS,
+        "host_class": HOST_CLASSES,
+        "traffic_decision": TRAFFIC_DECISIONS,
+        "traffic_rule": TRAFFIC_RULES,
         "stop_reason": {"completed", "cancelled", "cooldown_limit", "wait_limit", "retry_limit", "auth", "ambiguous", "permanent", "unexpected_error", "storage_error", "view_changed", "blocked", "held_receipt"},
         "http_role": ROLES,
         "http_endpoint": ENDPOINTS,
@@ -174,7 +179,7 @@ def sanitize_event(value: object) -> dict[str, object] | None:
     codes = value.get("known_error_codes")
     if isinstance(codes, list):
         clean["known_error_codes"] = sorted({code for code in codes[:8] if type(code) is int and code in KNOWN_CODES})
-    for key in ("cross_operation", "cross_navigation", "submitted", "graphql_code88", "faulted", "outcome_recorded", "view_reuse_invalid"):
+    for key in ("traffic_enforced", "cross_operation", "cross_navigation", "submitted", "graphql_code88", "faulted", "outcome_recorded", "view_reuse_invalid"):
         if isinstance(value.get(key), bool):
             clean[key] = value[key]
     for key, prefix in (
@@ -191,7 +196,8 @@ def sanitize_event(value: object) -> dict[str, object] | None:
     op_digest = value.get("operation_sha256")
     if isinstance(op_digest, str) and re.fullmatch(r"[0-9a-f]{64}", op_digest):
         clean["operation_sha256"] = op_digest
-    if event in {"request_start", "response", "request_failed", "ancillary_quarantine", "request_suppressed", "isolation_fallback"}:
+    if event in {"request_start", "response", "request_failed", "ancillary_quarantine", "request_suppressed", "isolation_fallback",
+                 "traffic_decision"}:
         clean.update(sanitize_identity(value))
     return clean
 
@@ -308,6 +314,21 @@ class NetworkDiagnostics:
             )
             if record is not None:
                 self._sink(record)
+        except Exception:
+            pass
+
+    @property
+    def current_phase(self) -> str:
+        return self._context.phase
+
+    def traffic_decision(self, request: object, host_class: str, decision: str, rule: str, *, enforced: bool) -> None:
+        """Every host, including static/CDN hosts that request events never record."""
+        try:
+            method = getattr(request, "method", None)
+            method = method.upper() if isinstance(method, str) and method.upper() in METHODS else "OTHER"
+            metadata = self._metadata(getattr(request, "url", None), method, getattr(request, "resource_type", None))
+            self._emit("traffic_decision", method=method, host_class=host_class, traffic_decision=decision,
+                       traffic_rule=rule, traffic_enforced=enforced, **metadata)
         except Exception:
             pass
 
@@ -674,6 +695,13 @@ def diagnostic_summary(records: Sequence[dict[str, object]]) -> dict[str, object
                          event.get("http_endpoint"), event.get("status"), event.get("http_category"),
                          event.get("http_provenance"), known_codes, event.get("identity_status"),
                          event.get("public_operation"), event.get("route_template"))] += 1
+    traffic_counts: Counter[tuple[object, ...]] = Counter()
+    for event in records:
+        if event.get("event") == "traffic_decision":
+            traffic_counts[(event.get("traffic_decision"), event.get("traffic_rule"), event.get("traffic_enforced"),
+                            event.get("host_class"), event.get("method"), event.get("resource_type"),
+                            event.get("request_family"), event.get("public_operation"), event.get("route_template"),
+                            event.get("operation_sha256"), event.get("phase"))] += 1
     for event in limits:
         group_counts[(event.get("endpoint_group"), event.get("method"), event.get("resource_type"),
                       event.get("request_family"), event.get("api_label"), event.get("role"), event.get("endpoint"),
@@ -698,5 +726,9 @@ def diagnostic_summary(records: Sequence[dict[str, object]]) -> dict[str, object
                          "http_category": key[8], "http_provenance": key[9], "known_error_codes": list(codes) if isinstance(codes := key[10], tuple) else [],
                          "identity_status": key[11], "public_operation": key[12], "route_template": key[13],
                          "responses": count} for key, count in http_counts.items()],
+        "traffic": [{"traffic_decision": key[0], "traffic_rule": key[1], "traffic_enforced": key[2], "host_class": key[3],
+                     "method": key[4], "resource_type": key[5], "request_family": key[6], "public_operation": key[7],
+                     "route_template": key[8], "operation_sha256": key[9], "phase": key[10], "requests": count}
+                    for key, count in sorted(traffic_counts.items(), key=lambda pair: -pair[1])],
         "action_http_evidence": [event for event in records if event.get("event") == "operation_outcome" and "http_category" in event],
     }

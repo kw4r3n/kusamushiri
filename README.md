@@ -384,6 +384,28 @@ uv run kusamushiri-cli delete "reviewed-small.csv" --recipe "kusamushiri-cleanup
 Keep `--dry-run` while independent re-review is pending. Existing saved diagnostics can be
 exported with `uv run kusamushiri-cli diagnostics | save -f kusamushiri-diagnostic.jsonl`.
 
+### Traffic allowlist (experimental)
+
+`--traffic-policy` / `[delete].traffic_policy` judges requests by name during delete/undo batches only.
+The default `off` changes nothing; startup, sign-in checks, home loads and collection are never covered.
+
+- `report` blocks nothing and records an allow/block decision for every request, including the host
+  class of static hosts such as twimg that ordinary diagnostics never record.
+- `enforce` aborts unlisted requests in the browser. It requires a new context with Service Workers
+  blocked and closes restored tabs first; without routing it never falls back to unrestricted traffic
+  and starts no item.
+
+It admits the target post document (`GET /<user>/status/<id>`), scripts/styles/fonts from `x.com` and
+`*.twimg.com`, GraphQL `TweetDetail` / `TweetResultByRestId` GETs, and one `DeleteTweet` /
+`DeleteRetweet` / `UnfavoriteTweet` POST at the confirmation click. Query IDs and chunk names are not
+used, so routine X builds keep working; a renamed or newly required dependency stops the batch.
+
+Under `enforce`, an item that fails before its mutation is sent is held as blocked and the batch stops,
+because a missing dependency cannot be told apart from a real failure (an already-deleted post stops it too).
+`diagnostics --summary` lists `traffic` counts by decision, rule and host class. Blocking telemetry makes
+the session's traffic unlike a normal browser; how X treats that is unknown. It is not yet validated on a
+live account: record with `report` first, then try `enforce` on a few posts.
+
 `max_cooldowns` accumulates across the whole batch; successful recovery and further successes
 do not reset it. `max_retries` counts safe action retries for each item; unsent rate deferrals
 do not consume that counter. Saved-wait resumes count toward `retry_max_wait`. Ordinary item

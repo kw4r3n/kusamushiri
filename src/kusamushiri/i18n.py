@@ -566,6 +566,10 @@ ENGLISH: Final[dict[str, str]] = {
     "一投稿の実行範囲は使用済みか、対象が一致しません。再送しません。": (
         "The one-post scope was already used or the target does not match. Nothing is resent."
     ),
+    "許可リストで止めた通信が原因の可能性があるため、送信せず停止しました。diagnostics --summary の traffic を確認してください。": (
+        "Stopped without sending: a request blocked by the traffic allowlist may be the cause. "
+        "Check traffic in diagnostics --summary."
+    ),
     "操作前のsession・対象投稿・アカウント照合を確認できないため、送信せず停止しました。": (
         "Stopped without sending: the session, target post and account could not be verified before the action."
     ),

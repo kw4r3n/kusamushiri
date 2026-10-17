@@ -5,6 +5,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Experimental `--traffic-policy` / `[delete].traffic_policy` (`off` default, `report`, `enforce`):
+  a name-based allowlist for post-action batches. `report` records a sanitized `traffic_decision`
+  event per request (host class, rule, public identity); `enforce` aborts unlisted requests, admits a
+  mutation only once at the confirmation click and holds/stops on any unsent failure.
 - `isolate-known` also quarantines `CreatorStudioTabBarItemQuery` GraphQL GETs and `api.x.com`
   `/1.1/account/settings.json` GETs. Both load on every target page and hit HTTP 429 after about
   49 loads, which exhausted the cooldowns and stopped long delete batches.
