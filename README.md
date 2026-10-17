@@ -220,6 +220,11 @@ kusamushiri-cli unfollow follows.csv --profile main --headless
   dates are honored even beyond the 900-second backoff cap. If the next wait exceeds the
   1,800-second retry/cooldown budget, the browser stays paused and the run stops. Routine item
   intervals and proactive batch pauses are excluded, unless a rate limit arrives during that pause.
+- X often omits `Retry-After`; a 429's `x-rate-limit-reset` epoch (up to 24 hours ahead) is then
+  the same kind of floor, so the cooldown waits for the window instead of only doubling
+  `cooldown_delay`. When a target read reports `x-rate-limit-remaining` of 0 or 1, the next item
+  waits for that reset first if it fits the remaining budget and cooldowns are enabled; this wait
+  counts toward the budget.
 - After any rate limit or saved cooldown resume, the remaining item interval is at least 5 seconds (or the configured
   interval if longer). Successful in-flight deletions are recorded and never repeated.
 - Ctrl+C/the stop button cancels waits promptly. A cancelled/exhausted cooldown preserves the
@@ -363,7 +368,7 @@ Only the post-action batch scope uses isolation; startup, home and collection re
 The affected endpoint's deadline is synchronously saved when the 429 is observed, before allowing
 continuation. POSIX writes sync the data and parent directory; a durable journal lock protects
 the interval before the write completes. The deadline is at least `cooldown_delay` or its longer numeric/date
-`Retry-After`; `retry_max_delay` never shortens it. Isolation does not spend a wait budget on
+`Retry-After` or `x-rate-limit-reset`; `retry_max_delay` never shortens it. Isolation does not spend a wait budget on
 a wait that did not happen. After a limit, normal item spacing retains the configured floor.
 At completion, cancellation or error, an unexpired deadline is saved in `action-progress.json`
 and the context stays offline. Restarting before it expires is refused, including in `global`
