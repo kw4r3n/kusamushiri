@@ -22,6 +22,8 @@ from kusamushiri.retry import run_post_actions
 BADGES = "https://x.com/i/api/graphql/fixture/ViewerBadgeCounts"
 FLEETS = "https://x.com/i/api/fleets/v1/fleetline?only_spaces=true"
 DELETE = "https://x.com/i/api/graphql/fixture/DeleteTweet"
+CREATOR = "https://x.com/i/api/graphql/fixture/CreatorStudioTabBarItemQuery"
+SETTINGS = "https://api.x.com/1.1/account/settings.json?include_mention_filter=true"
 
 
 class Context:
@@ -97,12 +99,20 @@ def emit_ancillary(isolated, url=FLEETS, *, status=429, after="120", request=Non
     ("https://x.com/i/api/fleets/v1/fleetline?only_spaces=true&only_spaces=false", "GET", None),
     (BADGES + "/dependency", "GET", None),
     ("https://x.com/i/api/unknown/ViewerBadgeCounts", "GET", None),
+    ("https://x.com/i/api/graphql/fixture/CreatorStudioTabBarItemQuery?variables=%7B%7D", "GET", "CreatorStudioTabBarItemQuery"),
+    ("https://x.com/i/api/graphql/fixture/CreatorStudioTabBarItemQuery", "POST", None),
+    ("https://api.x.com/1.1/account/settings.json?include_mention_filter=true", "GET", "account/settings.json"),
+    ("https://api.twitter.com/1.1/account/settings.json", "GET", "account/settings.json"),
+    ("https://api.x.com/1.1/account/settings.json", "POST", None),
+    ("https://api.x.com/1.1/help/settings.json", "GET", None),
+    ("https://api.x.com/i/api/graphql/fixture/ViewerBadgeCounts", "GET", None),
+    ("https://x.com/1.1/account/settings.json", "GET", None),
 ])
 def test_only_exact_nonessential_gets_qualify(url, method, expected):
     assert isolatable_endpoint(url, method) == expected
 
 
-@pytest.mark.parametrize("url", [FLEETS, BADGES])
+@pytest.mark.parametrize("url", [FLEETS, BADGES, CREATOR, SETTINGS])
 @pytest.mark.parametrize("before", [True, False])
 def test_isolated_ancillary_before_or_after_success_does_not_defer(isolated, url, before):
     core, page, context, clock, events = isolated
@@ -129,6 +139,7 @@ def test_isolated_ancillary_before_or_after_success_does_not_defer(isolated, url
     outcome = by_event(events, "operation_outcome")[0]
     assert outcome["owned_mutation_requests"] and not outcome["blocking_responses"]
     assert by_event(events, "ancillary_quarantine")[0]["response"]
+    assert by_event(events, "ancillary_quarantine")[0]["endpoint"] == isolatable_endpoint(url, "GET")
 
 
 @pytest.mark.parametrize("safe,route_failure", [(False, False), (True, True)])
@@ -405,3 +416,24 @@ def test_suppression_cap_counts_per_item_not_per_batch(isolated):
         core.execute_post_action(target(3))  # A retry of the same item keeps its count.
         context.handler(Route())  # The current item reaches the cap and still stops.
         assert isolation.failed and core.is_cancel_requested()
+
+
+@pytest.mark.parametrize("after, reset, expected", [
+    (None, 900, 900), ("999", 900, 999), ("60", 900, 900),
+    (None, -100, 120), (None, "millis", 120), (None, "bad", 120),
+])
+def test_quarantine_deadline_uses_window_reset_floor(isolated, after, reset, expected):
+    core, page, context, clock, events = isolated
+    start = clock.wall()
+    if reset == "millis":
+        value = str(int(start + 900) * 1000)
+    else:
+        value = reset if isinstance(reset, str) else str(int(start) + reset)
+    with core.post_action_retry_scope():
+        request = Request(clock, FLEETS)
+        core._browser._watch_request(request)
+        response = Response(request, status=429, after=after)
+        response.headers["x-rate-limit-reset"] = value
+        page.emit("response", response)
+        assert core._browser.ancillary_isolation.deadline == pytest.approx(start + expected, abs=1)
+        assert core.rate_limit_status is None

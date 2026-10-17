@@ -207,7 +207,7 @@ kusamushiri-cli unfollow follows.csv --profile main --headless
   25 new confirmed successes. These are conservative starting points, not known safe X thresholds.
   Explicit saved intervals and settings remain unchanged.
 - In the default `global` mode, every observed X HTTP 420/429 remains a global pacing signal. Logs distinguish mutation,
-  target-load, recognized ancillary (`fleetline` / `ViewerBadgeCounts`) and unknown requests;
+  target-load, recognized ancillary (`fleetline` / `ViewerBadgeCounts` / `CreatorStudioTabBarItemQuery` / `account/settings.json`) and unknown requests;
   these labels describe request roles, not independent server quota buckets. Unknown limits are
   treated conservatively too. An ancillary limit never implies that the deletion API rejected an action.
 - A limit before the irreversible click leaves that item **pending/unprocessed**, without adding
@@ -220,6 +220,11 @@ kusamushiri-cli unfollow follows.csv --profile main --headless
   dates are honored even beyond the 900-second backoff cap. If the next wait exceeds the
   1,800-second retry/cooldown budget, the browser stays paused and the run stops. Routine item
   intervals and proactive batch pauses are excluded, unless a rate limit arrives during that pause.
+- X often omits `Retry-After`; a 429's `x-rate-limit-reset` epoch (up to 24 hours ahead) is then
+  the same kind of floor, so the cooldown waits for the window instead of only doubling
+  `cooldown_delay`. When a target read reports `x-rate-limit-remaining` of 0 or 1, the next item
+  waits for that reset first if it fits the remaining budget and cooldowns are enabled; this wait
+  counts toward the budget.
 - After any rate limit or saved cooldown resume, the remaining item interval is at least 5 seconds (or the configured
   interval if longer). Successful in-flight deletions are recorded and never repeated.
 - Ctrl+C/the stop button cancels waits promptly. A cancelled/exhausted cooldown preserves the
@@ -336,7 +341,8 @@ This Unreleased mode is awaiting independent re-review of its stop/storage corre
 Keep previews in `--dry-run`; live activation is withheld pending that review.
 
 The opt-in mode quarantines only HTTPS GETs on `x.com` / `twitter.com` at
-`/i/api/graphql/<hash>/ViewerBadgeCounts` and `/i/api/fleets/v1/fleetline?only_spaces=true` (that exact query, no other parameters)
+`/i/api/graphql/<hash>/ViewerBadgeCounts`, `/i/api/graphql/<hash>/CreatorStudioTabBarItemQuery` and
+`/i/api/fleets/v1/fleetline?only_spaces=true` (that exact query, no other parameters), plus `/1.1/account/settings.json` on `api.x.com` / `api.twitter.com`,
 after their HTTP 420/429. It blocks further matching browser requests locally until the
 context closes, even after the retry deadline; it never fabricates a successful response or
 automatically retries that endpoint. Other fleetline paths/queries, non-GETs, unknown endpoints,
@@ -362,7 +368,7 @@ Only the post-action batch scope uses isolation; startup, home and collection re
 The affected endpoint's deadline is synchronously saved when the 429 is observed, before allowing
 continuation. POSIX writes sync the data and parent directory; a durable journal lock protects
 the interval before the write completes. The deadline is at least `cooldown_delay` or its longer numeric/date
-`Retry-After`; `retry_max_delay` never shortens it. Isolation does not spend a wait budget on
+`Retry-After` or `x-rate-limit-reset`; `retry_max_delay` never shortens it. Isolation does not spend a wait budget on
 a wait that did not happen. After a limit, normal item spacing retains the configured floor.
 At completion, cancellation or error, an unexpired deadline is saved in `action-progress.json`
 and the context stays offline. Restarting before it expires is refused, including in `global`
@@ -482,7 +488,7 @@ an old `auth` receipt is not proof of a new login failure and is never cleared a
 
 Rate/cancellation checks now run before navigation and before opening reversible menus.
 Only a positively unsent **post deletion** blocked exclusively by the exact known
-ViewerBadgeCounts/Spaces fleetline GETs can reuse its idle target view after the full cooldown.
+ancillary GETs listed above can reuse its idle target view after the full cooldown.
 The same page, URL identity, unique visible owned article, exact connected DOM node and absence
 of dialogs/menus are required. Unknown, target and mutation limits never qualify. A changed view
 stays pending and stops without a reload or mutation. This is automatic; no extra configuration key.

@@ -91,6 +91,8 @@ class BrowserManager:
         self.on_action_auth_failed: Callable[[], None] | None = None
         # Called with the response whenever X answers a request with a rate-limit status.
         self.on_rate_limited: Callable[[Response], None] | None = None
+        # Called with every response while post actions run, for rate-limit budget headers.
+        self.on_action_response: Callable[[Response], None] | None = None
 
     def _watch_response(self, response: Response) -> None:
         if (self.post_actions_active and response.status in {401, 403}
@@ -100,6 +102,8 @@ class BrowserManager:
         self.diagnostics.response(response)
         if self.on_rate_limited is not None and is_rate_limit_response(response.url, response.status):
             self.on_rate_limited(response)
+        if self.post_actions_active and self.on_action_response is not None:
+            self.on_action_response(response)
 
     def _isolation_failed(self, response: Response, deadline: float) -> None:
         # Install cancellation/global refusal independently of network control.

@@ -48,6 +48,7 @@ def reply(url=GRAPH + "UnknownOperation", *, method="GET", status=403, body=None
     (GRAPH + "DeleteTweet", "POST", "mutation", "mutation403"),
     (GRAPH + "DeleteTweet", "GET", "unknown", "unknown403"),
     (GRAPH + "ViewerBadgeCounts", "GET", "ancillary", "ancillary403"),
+    (GRAPH + "CreatorStudioTabBarItemQuery", "GET", "ancillary", "ancillary403"),
     ("https://x.com/other/DeleteTweet", "POST", "unknown", "unknown403"),
     ("https://foreign.example/i/api/graphql/hash/DeleteTweet", "POST", "unknown", "unknown403"),
 ])

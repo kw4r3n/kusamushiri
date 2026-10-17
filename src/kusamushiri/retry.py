@@ -59,6 +59,28 @@ def parse_retry_after(value: object, *, now: float | None = None) -> float | Non
         return None
 
 
+# Rejects epoch-millisecond or otherwise implausible values; waits remain bounded by max_wait.
+MAX_RATE_LIMIT_RESET_SECONDS = 86400.0
+
+
+def parse_rate_limit_reset(value: object, *, now: float | None = None) -> float | None:
+    """Seconds until an x-rate-limit-reset epoch; past, malformed or out-of-range values are ignored."""
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    if not (value.isascii() and value.isdecimal()):
+        return None
+    delay = float(value) - (time.time() if now is None else now)
+    return delay if 0.0 < delay <= MAX_RATE_LIMIT_RESET_SECONDS else None
+
+
+def parse_rate_limit_remaining(value: object) -> int | None:
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    return int(value) if value.isascii() and value.isdecimal() else None
+
+
 class ActionCore(Protocol):
     rate_limit_status: int | None
 
@@ -326,6 +348,13 @@ def _run_post_actions(
                     tr("記録済みの項目をスキップ: {state}", state="success" if result.success else result.failure_kind)
                 )
             else:
+                pace = number("rate_limit_pace_until") - time.time()
+                # A predicted reset never stops the batch; over budget, a real 429 decides.
+                if (0 < pace <= policy.max_wait_seconds - waited and core.rate_limit_status is None
+                        and policy.max_cooldowns > 0):
+                    paced = True
+                    if not pause(pace, 0, 0, tr("利用枠の残りが少ないため先回り休止")):
+                        break
                 if policy.batch_size and completed_since_pause >= policy.batch_size:
                     if not pause(policy.batch_pause_seconds, 0, 0, tr("完了件数による定期休止"), proactive=True):
                         break
