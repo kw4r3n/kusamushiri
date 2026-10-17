@@ -34,7 +34,7 @@ from kusamushiri.request_metadata import (
     runtime_source_fingerprint,
 )
 from kusamushiri.retry import parse_retry_after
-from kusamushiri.traffic_policy import HOST_CLASSES, TRAFFIC_DECISIONS, TRAFFIC_RULES
+from kusamushiri.traffic_policy import HOST_CLASSES, RULE_DECISIONS, TRAFFIC_DECISIONS, TRAFFIC_RULES
 
 PREFIX = "KS_DIAG "
 PHASES = {
@@ -196,6 +196,9 @@ def sanitize_event(value: object) -> dict[str, object] | None:
     op_digest = value.get("operation_sha256")
     if isinstance(op_digest, str) and re.fullmatch(r"[0-9a-f]{64}", op_digest):
         clean["operation_sha256"] = op_digest
+    if RULE_DECISIONS.get(str(clean.get("traffic_rule"))) != clean.get("traffic_decision"):
+        clean.pop("traffic_rule", None)
+        clean.pop("traffic_decision", None)
     if event in {"request_start", "response", "request_failed", "ancillary_quarantine", "request_suppressed", "isolation_fallback",
                  "traffic_decision"}:
         clean.update(sanitize_identity(value))

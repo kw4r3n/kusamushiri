@@ -26,6 +26,9 @@ TRAFFIC_RULES = frozenset({"local", "target_document", "static_asset", "target_r
                            "unarmed_mutation", "unlisted"})
 TrafficDecision = Literal["allow", "block"]
 TRAFFIC_DECISIONS = frozenset({"allow", "block"})
+RULE_DECISIONS: dict[str, str] = {"local": "allow", "target_document": "allow", "static_asset": "allow",
+                                  "target_read": "allow", "armed_mutation": "allow",
+                                  "unarmed_mutation": "block", "unlisted": "block"}
 
 TARGET_READS = frozenset({"TweetDetail", "TweetResultByRestId"})
 POST_MUTATIONS = frozenset({"DeleteTweet", "DeleteRetweet", "UnfavoriteTweet"})
@@ -59,7 +62,10 @@ def decide(url: str, method: str, resource_type: str, *, armed: bool) -> tuple[H
     except (ValueError, TypeError):
         return "other", "block", "unlisted"
     if parsed.scheme in {"data", "blob", "about"}:
-        return "other", "allow", "local"
+        # Inline subresources only; a local document would run content outside the allowlist.
+        if resource_type != "document" or url == "about:blank":
+            return "other", "allow", "local"
+        return "other", "block", "unlisted"
     hosts = host_class(parsed.hostname)
     if parsed.scheme != "https" or parsed.username is not None or parsed.password is not None:
         return hosts, "block", "unlisted"

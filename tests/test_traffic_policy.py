@@ -79,6 +79,9 @@ class Route:
     ("https://user@x.com/i/api/graphql/fixture/TweetDetail", "GET", "xhr", False, ("block", "unlisted")),
     ("data:image/png;base64,AAAA", "GET", "image", False, ("allow", "local")),
     ("blob:https://x.com/0000", "GET", "media", False, ("allow", "local")),
+    ("about:blank", "GET", "document", False, ("allow", "local")),
+    ("data:text/html,<p>x</p>", "GET", "document", False, ("block", "unlisted")),
+    ("blob:https://x.com/0000", "GET", "document", False, ("block", "unlisted")),
 ])
 def test_only_listed_names_resources_and_hosts_are_admitted(url, method, resource, armed, expected):
     assert decide(url, method, resource, armed=armed)[1:] == expected
@@ -333,3 +336,10 @@ def test_each_request_is_decided_once_in_either_order(recorder, route_first):
 def test_run_command_accepts_traffic_policy():
     args = cli.build_parser().parse_args(["run", "recipe.toml", "--traffic-policy", "report"])
     assert args.traffic_policy == "report"
+
+
+def test_sanitizer_drops_contradictory_rule_and_decision():
+    base = {"schema": 1, "trace": "0123456789ab", "event": "traffic_decision", "host_class": "other"}
+    assert "traffic_decision" not in sanitize_event({**base, "traffic_decision": "allow", "traffic_rule": "unlisted"})
+    kept = sanitize_event({**base, "traffic_decision": "block", "traffic_rule": "unlisted"})
+    assert kept["traffic_decision"] == "block" and kept["traffic_rule"] == "unlisted"
