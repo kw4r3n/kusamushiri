@@ -90,7 +90,8 @@ class TrafficPolicy:
         self._operation: object = None
         self.blocked = 0
         self.mutations = 0
-        self._decisions: OrderedDict[int, TrafficDecision] = OrderedDict()
+        # Holding the identity makes a recycled id() a miss, never another request's decision.
+        self._decisions: OrderedDict[int, tuple[object, TrafficDecision]] = OrderedDict()
 
     @property
     def enforcing(self) -> bool:
@@ -127,9 +128,14 @@ class TrafficPolicy:
             self.blocked = 0
             self.mutations = 0
 
+    def _decision(self, request: object) -> TrafficDecision | None:
+        identity = getattr(request, "_impl_obj", request)
+        stored = self._decisions.get(id(identity))
+        return stored[1] if stored is not None and stored[0] is identity else None
+
     def observe(self, request: Request) -> None:
         """Record one decision per request; the route handler reuses it."""
-        if self.mode == "off" or not self.active:
+        if self.mode == "off" or not self.active or self._decision(request) is not None:
             return
         try:
             url, method, resource = request.url, request.method, request.resource_type
@@ -142,7 +148,7 @@ class TrafficPolicy:
         if decision == "block":
             self.blocked += 1
         identity = getattr(request, "_impl_obj", request)
-        self._decisions[id(identity)] = decision
+        self._decisions[id(identity)] = (identity, decision)
         while len(self._decisions) > MAX_REMEMBERED_DECISIONS:
             self._decisions.popitem(last=False)
         self.diagnostics.traffic_decision(request, hosts, decision, rule, enforced=self.enforcing)
@@ -152,11 +158,11 @@ class TrafficPolicy:
             route.fallback()
             return
         request = route.request
-        decision = self._decisions.get(id(getattr(request, "_impl_obj", request)))
+        decision = self._decision(request)
         if decision is None and not self.failed:
             # No observed decision (e.g. a request event not yet delivered): never admit blindly.
             self.observe(request)
-            decision = self._decisions.get(id(getattr(request, "_impl_obj", request)))
+            decision = self._decision(request)
         try:
             if decision == "allow" and not self.failed:
                 route.fallback()

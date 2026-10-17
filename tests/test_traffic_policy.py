@@ -295,3 +295,41 @@ def test_blocked_dependency_stops_batch_and_keeps_items_pending(monkeypatch, tmp
     assert [r.failure_kind for r in results] == ["blocked"] and not page.clicks
     assert core.last_action_batch_summary["stop_reason"] == "blocked"
     assert journal.entries.get(journal.key(second)) in (None, "pending")
+
+
+def test_recycled_identity_slot_is_a_miss_not_a_stale_allow(recorder):
+    trace, events = recorder
+    context = Context()
+    policy, _ = armed_policy(trace, "enforce", context=context)
+    blocked = FakeRequest(GRAPH + "HomeTimeline", "POST")
+    policy._decisions[id(blocked._impl_obj)] = (object(), "allow")
+    route = Route(blocked)
+    context.handler(route)
+    assert route.aborted and not route.continued
+    assert [r["traffic_rule"] for r in by_event(events, "traffic_decision")] == ["unlisted"]
+
+
+@pytest.mark.parametrize("route_first", [False, True])
+def test_each_request_is_decided_once_in_either_order(recorder, route_first):
+    trace, events = recorder
+    context = Context()
+    policy, _ = armed_policy(trace, "enforce", context=context)
+    trace.phase("mutation_submit")
+    for url, method in ((GRAPH + "DeleteTweet", "POST"), (GRAPH + "HomeTimeline", "POST")):
+        request = FakeRequest(url, method)
+        route = Route(request)
+        if route_first:
+            context.handler(route)
+            policy.observe(request)
+        else:
+            policy.observe(request)
+            context.handler(route)
+        assert route.continued == (url.endswith("DeleteTweet"))
+    records = by_event(events, "traffic_decision")
+    assert [r["traffic_rule"] for r in records] == ["armed_mutation", "unlisted"]
+    assert policy.mutations == 1 and policy.blocked == 1
+
+
+def test_run_command_accepts_traffic_policy():
+    args = cli.build_parser().parse_args(["run", "recipe.toml", "--traffic-policy", "report"])
+    assert args.traffic_policy == "report"
