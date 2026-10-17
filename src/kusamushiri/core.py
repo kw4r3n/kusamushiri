@@ -3,7 +3,7 @@ import threading
 import time
 from collections.abc import Callable
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, timedelta
 from pathlib import Path
 from urllib.parse import quote, urljoin, urlparse
@@ -152,12 +152,15 @@ class XDeleterCore:
         self._browser.on_action_response = self._note_rate_budget
         self._browser.on_isolation_failed = self._isolation_failed
         self._browser.on_action_auth_failed = self.request_cancel
+        self._browser.on_traffic_failed = self.request_cancel
 
     def prepare_post_action_policy(self, policy: RetryPolicy) -> None:
         policy.validate()
         self._post_action_policy = policy
-        if policy.ancillary_rate_limit_mode == "isolate-known" and self._browser.context is None:
-            self._browser.block_service_workers = True
+        if self._browser.context is None:
+            self._browser.traffic_mode = policy.traffic_policy
+            if policy.ancillary_rate_limit_mode == "isolate-known" or policy.traffic_policy == "enforce":
+                self._browser.block_service_workers = True
 
     @property
     def isolated_rate_limit_deadline(self) -> float:
@@ -289,9 +292,18 @@ class XDeleterCore:
         if self._post_action_policy.ancillary_rate_limit_mode == "isolate-known" and not isolation.active:
             logger.warning("Ancillary isolation unavailable in this context; using global rate-limit handling.")
             self._browser.diagnostics.isolation_event("isolation_fallback", "unclassified", 0.0)
+        traffic = self._browser.traffic_policy
+        previous_traffic = traffic.active
+        wanted = self._post_action_policy.traffic_policy
+        traffic.active = wanted != "off" and traffic.mode == wanted and traffic.ready and not traffic.failed
+        if wanted == "enforce" and not traffic.active:
+            # Never fall back to unrestricted traffic when the allowlist was requested.
+            logger.warning("Traffic allowlist unavailable in this context; no post action will start.")
+            self.request_cancel()
         try:
             yield
         finally:
+            traffic.active = previous_traffic
             isolation.active = previous_active
             self._defer_rate_limit_stop = previous_defer
             self._pending_view = None
@@ -956,6 +968,8 @@ class XDeleterCore:
         diagnostics = self._browser.diagnostics
         with diagnostics.operation(target):
             self._browser.ancillary_isolation.begin_operation((target.kind, target.url))
+            traffic = self._browser.traffic_policy
+            traffic.begin_operation((target.kind, target.url))
             if verified is not None:
                 verified.check(target_required=verified.loaded)
             page = verified.session.page if verified is not None else self._browser._require_page()
@@ -978,6 +992,12 @@ class XDeleterCore:
                                         diagnostics=diagnostics, reuse_view=reuse, on_target_loaded=record_loaded,
                                         identity_check=verified.can_submit if verified is not None else lambda: True,
                                         prepare_control=verified.prepare_control if verified is not None else lambda locator, _: locator.click)
+            if traffic.enforcing and not result.success and not result.deferred and traffic.mutations == 0 \
+                    and result.failure_kind not in {"auth", "ambiguous"}:
+                # Unsent failure while the allowlist aborted requests: a missing dependency is
+                # indistinguishable from a real failure, so hold the item and stop.
+                result = replace(result, failure_kind="blocked", retry_after_seconds=None, error_message=tr(
+                    "許可リストで止めた通信が原因の可能性があるため、送信せず停止しました。diagnostics --summary の traffic を確認してください。"))
             if result.view_reuse_invalid:
                 self.request_cancel()
             if result.deferred and self._defer_rate_limit_stop and target.kind == "post" and self._rate_limits_reusable and loaded is not None:

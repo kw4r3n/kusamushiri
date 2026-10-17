@@ -19,6 +19,7 @@ from kusamushiri.network_diagnostics import NetworkDiagnostics
 from kusamushiri.parsing import extract_profile_username
 from kusamushiri.paths import ensure_private_directory, get_account_profile_dir
 from kusamushiri.progress import ActionJournal
+from kusamushiri.traffic_policy import TrafficMode, TrafficPolicy
 
 BASE_X_URL = "https://x.com/"
 HOME_PATH = "home"
@@ -87,6 +88,9 @@ class BrowserManager:
         self.diagnostics = NetworkDiagnostics()
         self.block_service_workers = False
         self.ancillary_isolation = AncillaryIsolation(self.diagnostics, self._isolation_failed)
+        self.traffic_mode: TrafficMode = "off"
+        self.traffic_policy = TrafficPolicy(self.diagnostics, self._traffic_failed)
+        self.on_traffic_failed: Callable[[], None] | None = None
         self.on_isolation_failed: Callable[[Response, float], None] | None = None
         self.on_action_auth_failed: Callable[[], None] | None = None
         # Called with the response whenever X answers a request with a rate-limit status.
@@ -131,6 +135,11 @@ class BrowserManager:
 
     def _watch_request(self, request: Request) -> None:
         self.diagnostics.request(request)
+        self.traffic_policy.observe(request)
+
+    def _traffic_failed(self) -> None:
+        if self.on_traffic_failed is not None:
+            self.on_traffic_failed()
 
     def _watch_request_failed(self, request: Request) -> None:
         self.diagnostics.request_failed(request)
@@ -220,6 +229,9 @@ class BrowserManager:
             self.context.on("request", self._watch_request)
             self.context.on("response", self._watch_response)
             self.context.on("requestfailed", self._watch_request_failed)
+            # Isolation is registered last so it runs first and falls back to the allowlist.
+            self.traffic_policy.mode = self.traffic_mode
+            self.traffic_policy.install(self.context, service_workers_blocked=self.block_service_workers)
             self.ancillary_isolation.install(self.context, service_workers_blocked=self.block_service_workers)
             self.browser = self.context.browser
             self.page = self.context.pages[0] if self.context.pages else self.context.new_page()
@@ -270,6 +282,7 @@ class BrowserManager:
             self.action_control_failed = False
             self.post_actions_active = False
             self.ancillary_isolation = AncillaryIsolation(self.diagnostics, self._isolation_failed)
+            self.traffic_policy = TrafficPolicy(self.diagnostics, self._traffic_failed)
             self.diagnostics.phase("idle")
 
     def go_to_home(self) -> None:

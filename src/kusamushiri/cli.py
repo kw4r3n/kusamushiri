@@ -552,6 +552,10 @@ RETRY_ARGUMENTS = (
 )
 
 
+def _needs_action_context(policy: RetryPolicy) -> bool:
+    return policy.ancillary_rate_limit_mode == "isolate-known" or policy.traffic_policy != "off"
+
+
 def _retry_policy_from_args(args: argparse.Namespace, defaults: RetryPolicy | None = None) -> RetryPolicy:
     overrides = {
         attribute: getattr(args, name)
@@ -561,6 +565,9 @@ def _retry_policy_from_args(args: argparse.Namespace, defaults: RetryPolicy | No
     mode = getattr(args, "ancillary_rate_limit_mode", None)
     if mode is not None:
         overrides["ancillary_rate_limit_mode"] = mode
+    traffic = getattr(args, "traffic_policy", None)
+    if traffic is not None:
+        overrides["traffic_policy"] = traffic
     return replace(defaults or RetryPolicy(), **overrides)
 
 
@@ -577,6 +584,10 @@ def _add_retry_args(parser: argparse.ArgumentParser, *, recipe_overrides: bool =
                         default=None if recipe_overrides else "global",
                         help="global (safe default) or isolate-known: quarantine exact ViewerBadgeCounts/CreatorStudioTabBarItemQuery/account settings/fleetline GETs; "
                              "requires a new service-worker-blocked routed context; otherwise global fallback; CLI overrides TOML")
+    parser.add_argument("--traffic-policy", choices=("off", "report", "enforce"),
+                        default=None if recipe_overrides else "off",
+                        help="post-action traffic allowlist: off (default), report (record decisions only) or enforce "
+                             "(abort unlisted requests; stops and holds an item on any unsent failure); CLI overrides TOML")
 
 
 def _delete_tuning_from_args(args: argparse.Namespace) -> DeleteOptions:
@@ -621,7 +632,7 @@ def cmd_delete(args: argparse.Namespace) -> int:
     _confirm(
         tr("{path} の {count} 件を削除/解除しますか？元に戻せません。", path=args.file, count=len(targets)), args.yes
     )
-    extra: _SessionOptions = {"retry_policy": options.retry_policy} if options.retry_policy.ancillary_rate_limit_mode == "isolate-known" else {}
+    extra: _SessionOptions = {"retry_policy": options.retry_policy} if _needs_action_context(options.retry_policy) else {}
     with browser_session(args.profile, headless=args.headless, **extra) as core:
         results = _execute_post_actions(core, targets, options.interval, args.profile, options.retry_policy, expected_viewer)
         cancelled = core.is_cancel_requested()
@@ -734,7 +745,7 @@ def run_recipe(recipe: Recipe, *, interactive: bool) -> int:
 
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     list_path = recipe.output_path / f"posts-{stamp}.csv"
-    extra: _SessionOptions = {"retry_policy": recipe.delete.retry_policy} if recipe.delete is not None and recipe.delete.retry_policy.ancillary_rate_limit_mode == "isolate-known" else {}
+    extra: _SessionOptions = {"retry_policy": recipe.delete.retry_policy} if recipe.delete is not None and _needs_action_context(recipe.delete.retry_policy) else {}
     with ExitStack() as stack:
         core: XDeleterCore | None = None
         if archive_path is None:

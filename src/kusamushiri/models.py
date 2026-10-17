@@ -72,8 +72,11 @@ class RetryPolicy:
     max_delay_seconds: float = 900.0
     max_wait_seconds: float = 1800.0
     ancillary_rate_limit_mode: Literal["global", "isolate-known"] = "global"
+    traffic_policy: Literal["off", "report", "enforce"] = "off"
 
     def validate(self) -> None:
+        if self.traffic_policy not in ("off", "report", "enforce"):
+            raise ValueError("traffic_policy must be off, report or enforce")
         if self.ancillary_rate_limit_mode not in ("global", "isolate-known"):
             raise ValueError("ancillary_rate_limit_mode must be global or isolate-known")
         if isinstance(self.max_retries, bool) or not isinstance(self.max_retries, int) or not 0 <= self.max_retries <= 20:

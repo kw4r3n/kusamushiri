@@ -101,6 +101,7 @@ DELETE_ADVANCED_FIELDS = (
     ("cooldown_delay", "cooldown_delay_seconds", float, "seconds before the first rate-limit resume"),
     ("rate_limit_interval", "rate_limit_interval_seconds", float, "minimum post-limit item interval in seconds"),
     ("ancillary_rate_limit_mode", "ancillary_rate_limit_mode", str, "global / isolate-known; known GETs only"),
+    ("traffic_policy", "traffic_policy", str, "off / report / enforce; post-action allowlist"),
 )
 DELETE_KEYS = frozenset({"interval", "confirm", *(item[0] for item in DELETE_ADVANCED_FIELDS)})
 

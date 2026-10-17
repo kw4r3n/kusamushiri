@@ -19,6 +19,12 @@ from unrecognized digests. The rate-limit and HTTP-error summaries include metho
 status, role, public identity and the safe digest when present. The catalog is only an
 observation label: a public symbol may still have role `unknown` and stop the batch.
 
+`traffic_decision` events (only with `traffic_policy` `report` or `enforce`) carry the
+same sanitized identity fields plus closed labels: `host_class` (`x_web`, `x_api`,
+`x_subdomain`, `twimg`, `other`), `traffic_decision` (`allow`, `block`), `traffic_rule`
+and `traffic_enforced`. Hosts outside X are reduced to their class; no host name, URL,
+query or body is recorded. The summary groups them under `traffic`.
+
 ## Reproducible public catalog sources
 
 The names and fixed v1.1 dispatch paths were extracted from these pinned public

@@ -327,6 +327,29 @@ uv run kusamushiri-cli delete "reviewed-small.csv" --recipe "kusamushiri-cleanup
 独立再レビュー待ちの間は `--dry-run` を保持してください。保存済み診断は
 `uv run kusamushiri-cli diagnostics | save -f kusamushiri-diagnostic.jsonl` で取り出せます。
 
+### 通信の許可リスト（試験中）
+
+`--traffic-policy` / `[delete].traffic_policy` は、削除・解除バッチ中の通信を名前で判定します。
+既定は `off` で、従来どおり何も変えません。起動・ログイン確認・ホーム表示・収集は対象外です。
+
+- `report`：通信は止めず、要求ごとに「許可／遮断」の判定を診断へ記録します。
+  通常の診断が記録しない twimg などの静的配信ホストも、ホスト種別だけを記録します。
+- `enforce`：許可リストにない要求をブラウザ側で中断します。Service Workerを無効にした
+  新しいコンテキストが必要で、復元されたタブは閉じてから始めます。ルーティングを用意できない場合は
+  制限なしに戻さず、1件も処理しません。
+
+許可するのは、対象投稿のページ本体（`/<user>/status/<id>` のGET）、`x.com` と `*.twimg.com` の
+スクリプト・スタイル・フォント、GraphQLの `TweetDetail` / `TweetResultByRestId` のGET、
+確認ボタンを押す段階での `DeleteTweet` / `DeleteRetweet` / `UnfavoriteTweet` 1回だけです。
+GraphQLのクエリIDやスクリプトのファイル名では判定しないため、X の通常の更新では止まりません。
+ただし必要な通信の名前が変わったり、新しく必要な通信が増えたりすると止まります。
+
+`enforce` で、削除要求を送る前に失敗した項目は「通信拒否」として保留し、バッチを停止します。
+止めた通信が原因かどうかは区別できないため、すでに削除済みの投稿でも停止します。
+`diagnostics --summary` の `traffic` に、判定・規則・ホスト種別ごとの件数が出ます。
+テレメトリなどを止めるため、通常のブラウザとは異なる通信の出方になります。X がこれをどう扱うかは不明です。
+実アカウントでの検証は未実施です。まず `report` で記録し、少数の投稿で `enforce` を試してください。
+
 `max_cooldowns` はバッチ全体で累積し、再開に成功しても、その後削除が成功しても戻りません。
 `max_retries` は項目ごとの安全な操作再試行であり、未送信の制限保留には使いません。
 保存済み休止からの再開待機も `retry_max_wait` の対象です。通常の項目間隔と制限のない定期休止は

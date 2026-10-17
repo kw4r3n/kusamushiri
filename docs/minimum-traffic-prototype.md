@@ -1,5 +1,26 @@
 # Minimum necessary traffic: offline design and prototype
 
+## 2026-10-17 decision: name-based admission instead of a per-build capsule
+
+The production allowlist (`traffic_policy.py`, `--traffic-policy report|enforce`) admits
+requests by public GraphQL operation name, resource type and host class, not by an exact
+per-build capsule of query hashes and static chunks. X ships frontend builds often; a
+fail-closed per-build capsule would stop every batch after each build until it was
+re-derived, which defeats the goal of stable long batches. The trade-off is explicit:
+admission is broader than the capsule below (any `x.com` / `*.twimg.com` script, style
+or font), and a renamed or newly required dependency still stops the batch. Unsent
+failures under `enforce` are held as blocked; nothing is retried or fabricated.
+
+The candidate set came from the retained 49-success traces: 52 target loads issued about
+40 requests each. Two per-load ancillary GETs (`CreatorStudioTabBarItemQuery`,
+`api.x.com/1.1/account/settings.json`) were the HTTP 429 after 49 loads (the previously
+unidentified g19). Admitted: the target document, static assets, `TweetDetail`,
+`TweetResultByRestId` and one armed post mutation. `f01c2341` / `25d2ab19` start only
+after `DeleteTweet` is dispatched, and the home traffic after each success comes from the
+client returning home, not from kusamushiri. This module stays offline-only and is
+unchanged; the live gates below still apply to the new allowlist trials (report first,
+then bounded `enforce` runs, each separately authorized).
+
 The direction is to build deletion from the smallest established dependency set.
 An accumulating list of incidental endpoint exceptions does not establish that set.
 The new `minimum_traffic.py` is deliberately **offline only**, opt-in, unreferenced
