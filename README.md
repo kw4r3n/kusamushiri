@@ -199,8 +199,9 @@ kusamushiri-cli unfollow follows.csv --profile main --headless
 
 - Lists are the same CSV / JSON files the app exports, and profiles are shared with the app.
 - `login` always opens a window; other commands accept `--headless` and stop if the profile is
-  not signed in. Headless Chromium reports itself as `HeadlessChrome`, so X may treat it differently;
-  if a headless run fails, try it without `--headless`.
+  not signed in. Headless runs use Chromium's new headless mode with the installed browser's
+  headed user agent, because X refused some of its own page requests (HTTP403) when the default
+  headless shell named itself `HeadlessChrome`. If a headless run still fails, try it without `--headless`.
 - `delete` and `unfollow` ask for confirmation; pass `--yes` for unattended runs. Ctrl+C stops
   after the current item, and a second Ctrl+C aborts. Messages are in Japanese; add `--lang en` for English.
 - New post deletion/undo defaults use a 3-second item interval and a 120-second quiet pause after

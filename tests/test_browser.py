@@ -1,7 +1,9 @@
+from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
 from playwright.sync_api import Error as PlaywrightError
+from playwright.sync_api import sync_playwright
 
 from kusamushiri.browser import BrowserManager, is_rate_limit_response
 from kusamushiri.core import XDeleterCore
@@ -131,3 +133,40 @@ def test_rate_limited_response_cancels_core_until_cleared():
     core.clear_cancel()
     assert not core.is_cancel_requested()
     assert core.rate_limit_status is None
+
+
+@pytest.mark.parametrize("headless", [False, True])
+def test_headless_launch_uses_new_headless_with_headed_user_agent(tmp_path, headless):
+    playwright = Mock()
+    page = playwright.chromium.launch.return_value.new_page.return_value
+    page.evaluate.return_value = "Mozilla/5.0 (X11; Linux x86_64) HeadlessChrome/153.0.0.0 Safari/537.36"
+
+    BrowserManager._launch_context(playwright, tmp_path, headless=headless)
+
+    options = playwright.chromium.launch_persistent_context.call_args.kwargs
+    assert options["headless"] is headless
+    if headless:
+        assert options["channel"] == "chromium"
+        assert options["user_agent"] == "Mozilla/5.0 (X11; Linux x86_64) Chrome/153.0.0.0 Safari/537.36"
+        playwright.chromium.launch.return_value.close.assert_called_once()
+    else:
+        assert options["channel"] is None and options["user_agent"] is None
+        playwright.chromium.launch.assert_not_called()
+
+
+def test_headless_context_does_not_name_headless_chrome(tmp_path):
+    with sync_playwright() as playwright:
+        if not Path(playwright.chromium.executable_path).is_file():
+            pytest.skip("Playwright Chromium is not installed; run `uv run playwright install chromium`")
+        context = BrowserManager._launch_context(playwright, tmp_path, headless=True)
+        try:
+            page = context.pages[0] if context.pages else context.new_page()
+            page.route("https://kusamushiri.test/", lambda route: route.fulfill(body="<html></html>", content_type="text/html"))
+            request = page.goto("https://kusamushiri.test/").request
+            seen = {"ua": page.evaluate("navigator.userAgent"),
+                    "brands": page.evaluate("navigator.userAgentData.brands.map(b => b.brand)"),
+                    "header": request.headers.get("user-agent", "")}
+        finally:
+            context.close()
+    assert "Headless" not in seen["ua"] and "Headless" not in seen["header"]
+    assert not any("Headless" in brand for brand in seen["brands"])

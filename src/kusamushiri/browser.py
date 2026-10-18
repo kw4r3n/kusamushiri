@@ -25,6 +25,7 @@ BASE_X_URL = "https://x.com/"
 HOME_PATH = "home"
 VIEWPORT_WIDTH = 1280
 VIEWPORT_HEIGHT = 800
+HEADLESS_CHANNEL = "chromium"  # new headless mode of the full Chromium build
 NAVIGATION_TIMEOUT_MS = 30_000
 LOGIN_CHECK_SELECTORS = (
     '[data-testid="SideNav_NewTweet_Button"]',
@@ -71,6 +72,16 @@ def install_chromium() -> None:
         creationflags=creationflags,
     )
     logger.info("Playwright Chromium installed.")
+
+
+def _headed_user_agent(playwright: Playwright) -> str:
+    """Read the installed browser's own UA so the platform and version stay exact."""
+    browser = playwright.chromium.launch(channel=HEADLESS_CHANNEL, headless=True)
+    try:
+        user_agent = browser.new_page().evaluate("navigator.userAgent")
+    finally:
+        browser.close()
+    return str(user_agent).replace("HeadlessChrome/", "Chrome/")
 
 
 class BrowserManager:
@@ -251,9 +262,14 @@ class BrowserManager:
     @staticmethod
     def _launch_context(playwright: Playwright, profile_dir: Path, *, headless: bool = False,
                         service_workers: Literal["allow", "block"] | None = None) -> BrowserContext:
+        # The default headless shell names HeadlessChrome in its UA and client hints, and X
+        # refuses some of its own page requests with HTTP403. New headless keeps the headed
+        # client hints, so only its UA token needs the headed spelling.
         return playwright.chromium.launch_persistent_context(
             user_data_dir=str(profile_dir),
+            channel=HEADLESS_CHANNEL if headless else None,
             headless=headless,
+            user_agent=_headed_user_agent(playwright) if headless else None,
             viewport={"width": VIEWPORT_WIDTH, "height": VIEWPORT_HEIGHT},
             args=["--disable-blink-features=AutomationControlled"],
             service_workers=service_workers,
