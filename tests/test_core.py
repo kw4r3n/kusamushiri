@@ -155,6 +155,15 @@ def build_request(**overrides: object) -> CollectRequest:
     return CollectRequest(**values)
 
 
+def authorized_action(core, method, url):
+    """These selector tests run inside an explicitly authenticated batch scope."""
+    core.is_logged_in = lambda: True
+    core.get_logged_in_username = lambda: "user"
+    core._browser.page.is_closed = lambda: False
+    with core.post_action_journal_scope(None):
+        return getattr(core, method)(url)
+
+
 def test_post_matches_filters_respects_all_filters() -> None:
     core = XDeleterCore()
     cases = [
@@ -296,7 +305,7 @@ def test_unlike_post_verifies_like_button_becomes_visible(monkeypatch) -> None:
     core._browser.page = RecordingPage()
     monkeypatch.setattr(core, "_find_first_visible_locator", lambda root, selectors: ClickableLocator())
 
-    assert core.unlike_post("https://x.com/someone/status/12345") == (True, None)
+    assert authorized_action(core, "unlike_post", "https://x.com/someone/status/12345") == (True, None)
     assert len(calls) == 1
     assert isinstance(calls[0], dict)
     assert (calls[0]["undoId"], calls[0]["doId"]) == ("unlike", "like")
@@ -307,7 +316,7 @@ def test_unlike_post_fails_without_unlike_button(monkeypatch) -> None:
     core._browser.page = DeletePage()
     monkeypatch.setattr(core, "_find_first_visible_locator", lambda root, selectors: None)
 
-    assert core.unlike_post("https://x.com/someone/status/12345") == (
+    assert authorized_action(core, "unlike_post", "https://x.com/someone/status/12345") == (
         False,
         "いいね取り消しボタンが見つかりませんでした。",
     )
@@ -524,7 +533,7 @@ def test_delete_post_uses_shared_delete_candidates(monkeypatch) -> None:
     monkeypatch.setattr(core, "_find_first_visible_locator", find_first_visible_locator)
     monkeypatch.setattr(actions, "delete_menu_items", delete_candidates)
 
-    success, error_message = core.delete_post("https://x.com/user/status/12345")
+    success, error_message = authorized_action(core, "delete_post", "https://x.com/user/status/12345")
 
     assert success is True
     assert error_message is None
@@ -547,7 +556,7 @@ def test_delete_post_fails_when_delete_menu_item_is_not_identified(monkeypatch) 
         "Missing", (ArticleLocator,), {"count": lambda self: 0},
     )())
 
-    success, error_message = core.delete_post("https://x.com/user/status/12345")
+    success, error_message = authorized_action(core, "delete_post", "https://x.com/user/status/12345")
 
     assert success is False
     assert error_message == "操作対象のメニューまたは確認ボタンを一意に照合できないため停止しました。"
@@ -573,7 +582,7 @@ def test_delete_post_waits_for_identified_menu_item_and_does_not_guess_on_timeou
     monkeypatch.setattr(core, "_find_first_visible_locator", find_first_visible_locator)
     monkeypatch.setattr("kusamushiri.actions.delete_menu_items", lambda _: SlowMenu())
 
-    success, error = core.delete_post("https://x.com/user/status/12345")
+    success, error = authorized_action(core, "delete_post", "https://x.com/user/status/12345")
 
     assert success is False
     assert error == "削除メニュー項目が見つかりませんでした。自分のポストではない可能性があります。"
@@ -590,7 +599,7 @@ def test_delete_post_fails_when_deleted_article_does_not_disappear(monkeypatch) 
     core._browser.page = AttachedPage()
     monkeypatch.setattr(core, "_find_first_visible_locator", lambda root, selectors: ClickableLocator())
 
-    success, error_message = core.delete_post("https://x.com/user/status/12345")
+    success, error_message = authorized_action(core, "delete_post", "https://x.com/user/status/12345")
 
     assert success is False
     assert error_message is not None
@@ -604,7 +613,7 @@ def test_undo_repost_verifies_retweet_button_becomes_visible(monkeypatch) -> Non
     core._browser.page = DeletePage()
     monkeypatch.setattr(core, "_find_first_visible_locator", lambda root, selectors: ClickableLocator())
 
-    success, error_message = core.undo_repost("https://x.com/user/status/12345")
+    success, error_message = authorized_action(core, "undo_repost", "https://x.com/user/status/12345")
 
     assert success is True
     assert error_message is None
@@ -619,7 +628,7 @@ def test_undo_repost_fails_when_button_state_does_not_change(monkeypatch) -> Non
     core._browser.page = UnchangedPage()
     monkeypatch.setattr(core, "_find_first_visible_locator", lambda root, selectors: ClickableLocator())
 
-    success, error_message = core.undo_repost("https://x.com/user/status/12345")
+    success, error_message = authorized_action(core, "undo_repost", "https://x.com/user/status/12345")
 
     assert success is False
     assert error_message is not None

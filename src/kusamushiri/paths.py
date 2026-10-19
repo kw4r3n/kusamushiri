@@ -128,6 +128,11 @@ def _migrate_legacy_default_profile(target: Path, legacy_profile_dir: Path) -> N
         return
 
 
+def account_profile_path(account_name: str | None = None) -> Path:
+    """Locate metadata without creating directories or migrating browser state."""
+    return _profile_dir_for_account(_get_app_data_path(), normalize_account_name(account_name))
+
+
 def get_account_profile_dir(account_name: str | None = None) -> Path:
     """アカウント別のブラウザプロファイルディレクトリを取得
 

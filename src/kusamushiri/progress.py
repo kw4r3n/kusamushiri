@@ -4,7 +4,13 @@ import contextlib
 import json
 import math
 import os
+import re
+import socket
 import tempfile
+import time
+from collections import Counter
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from types import TracebackType
 from typing import cast
@@ -12,6 +18,14 @@ from typing import cast
 from kusamushiri.i18n import tr
 from kusamushiri.models import FailureKind, PostActionResult, PostActionTarget
 from kusamushiri.parsing import extract_post_id
+
+
+def _pid_namespace() -> str | None:
+    try:
+        return os.readlink("/proc/self/ns/pid")
+    except OSError:
+        return None
+
 
 STATES = {"inflight", "success", "retryable", "permanent", "auth", "ambiguous", "pending", "blocked"}
 
@@ -26,6 +40,9 @@ class ActionJournal:
         self.completed_since_pause = 0
         self._lock_path = path.with_name(path.name + ".lock")
         self._retain_lock = False
+        self._lock_owned = False
+        self.stop_reason = ""
+        self.viewer: str | None = None
 
     @staticmethod
     def key(target: PostActionTarget) -> str:
@@ -34,8 +51,31 @@ class ActionJournal:
             raise ValueError("Cannot record an action without a numeric post ID and known kind")
         return f"{target.kind}:{post_id}"
 
+    @contextmanager
+    def _recovery_guard(self) -> Iterator[None]:
+        if os.name != "posix":
+            yield
+            return
+        import fcntl
+
+        # Keep this inode permanently. flock is released even by SIGKILL; unlinking
+        # would allow two processes to lock different inodes under the same name.
+        fd = os.open(self._lock_path.with_suffix(".recovering"), os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                raise RuntimeError("Journal recovery is in progress; no action was started.") from None
+            yield
+        finally:
+            os.close(fd)
+
     def __enter__(self) -> "ActionJournal":
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        with self._recovery_guard():
+            return self._acquire()
+
+    def _acquire(self) -> "ActionJournal":
         try:
             fd = os.open(self._lock_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         except FileExistsError as error:
@@ -43,16 +83,20 @@ class ActionJournal:
                 "Action journal is locked; another job may be using it. No action was started."
             ) from error
         os.close(fd)
+        self._lock_owned = True
         try:
+            self._write_lock("ready")
             self._load()
         except BaseException:
             self._lock_path.unlink()
+            self._lock_owned = False
             raise
         return self
 
     def __exit__(self, typ: type[BaseException] | None, value: BaseException | None, tb: TracebackType | None) -> None:
         if not self._retain_lock:
             self._lock_path.unlink()
+        self._lock_owned = False
 
     def _sync_directory(self) -> None:
         if os.name == "posix":
@@ -95,7 +139,7 @@ class ActionJournal:
         deadline = data.get("cooldown_until", 0)
         if (
             not isinstance(entries, dict)
-            or not all(isinstance(k, str) and isinstance(v, str) and v in STATES for k, v in entries.items())
+            or not all(isinstance(k, str) and re.fullmatch(r"(?:post|repost|like):[0-9]+", k) and isinstance(v, str) and v in STATES for k, v in entries.items())
             or isinstance(deadline, bool)
             or not isinstance(deadline, (int, float))
             or not math.isfinite(deadline)
@@ -112,6 +156,68 @@ class ActionJournal:
             raise ValueError("Invalid cooldown reason; no action was started")
         self.cooldown_reason = reason
         self.cooldown_until = float(deadline)
+        reason = data.get("stop_reason", "")
+        viewer = data.get("viewer")
+        if not isinstance(reason, str) or len(reason) > 512 or viewer is not None and (not isinstance(viewer, str) or re.fullmatch(r"[A-Za-z0-9_]{1,15}", viewer) is None):
+            raise ValueError("Invalid journal stop reason/viewer; no action was started")
+        self.stop_reason, self.viewer = reason, viewer
+
+    def _write_lock(self, state: str) -> None:
+        if not self._lock_owned:
+            return
+        # A truncated/interrupted metadata write is deliberately not recoverable.
+        with self._lock_path.open("w") as stream:
+            json.dump({"version": 1, "pid": os.getpid(), "host": socket.gethostname(),
+                       "scope": self.scope, "recovery_state": state, "pid_namespace": _pid_namespace()}, stream)
+            stream.flush()
+            os.fsync(stream.fileno())
+
+    def recover_lock(self) -> None:
+        """Explicit offline recovery; never unlock a live, foreign or uncertain owner."""
+        if os.name != "posix":
+            raise RuntimeError("Safe owner liveness checks are only supported on POSIX; no lock was removed")
+        with self._recovery_guard():
+            data = json.loads(self._lock_path.read_text())
+            if not isinstance(data, dict) or data.get("version") != 1 or data.get("host") != socket.gethostname() or data.get("scope") != self.scope or data.get("recovery_state") != "ready" or data.get("pid_namespace") != _pid_namespace():
+                raise ValueError("Unknown/legacy lock or uncertain storage; automatic recovery is unsafe. No lock was removed.")
+            pid = data.get("pid")
+            if type(pid) is not int or pid <= 0:
+                raise ValueError("Invalid lock owner; no lock was removed")
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                pass
+            else:
+                raise RuntimeError("Lock owner is still alive; no lock was removed")
+            self._load()  # Validate the durable journal before making it available.
+            self._lock_path.unlink()
+            self._sync_directory()
+
+    def bind_viewer(self, viewer: str) -> None:
+        if self.viewer is not None and self.viewer.casefold() != viewer.casefold():
+            raise ValueError("Journal account does not match the signed-in account")
+        self.viewer = viewer
+        self._write()
+
+    def record_stop(self, reason: str) -> None:
+        self.stop_reason = reason
+        self._write()
+
+    def status(self) -> dict[str, object]:
+        self._load()
+        return {"states": dict(Counter(self.entries.values())), "stop_reason": self.stop_reason,
+                "not_before": self.cooldown_until, "locked": self._lock_path.exists(), "viewer": self.viewer,
+                "held": {key: value for key, value in self.entries.items() if value in {"inflight", "ambiguous", "auth", "blocked", "permanent"}}}
+
+    def wait_before_browser(self, cap: float, wait: Callable[[float], bool]) -> None:
+        # Caller holds the journal lock: no browser/profile is opened during this wait.
+        while (remaining := self.cooldown_until - time.time()) > 0:
+            if remaining > cap:
+                self.record_stop("single_wait_limit")
+                raise ValueError("Saved server deadline exceeds the per-wait cap; deadline retained")
+            if wait(remaining):
+                self.record_stop("cancelled")
+                raise InterruptedError("Resume cancelled; deadline retained")
 
     def previous_result(self, target: PostActionTarget) -> PostActionResult | None:
         from kusamushiri.actions import action_label_for
@@ -154,12 +260,17 @@ class ActionJournal:
     def _write(self) -> None:
         payload = {
             "version": 1,
+            "stop_reason": self.stop_reason,
+            "viewer": self.viewer,
             "scope": self.scope,
             "entries": self.entries,
             "cooldown_until": self.cooldown_until,
             "cooldown_reason": self.cooldown_reason,
             "completed_since_pause": self.completed_since_pause,
         }
+        retained = self._retain_lock
+        self._retain_lock = True
+        self._write_lock("writing")
         fd, temp_name = tempfile.mkstemp(prefix=f".{self.path.name}.", dir=self.path.parent)
         try:
             with os.fdopen(fd, "w") as stream:
@@ -169,7 +280,10 @@ class ActionJournal:
                 os.fsync(stream.fileno())
             os.replace(temp_name, self.path)
             self._sync_directory()
+            self._write_lock("ready")
+            self._retain_lock = retained
         except BaseException:
+            self._retain_lock = True
             with contextlib.suppress(OSError):
                 os.unlink(temp_name)
             raise

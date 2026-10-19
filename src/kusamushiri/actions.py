@@ -1,4 +1,5 @@
 import re
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import NoReturn
@@ -146,10 +147,18 @@ def _valid_error_envelope(body: object) -> bool:
     )
 
 
+def _completed_response(request: Request) -> Response | None:
+    # response()/json() can otherwise wait on an unfinished download after cancellation.
+    # X must have completed the response before it can count as a durable receipt.
+    if isinstance(request, Request) and request.timing.get("responseEnd", -1) < 0:
+        return None
+    return request.response()
+
+
 def _mutation_error(requests: list[Request], mutation_name: str) -> str | None:
     """Xの操作APIが明示的に失敗を返した場合、そのエラーメッセージを返す。"""
     for request in requests:
-        response = request.response()
+        response = _completed_response(request)
         if response is None:
             return tr("{mutation} の通信に失敗しました: {detail}", mutation=mutation_name, detail=request.failure or tr("応答なし"))
         if response.status >= 400:
@@ -175,11 +184,14 @@ def _wait_for_mutation_result(
     requests: list[Request],
     mutation_name: str,
     wait_for_success: Callable[[], object],
+    *,
+    page: Page | None = None,
 ) -> str | None:
     """Return the mutation error, or None once the DOM confirms success.
 
     Local pages that never send the mutation keep the DOM-only behavior.
     """
+    deadline = time.monotonic() + ACTION_STATE_TIMEOUT_MS / 1000
     try:
         wait_for_success()
     except PlaywrightTimeoutError:
@@ -187,6 +199,15 @@ def _wait_for_mutation_result(
         if error_message is not None:
             return error_message
         raise
+    if page is not None:
+        # A DOM update can precede Playwright's requestfinished dispatch. Drain it
+        # within the same completion budget, never wait indefinitely in response().
+        page.wait_for_timeout(0)
+        while any(isinstance(request, Request) and request.timing.get("responseEnd", -1) < 0 for request in requests):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            page.wait_for_timeout(min(0.1, remaining) * 1000)
     return _mutation_error(requests, mutation_name)
 
 
@@ -260,7 +281,7 @@ class ActionEvidence:
             self.blocked = self.blocked or self.identity_failed
         return not (self.blocked or self.cancelled or self.rate_blocked)
 
-    def prepared_click(self, locator: Locator, stage: str) -> Callable[[], None]:
+    def prepared_click(self, locator: Locator, stage: str, *, mutation: bool = False) -> Callable[[], None]:
         def failed() -> NoReturn:
             self.control_failed = self.blocked = True
             raise TargetPostUnavailableError(tr("操作対象のメニューまたは確認ボタンを一意に照合できないため停止しました。")) from None
@@ -271,6 +292,12 @@ class ActionEvidence:
             failed()
 
         def invoke() -> None:
+            if not self.can_submit():
+                raise TargetPostUnavailableError(tr("送信前に中断しました。待機またはログイン確認が必要です。"))
+            if mutation:
+                # Only a positively admitted invocation can have submitted anything.
+                # Errors after entering click() remain uncertain and must stay held.
+                self.submitted = True
             try:
                 click()
             except Exception:
@@ -405,7 +432,7 @@ def execute_post_action(
                 # deletion. Only an explicit refusal proves it safe to repeat.
                 kind = "ambiguous"
                 for request in requests if len(requests) == 1 else []:
-                    response = request.response()
+                    response = _completed_response(request)
                     if response is None:
                         break
                     if response.status in {420, 429}:
@@ -571,13 +598,12 @@ def _toggle_off_post(
                     evidence.phase("submission_blocked")
                     return False, tr("送信前に中断しました。待機またはログイン確認が必要です。")
                 evidence.phase("mutation_submit")
-                evidence.submitted = True
-            undo_button.click()
+            (evidence.prepared_click(undo_button, "unlike", mutation=True) if evidence else undo_button.click)()
         else:
             if evidence is not None:
                 evidence.phase("confirmation")
             confirm_selectors, confirm_missing = confirm
-            undo_button.click()
+            (evidence.prepared_click(undo_button, "toggle_menu") if evidence else undo_button.click)()
             page.wait_for_selector(", ".join(confirm_selectors), state="visible", timeout=ACTION_STATE_TIMEOUT_MS)
             confirm_button = find_locator(page, confirm_selectors)
             if confirm_button is None:
@@ -590,8 +616,7 @@ def _toggle_off_post(
                     evidence.phase("submission_blocked")
                     return False, tr("送信前に中断しました。待機またはログイン確認が必要です。")
                 evidence.phase("mutation_submit")
-                evidence.submitted = True
-            confirm_button.click()
+            (evidence.prepared_click(confirm_button, "toggle_confirm", mutation=True) if evidence else confirm_button.click)()
 
         if evidence is not None:
             evidence.phase("mutation_wait")
@@ -603,6 +628,7 @@ def _toggle_off_post(
                 arg={"article": article_element, "owned": OWNED_NODE_XPATH, "undoId": undo_id, "doId": do_id},
                 timeout=ACTION_STATE_TIMEOUT_MS,
             ),
+            page=page,
         )
         if error_message is not None:
             logger.warning("%s URL=%s", error_message, post_url)
@@ -716,13 +742,12 @@ def delete_post(
             stage = tr("削除確定後の完了確認（結果不明。再試行前にXで確認してください）")
             page.on("request", record_mutation)
             listening = True
-            click_confirm = _evidence.prepared_click(confirm_btn, "confirm") if _evidence is not None else confirm_btn.click
+            click_confirm = _evidence.prepared_click(confirm_btn, "confirm", mutation=True) if _evidence is not None else confirm_btn.click
             if _evidence is not None:
                 if not _evidence.can_submit():
                     _evidence.phase("submission_blocked")
                     return False, tr("送信前に中断しました。待機またはログイン確認が必要です。")
                 _evidence.phase("mutation_submit")
-                _evidence.submitted = True
             click_confirm()
             if _evidence is not None:
                 _evidence.phase("mutation_wait")
@@ -734,6 +759,7 @@ def delete_post(
                     arg=article_element,
                     timeout=ACTION_STATE_TIMEOUT_MS,
                 ),
+                page=page,
             )
             if error_message is not None:
                 logger.warning("%s URL=%s", error_message, post_url)
@@ -822,6 +848,7 @@ def unfollow_account(
                 arg={"follow": FOLLOW_BUTTON_SELECTOR, "unfollow": UNFOLLOW_BUTTON_SELECTOR},
                 timeout=ACTION_STATE_TIMEOUT_MS,
             ),
+            page=page,
         )
         if error_message is not None:
             return fail(error_message)

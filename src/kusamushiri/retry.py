@@ -117,6 +117,7 @@ def _run_post_actions(
     seen: dict[str, PostActionResult] = {}
     waited = 0.0
     cooldowns = 0
+    fallback_cooldowns = 0
     paced = False
     completed_since_pause = 0
     pending: PostActionResult | None = None
@@ -174,17 +175,23 @@ def _run_post_actions(
                 header_key = key
                 fallback_header_deadline = (key[1] or now) + after
             until = fallback_header_deadline
-        deadline = max(now + policy.cooldown_delay(ordinal), until, pending_after_deadline)
+        server_deadline = max(until, pending_after_deadline)
+        deadline = server_deadline if policy.wait_limit_mode == "per-wait" and server_deadline > now else max(now + policy.cooldown_delay(ordinal), server_deadline)
         reason = limit_reason()
         suspend(deadline, reason)
         return deadline, reason
+
+    def protected_until() -> float:
+        return max(number("rate_limit_retry_until"), number("rate_limit_pace_until"),
+                   journal.cooldown_until if journal is not None else 0.0)
 
     def pause(
         seconds: float, ordinal: int, limit: int, reason: str, *, proactive: bool = False, rate_floor: float = 0.0
     ) -> bool:
         nonlocal waited, paced
         started = time.time()
-        deadline = max(started + seconds, journal.cooldown_until if journal is not None else 0.0)
+        scheduled = started + seconds
+        deadline = max(scheduled, protected_until())
         generation = number("rate_limit_generation")
         while True:
             suspend(deadline, reason)
@@ -193,27 +200,27 @@ def _run_post_actions(
             observed = number("rate_limit_generation")
             if observed != generation:
                 generation = observed
-                deadline = max(
-                    deadline,
-                    number("rate_limit_retry_until"),
-                    number("rate_limit_seen_at") + (rate_floor or policy.cooldown_delay_seconds),
-                )
+                server_deadline = number("rate_limit_retry_until")
+                floor = server_deadline if policy.wait_limit_mode == "per-wait" and server_deadline > time.time() else number("rate_limit_seen_at") + (rate_floor or policy.cooldown_delay_seconds)
+                deadline = max(deadline, server_deadline, floor)
             if core.rate_limit_status is not None:
                 paced = True
                 reason = limit_reason()
                 deadline = max(deadline, number("rate_limit_retry_until"))
+            deadline = max(deadline, protected_until())
             remaining = max(0.0, deadline - time.time())
-            charge = not proactive or core.rate_limit_status is not None
+            charge = not proactive or core.rate_limit_status is not None or protected_until() > scheduled
             if core.rate_limit_status is not None and policy.max_cooldowns == 0:
                 _state.reason = "cooldown_limit"
                 suspend(deadline, reason)
                 emit(tr("通信休止の上限に達したため停止します。未送信の項目は未処理で保持します。"))
                 core.request_cancel()
                 return False
-            if charge and waited + max(0.0, time.time() - started) + remaining > policy.max_wait_seconds:
-                _state.reason = "wait_limit"
+            required = waited + max(0.0, time.time() - started) + remaining if policy.wait_limit_mode == "total" else remaining
+            if charge and required > policy.max_wait_seconds:
+                _state.reason = "wait_limit" if policy.wait_limit_mode == "total" else "single_wait_limit"
                 suspend(deadline, reason)
-                emit(tr("再試行の待機上限に達しました。処理を停止します。"))
+                emit(tr("1回の必要待機が設定上限を超えました。期限を保持して停止します。") if policy.wait_limit_mode == "per-wait" else tr("再試行の待機上限に達しました。処理を停止します。"))
                 core.request_cancel()
                 return False
             suspend(deadline, reason)
@@ -239,49 +246,62 @@ def _run_post_actions(
                     )
                 )
             if core.is_cancel_requested() or (remaining > 0 and wait(remaining)) or core.is_cancel_requested():
+                deadline = max(deadline, protected_until())
+                suspend(deadline, reason)
                 _state.reason = "cancelled"
                 if charge:
                     _state.waited = waited + max(0.0, time.time() - started)
                 core.request_cancel()
                 return False
             pump()
-            if number("rate_limit_generation") != generation or number("rate_limit_retry_until") > deadline:
+            latest = protected_until()
+            if number("rate_limit_generation") != generation or latest > deadline:
+                deadline = max(deadline, latest)
                 continue
             if time.time() < deadline:
                 # A fake clock must advance with waits; production uses monotonic
                 # cancellable waits and checks the persisted wall-clock deadline.
                 continue
+            if journal is not None:
+                # No future server/predicted/persisted deadline may be erased on resume.
+                latest = max(protected_until(), number("isolated_rate_limit_deadline"))
+                if latest > time.time():
+                    deadline = max(deadline, latest)
+                    continue
+                journal.defer_until(0.0)
+            if core.rate_limit_status is None:
+                resume()
+                latest = protected_until()
+                if latest > time.time() or core.rate_limit_status is not None:
+                    deadline = max(deadline, latest)
+                    continue
             if charge:
                 waited += max(0.0, time.time() - started)
                 _state.waited = waited
-            if journal is not None:
-                # A quarantine during this wait persisted a later deadline; keep it on disk.
-                isolated = number("isolated_rate_limit_deadline")
-                if isolated > time.time():
-                    journal.persist_isolated_deadline(isolated)
-                else:
-                    journal.defer_until(0.0)
-            if core.rate_limit_status is None:
-                resume()
             return True
 
     def cool_down() -> bool:
-        nonlocal cooldowns, pending, paced, pending_after_deadline, header_key
+        nonlocal cooldowns, fallback_cooldowns, pending, paced, pending_after_deadline, header_key
         cooldowns += 1
-        _state.cooldowns = min(cooldowns, policy.max_cooldowns)
+        server_directed = max(number("rate_limit_retry_until"), pending_after_deadline) > time.time() or number("rate_limit_retry_after") > 0
+        bounded = policy.wait_limit_mode == "total" or not server_directed
+        if bounded:
+            fallback_cooldowns += 1
+        ordinal = fallback_cooldowns if bounded else 1
+        _state.cooldowns = cooldowns
         paced = True
-        deadline, reason = preserve_limit(cooldowns)
-        if cooldowns > policy.max_cooldowns:
+        deadline, reason = preserve_limit(max(1, ordinal))
+        if policy.max_cooldowns == 0 or bounded and fallback_cooldowns > policy.max_cooldowns:
             _state.reason = "cooldown_limit"
             emit(tr("通信休止の上限に達したため停止します。未送信の項目は未処理で保持します。"))
             core.request_cancel()
             return False
         if not pause(
             max(0.0, deadline - time.time()),
-            cooldowns,
-            policy.max_cooldowns,
+            fallback_cooldowns if bounded else 0,
+            policy.max_cooldowns if bounded else 0,
             reason,
-            rate_floor=policy.cooldown_delay(cooldowns),
+            rate_floor=policy.cooldown_delay(max(1, ordinal)),
         ):
             return False
         if core.rate_limit_status is not None:
@@ -297,28 +317,43 @@ def _run_post_actions(
         return not core.is_cancel_requested()
 
     @contextmanager
-    def preserve_isolated_deadline():
+    def preserve_action_deadline():
         try:
             yield
         finally:
-            deadline = number("isolated_rate_limit_deadline")
+            deadline = max(protected_until(), number("isolated_rate_limit_deadline"))
             if deadline > time.time():
-                deadline = max(deadline, number("rate_limit_retry_until"))
                 # Observation-time storage handles abrupt exit; this cleanup also
                 # suspends the context on orderly exits. No unperformed wait is charged.
                 if journal is not None:
                     deadline = max(deadline, journal.cooldown_until)
                 try:
-                    suspend(deadline, tr("周辺通信の休止期限を保持"))
+                    suspend(deadline, journal.cooldown_reason if journal is not None and journal.cooldown_reason else tr("周辺通信の休止期限を保持"))
                 except Exception:
                     core.request_cancel()
                     raise RuntimeError("Unable to retain the action deadline; further actions are stopped.") from None
 
     scope = getattr(core, "post_action_retry_scope", nullcontext)
     bind_journal = getattr(core, "post_action_journal_scope", lambda _: nullcontext())
-    with journal if journal is not None else nullcontext(), bind_journal(journal), scope(), preserve_isolated_deadline():
+    @contextmanager
+    def persist_stop():
+        try:
+            yield
+        except BaseException:
+            if journal is not None and not journal._retain_lock:
+                journal.record_stop("interrupted")
+            raise
+        else:
+            if journal is not None and not journal._retain_lock:
+                reason = _state.reason
+                if reason == "completed" and len(results) < len(targets):
+                    reason = "cancelled"
+                journal.record_stop(reason)
+
+    with journal if journal is not None else nullcontext(), bind_journal(journal), scope(), persist_stop(), preserve_action_deadline():
         if journal is not None:
             completed_since_pause = journal.completed_since_pause
+            paced = journal.cooldown_until > 0
             if journal.cooldown_until > time.time():
                 paced = True
                 if not pause(
@@ -349,9 +384,10 @@ def _run_post_actions(
                 )
             else:
                 pace = number("rate_limit_pace_until") - time.time()
-                # A predicted reset never stops the batch; over budget, a real 429 decides.
-                if (0 < pace <= policy.max_wait_seconds - waited and core.rate_limit_status is None
-                        and policy.max_cooldowns > 0):
+                # Per-wait mode never sends the next target read before its known reset.
+                # Legacy total mode retains its previous optional prediction behavior.
+                eligible = policy.wait_limit_mode == "per-wait" or pace <= policy.max_wait_seconds - waited
+                if pace > 0 and eligible and core.rate_limit_status is None and policy.max_cooldowns > 0:
                     paced = True
                     if not pause(pace, 0, 0, tr("利用枠の残りが少ないため先回り休止")):
                         break
@@ -510,7 +546,7 @@ def run_post_actions(
             state.reason = "cancelled"
         report = summary()
         reason_labels = {"completed": tr("完了"), "cancelled": tr("中止"), "cooldown_limit": tr("通信休止の上限"),
-                         "wait_limit": tr("総待機の上限"), "retry_limit": tr("安全な再試行の上限"), "auth": tr("認証・アカウント制限"),
+                         "wait_limit": tr("総待機の上限"), "single_wait_limit": tr("1回の待機上限"), "retry_limit": tr("安全な再試行の上限"), "auth": tr("認証・アカウント制限"),
                          "ambiguous": tr("結果不明"), "permanent": tr("恒久エラー"), "unexpected_error": tr("予期しないエラー"),
                          "storage_error": tr("実行記録の保存エラー"), "view_changed": tr("対象表示の変化"),
                          "blocked": tr("通信拒否（認証原因は未確認）"), "held_receipt": tr("保存済みの保留記録（今回の通信結果ではありません）")}

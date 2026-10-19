@@ -11,10 +11,16 @@ DEFAULT_LANGUAGE: Final = "ja"
 LANGUAGE_NAMES: Final = {"ja": "日本語", "en": "English"}
 
 ENGLISH: Final[dict[str, str]] = {
+    "保存済みの期限まで {seconds:.1f} 秒、ブラウザを開かず待機します。Ctrl+C で中止できます。": "Waiting {seconds:.1f}s before opening the browser to honor the saved deadline. Ctrl+C cancels.",
+    "新しい操作を止めます。送信済みの操作は結果確認後に停止します（もう一度 Ctrl+C で即中断・結果不明として保持）。": "Stopping new actions and recording the submitted action result (press Ctrl+C again to abort and hold the uncertain outcome).",
     "保存済みの保留記録（今回の通信結果ではありません）": "saved held receipt (not a current HTTP observation)",
     "通信拒否（認証原因は未確認）": "request blocked (authentication cause unconfirmed)",
     "HTTP {status} の通信拒否で停止しました。認証原因は未確認です。diagnostics --summary で通信先と理由を確認してください。": "Stopped on HTTP {status}. Its authentication cause is unconfirmed; inspect the endpoint and evidence with diagnostics --summary.",
     '中止': 'cancelled',
+    '1回の必要待機が設定上限を超えました。期限を保持して停止します。': 'One required wait exceeds the configured cap. Stopping with the deadline retained.',
+    '1回の待機上限': 'single wait limit',
+    '1回の待機上限（秒）': 'Maximum single wait (s)',
+    'サーバー指定なしの休止回数': 'Fallback cooldown count',
     '総待機の上限': 'total wait limit',
     '安全な再試行の上限': 'safe retry limit',
     '認証・アカウント制限': 'authentication/account restriction',
@@ -51,7 +57,6 @@ ENGLISH: Final[dict[str, str]] = {
     '再試行上限': 'Retry limit',
     '再試行の初期待機（秒）': 'Initial retry wait (s)',
     '待機増加の上限（秒）': 'Backoff cap (s)',
-    '再試行の総待機上限（秒）': 'Total retry wait budget (s)',
     '定期休止の完了件数（0で無効）': 'Pause every completed items (0 disables)',
     '定期休止（秒）': 'Scheduled pause (s)',
     '詳細を確認してください。安全に再試行できる失敗だけ再試行します。結果不明・認証・恒久エラーは実行記録で保留します。': 'Review the details. Only safe failures can be retried; uncertain, authentication and permanent errors are held in the action journal.',
@@ -456,9 +461,6 @@ ENGLISH: Final[dict[str, str]] = {
     "ログインしています。": "Logged in.",
     "ログイン中のアカウントを判別できませんでした。--user を指定してください。": (
         "Could not tell the logged-in account; pass --user."
-    ),
-    "現在の項目が終わったら停止します（もう一度 Ctrl+C で即中断）。": (
-        "Stopping after the current item (press Ctrl+C again to abort)."
     ),
     "中断しました。": "Interrupted.",
     "kusamushiri-cli: 中断しました。": "kusamushiri-cli: aborted.",

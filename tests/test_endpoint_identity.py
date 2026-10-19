@@ -177,7 +177,8 @@ def test_known_public_or_unavailable_unknown429_preserves_exact_finite_cooldown_
         return False
 
     policy = replace(RetryPolicy(), cooldown_delay_seconds=30, max_delay_seconds=60,
-                     initial_delay_seconds=15, max_wait_seconds=300, ancillary_rate_limit_mode=mode)
+                     initial_delay_seconds=15, max_wait_seconds=300, ancillary_rate_limit_mode=mode,
+                     wait_limit_mode="total")
     journal = ActionJournal(tmp_path / "receipts.json", "synthetic")
     assert run_post_actions(core, [target()], 0, policy, journal=journal, wait_for_cancel=wait) == []
     assert active_states == [mode == "isolate-known"] * 4

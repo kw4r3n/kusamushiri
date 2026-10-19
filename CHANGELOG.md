@@ -5,6 +5,17 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Default retry/cooldown limits now apply to each wait, without adding earlier waits. Valid server
+  deadlines are never shortened and do not exhaust the fallback cooldown count; explicit
+  `wait_limit_mode = "total"` preserves the previous cumulative behavior.
+- Add offline `progress`, guarded dead-owner `recover`, manually verified `resolve`, and
+  `resume LIST --expected-viewer ACCOUNT`. Resume waits before opening Chromium, skips successes,
+  rechecks the account before mutation, and holds uncertain receipts. SIGTERM follows the same
+  safe-stop path as the first Ctrl+C; abrupt interruption remains conservative.
+- Recheck predicted and durable deadlines after event dispatch and reconnection, bind/check
+  the verified journal account for ordinary CLI/GUI batches too, mark submission only after
+  the final cancellation guard, and use crash-released POSIX advisory recovery exclusion.
+
 - Experimental `--traffic-policy` / `[delete].traffic_policy` (`off` default, `report`, `enforce`):
   a name-based allowlist for post-action batches. `report` records a sanitized `traffic_decision`
   event per request (host class, rule, public identity); `enforce` aborts unlisted requests, admits a
