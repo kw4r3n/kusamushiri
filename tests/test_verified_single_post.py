@@ -210,6 +210,7 @@ def test_inflight_receipt_and_duplicate_attempt_never_submit(live_shape, tmp_pat
     core, _, page = live_shape
     path = tmp_path / "receipt.json"
     with ActionJournal(path, "synthetic") as journal:
+        journal.bind_viewer("author")
         journal.record(TARGET, "inflight")
     result = execute(live_shape, path)[0]
     assert result.failure_kind == "ambiguous" and result.attempts == 0 and page.submissions == 0

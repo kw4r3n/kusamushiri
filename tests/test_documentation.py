@@ -18,7 +18,7 @@ def test_documented_settings_cover_schema_defaults_and_loadable_examples(filenam
     text = (ROOT / filename).read_text()
     defaults = {name: getattr(RetryPolicy(), attribute) for name, attribute, *_ in cli.RETRY_ARGUMENTS}
     defaults.update(interval=DEFAULT_ACTION_INTERVAL_SECONDS, confirm=True)
-    defaults.update(ancillary_rate_limit_mode=RetryPolicy().ancillary_rate_limit_mode)
+    defaults.update(ancillary_rate_limit_mode=RetryPolicy().ancillary_rate_limit_mode, wait_limit_mode=RetryPolicy().wait_limit_mode)
     for key, value in defaults.items():
         row = next(line for line in text.splitlines() if line.startswith(f"| `{key}` |"))
         expected = "true" if value is True else value if isinstance(value, str) else f"{value:g}"

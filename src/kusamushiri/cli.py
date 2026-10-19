@@ -13,6 +13,7 @@ import math
 import re
 import signal
 import sys
+import threading
 import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import ExitStack, contextmanager, nullcontext, suppress
@@ -53,6 +54,7 @@ from kusamushiri.models import (
 from kusamushiri.network_diagnostics import diagnostic_excerpt, diagnostic_summary
 from kusamushiri.parsing import extract_post_author_username, extract_post_id
 from kusamushiri.paths import (
+    account_profile_path,
     configure_frozen_browser_path,
     get_account_profile_dir,
     migrate_legacy_app_data,
@@ -290,9 +292,9 @@ def browser_session(
             raise KeyboardInterrupt
         core.request_cancel()
         _end_progress()
-        _info(tr("現在の項目が終わったら停止します（もう一度 Ctrl+C で即中断）。"))
+        _info(tr("新しい操作を止めます。送信済みの操作は結果確認後に停止します（もう一度 Ctrl+C で即中断・結果不明として保持）。"))
 
-    previous_handler = signal.signal(signal.SIGINT, on_interrupt)
+    previous_handlers = {sig: signal.signal(sig, on_interrupt) for sig in (signal.SIGINT, signal.SIGTERM)}
     try:
         _info(tr("ブラウザを起動しています…（初回は Chromium のダウンロードに数分かかることがあります）"))
         core.start_browser(account_name=profile)
@@ -304,7 +306,8 @@ def browser_session(
             raise CliError(not_logged_in_message or _not_logged_in_message(profile))
         yield core
     finally:
-        signal.signal(signal.SIGINT, previous_handler)
+        for sig, handler in previous_handlers.items():
+            signal.signal(sig, handler)
         if core.rate_limit_status is not None:
             _end_progress()
             _info(rate_limit_message(core.rate_limit_status))
@@ -444,7 +447,7 @@ def _execute_post_actions(
     try:
         policy = retry_policy or RetryPolicy()
         identity_scope = nullcontext()
-        if len(targets) == 1 and targets[0].kind == "post":
+        if len(targets) == 1 and targets[0].kind == "post" and getattr(core, "resume_viewer", None) is None:
             viewer = expected_viewer or extract_post_author_username(targets[0].url)
             if not viewer:
                 raise TargetReadStopError("account_unmatched")
@@ -543,10 +546,10 @@ RETRY_ARGUMENTS = (
     ("max_retries", "max_retries", int, "additional safe action retries per item (0..20); unsent rate-limit deferrals do not count"),
     ("retry_delay", "initial_delay_seconds", float, "initial retry wait in seconds"),
     ("retry_max_delay", "max_delay_seconds", float, "backoff cap in seconds; never shortens Retry-After"),
-    ("retry_max_wait", "max_wait_seconds", float, "total retry/cooldown/saved-wait budget per run in seconds; ordinary item spacing and rate-free proactive pauses are excluded"),
+    ("retry_max_wait", "max_wait_seconds", float, "maximum seconds for ONE required wait (default); --wait-limit-mode total restores the legacy cumulative budget"),
     ("batch_size", "batch_size", int, "confirmed new successes between proactive pauses (0 disables)"),
     ("batch_pause", "batch_pause_seconds", float, "proactive pause in seconds; not a known optimal X window"),
-    ("max_cooldowns", "max_cooldowns", int, "rate-limit cooldowns across the whole batch (0..20); successful recovery does not reset this count"),
+    ("max_cooldowns", "max_cooldowns", int, "fallback cooldown limit (0..20); per-wait mode exempts server-directed waits; 0 disables all automatic cooldowns"),
     ("cooldown_delay", "cooldown_delay_seconds", float, "initial rate-limit quiet cooldown in seconds"),
     ("rate_limit_interval", "rate_limit_interval_seconds", float, "minimum seconds between items for the rest of a run after a rate limit"),
 )
@@ -562,6 +565,9 @@ def _retry_policy_from_args(args: argparse.Namespace, defaults: RetryPolicy | No
         for name, attribute, _kind, _help in RETRY_ARGUMENTS
         if getattr(args, name, None) is not None
     }
+    wait_mode = getattr(args, "wait_limit_mode", None)
+    if wait_mode is not None:
+        overrides["wait_limit_mode"] = wait_mode
     mode = getattr(args, "ancillary_rate_limit_mode", None)
     if mode is not None:
         overrides["ancillary_rate_limit_mode"] = mode
@@ -580,6 +586,9 @@ def _add_retry_args(parser: argparse.ArgumentParser, *, recipe_overrides: bool =
         parser.add_argument("--" + name.replace("_", "-"), type=kind,
                             default=None if recipe_overrides else value,
                             help=f"{description} ({note})" if name == "retry_max_wait" else argparse.SUPPRESS)
+    parser.add_argument("--wait-limit-mode", choices=("per-wait", "total"),
+                        default=None if recipe_overrides else "per-wait",
+                        help="per-wait: compare each required wait with --retry-max-wait; total: legacy cumulative budget")
     parser.add_argument("--ancillary-rate-limit-mode", choices=("global", "isolate-known"),
                         default=None if recipe_overrides else "global",
                         help="global (safe default) or isolate-known: quarantine exact ViewerBadgeCounts/CreatorStudioTabBarItemQuery/account settings/fleetline GETs; "
@@ -609,6 +618,75 @@ def _delete_tuning_from_args(args: argparse.Namespace) -> DeleteOptions:
                          retry_policy=_retry_policy_from_args(args, defaults.retry_policy))
 
 
+def _numeric_post_id(value: str) -> str:
+    if not value.isascii() or not value.isdecimal():
+        raise argparse.ArgumentTypeError("post ID must contain ASCII digits only")
+    return value
+
+
+def _profile_journal(profile: str | None) -> ActionJournal:
+    return ActionJournal(account_profile_path(profile) / "action-progress.json", normalize_account_name(profile))
+
+
+def cmd_progress(args: argparse.Namespace) -> int:
+    print(json.dumps(_profile_journal(args.profile).status(), ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_recover(args: argparse.Namespace) -> int:
+    _confirm("停止済みプロセスのロックを検査・復旧しますか？結果不明の操作は再送可能にしません。", args.yes)
+    _profile_journal(args.profile).recover_lock()
+    _info("停止済みの所有者のロックを解除しました。progress で状態を確認してください。")
+    return 0
+
+
+def cmd_resolve(args: argparse.Namespace) -> int:
+    journal = _profile_journal(args.profile)
+    key = f"{args.kind}:{args.post_id}"
+    _confirm("X で確認した操作結果を記録しますか？このコマンドは削除を実行しません。", args.yes)
+    with journal:
+        if journal.entries.get(key) not in {"inflight", "ambiguous", "auth", "blocked", "permanent"}:
+            raise CliError("Only an existing held receipt can be resolved.", EXIT_USAGE)
+        target = PostActionTarget(f"https://x.com/verified/status/{args.post_id}", args.kind)
+        journal.record(target, "success" if args.verified_applied else "pending", count_completion=False)
+        journal.record_stop("manually_resolved")
+    _info("確認結果を保存しました。サーバーの待機期限は保持しています。")
+    return 0
+
+
+def _prepare_resume(args: argparse.Namespace, targets: Sequence[PostActionTarget], policy: RetryPolicy) -> None:
+    journal = _profile_journal(args.profile)
+    cancelled = threading.Event()
+
+    def stop(_signum: int, _frame: FrameType | None) -> None:
+        if cancelled.is_set():
+            raise KeyboardInterrupt
+        cancelled.set()
+
+    handlers = {sig: signal.signal(sig, stop) for sig in (signal.SIGINT, signal.SIGTERM)}
+    try:
+        with journal:
+            if journal.viewer is not None and journal.viewer.casefold() != args.expected_viewer.casefold():
+                raise CliError("Resume viewer does not match the journal account.", EXIT_USAGE)
+            if any(state in {"inflight", "ambiguous"} for state in journal.entries.values()) or any(
+                journal.entries.get(ActionJournal.key(target)) in {"auth", "blocked", "permanent"} for target in targets
+            ):
+                raise CliError("Unresolved receipts: inspect progress, verify on X, then use resolve. Nothing was sent.")
+            if any(target.kind == "post" and (extract_post_author_username(target.url) or "").casefold() != args.expected_viewer.casefold() for target in targets):
+                raise CliError("Resume includes an own-post target belonging to another account.", EXIT_USAGE)
+            remaining = journal.cooldown_until - time.time()
+            if 0 < remaining <= policy.max_wait_seconds:
+                _info(tr("保存済みの期限まで {seconds:.1f} 秒、ブラウザを開かず待機します。Ctrl+C で中止できます。", seconds=remaining))
+            journal.wait_before_browser(policy.max_wait_seconds, cancelled.wait)
+            if cancelled.is_set():
+                raise InterruptedError("Resume cancelled")
+    except InterruptedError as error:
+        raise CliError(str(error), EXIT_INTERRUPTED) from None
+    finally:
+        for sig, handler in handlers.items():
+            signal.signal(sig, handler)
+
+
 def cmd_delete(args: argparse.Namespace) -> int:
     options = _delete_tuning_from_args(args)
     try:
@@ -618,7 +696,14 @@ def cmd_delete(args: argparse.Namespace) -> int:
     rows = read_rows(args.file)
     targets = _post_action_request(post_targets_from_rows(rows), options.interval).targets
     expected_viewer = getattr(args, "expected_viewer", None)
-    if expected_viewer is not None and (
+    if args.command == "resume":
+        journal = _profile_journal(args.profile)
+        journal._load()
+        expected_viewer = expected_viewer or journal.viewer
+        if not isinstance(expected_viewer, str) or re.fullmatch(r"[A-Za-z0-9_]{1,15}", expected_viewer) is None:
+            raise CliError("resume requires --expected-viewer ACCOUNT (or a journal with a saved viewer).", EXIT_USAGE)
+        args.expected_viewer = expected_viewer
+    if args.command != "resume" and expected_viewer is not None and (
         len(targets) != 1 or targets[0].kind != "post"
         or re.fullmatch(r"[A-Za-z0-9_]{1,15}", expected_viewer) is None
         or (extract_post_author_username(targets[0].url) or "").casefold() != expected_viewer.casefold()
@@ -632,8 +717,12 @@ def cmd_delete(args: argparse.Namespace) -> int:
     _confirm(
         tr("{path} の {count} 件を削除/解除しますか？元に戻せません。", path=args.file, count=len(targets)), args.yes
     )
+    if args.command == "resume":
+        _prepare_resume(args, targets, options.retry_policy)
     extra: _SessionOptions = {"retry_policy": options.retry_policy} if _needs_action_context(options.retry_policy) else {}
     with browser_session(args.profile, headless=args.headless, **extra) as core:
+        if args.command == "resume":
+            core.resume_viewer = expected_viewer
         results = _execute_post_actions(core, targets, options.interval, args.profile, options.retry_policy, expected_viewer)
         cancelled = core.is_cancel_requested()
     return _report_post_actions(results, len(targets), cancelled, rows, args.failed_output, execution_error=_execution_failed(core))
@@ -797,7 +886,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         recipe = load_recipe(args.recipe)
     except RecipeError as error:
         raise CliError(str(error), EXIT_USAGE) from error
-    has_overrides = getattr(args, "interval", None) is not None or any(getattr(args, name, None) is not None for name, *_rest in RETRY_ARGUMENTS)
+    has_overrides = getattr(args, "wait_limit_mode", None) is not None or getattr(args, "interval", None) is not None or any(getattr(args, name, None) is not None for name, *_rest in RETRY_ARGUMENTS)
     if has_overrides:
         if recipe.delete is None:
             raise CliError("Retry/batch overrides require an existing [delete] table; no deletion was enabled.", EXIT_USAGE)
@@ -1018,7 +1107,7 @@ def build_parser() -> argparse.ArgumentParser:
     update.set_defaults(handler=cmd_update_recipe)
 
     run = commands.add_parser("run", help="collect, review and delete as a saved recipe (TOML) says",
-                              epilog="Flags override TOML for this invocation without rewriting it or safety deadlines. No --dry-run here: preview a reviewed list with delete LIST --recipe FILE --dry-run.")
+                              epilog="Flags override TOML for this invocation without rewriting it or saved safety deadlines. No --dry-run here: preview a reviewed list with delete LIST --recipe FILE --dry-run.")
     run.add_argument("recipe", type=Path, nargs="?", default=Path(DEFAULT_RECIPE_NAME), help="default: %(default)s")
     run.add_argument("--interval", type=_non_negative_float, default=None,
                      help="override [delete].interval in seconds for this invocation; otherwise keep the recipe value")
@@ -1053,7 +1142,7 @@ def build_parser() -> argparse.ArgumentParser:
     archive.add_argument("-o", "--output", type=_output_path, required=True, help="output .csv or .json")
     archive.set_defaults(handler=cmd_archive)
 
-    delete = commands.add_parser("delete", help="delete posts, undo reposts or remove likes listed in a file",
+    delete = commands.add_parser("delete", aliases=["resume"], help="delete posts, undo reposts or remove likes listed in a file",
                                  epilog="Tuning precedence: explicit CLI flag > optional --recipe [delete] value > default. Saved safety deadlines still apply. --dry-run opens no browser and changes no account data.")
     delete.add_argument("file", type=Path, help="CSV/JSON from collect, archive or the GUI (needs url and kind)")
     _add_browser_args(delete)
@@ -1069,6 +1158,23 @@ def build_parser() -> argparse.ArgumentParser:
     delete.add_argument("--failed-output", type=_output_path, help="write failed and unprocessed rows; recorded unsafe outcomes remain held")
     _add_retry_args(delete, recipe_overrides=True)
     delete.set_defaults(handler=cmd_delete)
+
+    progress = commands.add_parser("progress", help="inspect receipt counts, held outcomes and not-before deadline offline")
+    _add_profile_arg(progress)
+    progress.set_defaults(handler=cmd_progress)
+    recover = commands.add_parser("recover", help="recover only a provably dead local lock owner; never clear uncertain receipts/deadlines")
+    _add_profile_arg(recover)
+    _add_confirm_args(recover)
+    recover.set_defaults(handler=cmd_recover)
+    resolve = commands.add_parser("resolve", help="record a manually verified held outcome offline; never sends an action")
+    _add_profile_arg(resolve)
+    _add_confirm_args(resolve)
+    resolve.add_argument("--post-id", required=True, type=_numeric_post_id)
+    resolve.add_argument("--kind", choices=("post", "repost", "like"), default="post")
+    verification = resolve.add_mutually_exclusive_group(required=True)
+    verification.add_argument("--verified-applied", action="store_true")
+    verification.add_argument("--verified-not-applied", action="store_true")
+    resolve.set_defaults(handler=cmd_resolve)
 
     following = commands.add_parser("following", help="export the accounts you follow to a CSV/JSON file")
     _add_browser_args(following)
@@ -1119,7 +1225,7 @@ def _main(argv: Sequence[str] | None = None) -> int:
     if wizard and not sys.stdin.isatty():
         parser.print_help(sys.stderr)
         return EXIT_USAGE
-    if args.command not in {"update-recipe", "diagnostics"} and not getattr(args, "dry_run", False):
+    if args.command not in {"update-recipe", "diagnostics", "progress", "recover", "resolve"} and not getattr(args, "dry_run", False):
         if migrate_legacy_app_data():
             logger.info("Moved profiles from the previous xposdeleter data directory.")
         configure_frozen_browser_path()

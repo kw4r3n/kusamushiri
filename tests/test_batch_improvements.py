@@ -65,6 +65,9 @@ def scenario(monkeypatch):
     clock, events = Clock(), []
     monkeypatch.setattr("kusamushiri.retry.time.time", clock.wall)
     core, page, context = XDeleterCore(), ViewPage(), Context()
+    core.is_logged_in = lambda: True
+    core.get_logged_in_username = lambda: "tester"
+    core._action_viewer = "tester"
     trace = NetworkDiagnostics(sink=events.append, wall=clock.wall, monotonic=clock.monotonic)
     core._browser.diagnostics = trace
     core._browser.ancillary_isolation.diagnostics = trace
@@ -101,7 +104,7 @@ def test_known_unsent_retry_reuses_exact_idle_view_once(scenario, tmp_path):
     results = run_post_actions(core, [target()], 0, RetryPolicy(),
                                journal=ActionJournal(tmp_path / "receipt.json", "test"), wait_for_cancel=wait)
     assert results[0].success and len(page.navigations) == 1
-    assert waits == [120.0]  # Unchanged policy and full server/local deadline.
+    assert waits == [30.0]  # Per-wait mode uses the server deadline; fallback is only for missing headers.
     assert sum("confirmationSheetConfirm" in click for click in page.clicks) == 1
     assert sum(event["event"] == "view_reused" for event in events) == 1
     summary = core.last_action_batch_summary
@@ -137,7 +140,7 @@ def test_changed_view_stays_pending_without_reload_or_mutation(scenario, tmp_pat
 def test_unknown_429_keeps_finite_reload_limits_and_skips_reversible_menus(scenario, tmp_path):
     core, page, context, clock, events, emit = scenario
     page.on_navigate = lambda: emit("https://x.com/i/api/graphql/fixture/UserByScreenName")
-    policy = RetryPolicy(cooldown_delay_seconds=30, max_delay_seconds=60, initial_delay_seconds=15, max_wait_seconds=300)
+    policy = RetryPolicy(cooldown_delay_seconds=30, max_delay_seconds=60, initial_delay_seconds=15, max_wait_seconds=300, wait_limit_mode="total")
     waits = []
 
     def wait(seconds):

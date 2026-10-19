@@ -146,6 +146,10 @@ class XDeleterCore:
         self.rate_limit_family = "other"
         self.rate_limit_api_label = "unrecognized"
         self.last_action_batch_summary: dict[str, object] | None = None
+        self._action_journal: ActionJournal | None = None
+        self.resume_viewer: str | None = None
+        self._action_viewer: str | None = None
+        self._resume_page: Page | None = None
         # Also called on a rate limit, so a caller with its own cancellation stops too.
         self.on_rate_limited: Callable[[], None] | None = None
         self._browser.on_rate_limited = self._stop_on_rate_limit
@@ -185,8 +189,26 @@ class XDeleterCore:
     def post_action_journal_scope(self, journal: ActionJournal | None):
         isolation = self._browser.ancillary_isolation
         previous = isolation.persist_deadline
+        previous_journal = self._action_journal
+        previous_viewer = self._action_viewer
+        previous_page = self._resume_page
+        self._action_journal = journal
         isolation.persist_deadline = None
         try:
+            observed = self.get_logged_in_username()
+            if self.is_logged_in() is not True or not isinstance(observed, str) or re.fullmatch(r"[A-Za-z0-9_]{1,15}", observed) is None:
+                raise ValueError("Signed-in account could not be verified; no action was started")
+            verified = self._verified_post_action
+            explicit = self.resume_viewer or (verified.request.expected_viewer if verified is not None else None)
+            if journal is not None and journal.viewer is None and journal.entries and self.resume_viewer is None:
+                raise ValueError("Legacy journal account is unverified; use resume --expected-viewer ACCOUNT")
+            expected = explicit or (journal.viewer if journal is not None else None) or previous_viewer or observed
+            if expected.casefold() != observed.casefold():
+                raise ValueError("Journal/expected account does not match the signed-in account; no action was started")
+            self._action_viewer = expected
+            self._resume_page = self.page
+            if journal is not None:
+                journal.bind_viewer(expected)
             if journal is not None and self._post_action_policy.ancillary_rate_limit_mode == "isolate-known":
                 try:
                     journal.arm_isolation_storage()
@@ -198,6 +220,9 @@ class XDeleterCore:
             yield
         finally:
             isolation.persist_deadline = previous
+            self._action_journal = previous_journal
+            self._resume_page = previous_page
+            self._action_viewer = previous_viewer
 
     def is_action_rate_blocking(self, response: Response) -> bool:
         return not self._browser.ancillary_isolation.owns(response)
@@ -233,6 +258,19 @@ class XDeleterCore:
         reset = parse_rate_limit_reset(response.headers.get("x-rate-limit-reset"), now=self.rate_limit_seen_at)
         if reset is not None:
             self.rate_limit_retry_until = max(self.rate_limit_retry_until, self.rate_limit_seen_at + reset)
+        deadline = self.rate_limit_retry_until or self.rate_limit_seen_at + self._post_action_policy.cooldown_delay_seconds
+        try:
+            if self._action_journal is not None:
+                self._action_journal.persist_isolated_deadline(deadline)
+            elif self._browser.profile_dir is not None:
+                # A queued response may arrive during startup/closing, outside the batch scope.
+                profile = self._browser.profile_dir
+                with ActionJournal(profile / "action-progress.json", profile.name.removeprefix("chromium-profile-")) as saved:
+                    saved.persist_isolated_deadline(deadline)
+        except BaseException:
+            self.request_cancel()
+            self._browser.disable_action_network(deadline)
+            raise
         logger.warning("X rate limit: HTTP %s; role=%s endpoint=%s Retry-After seconds=%s reset seconds=%s; %s",
                        response.status, scope, endpoint, delay, None if reset is None else round(reset, 1),
                        "Cooling down" if self._defer_rate_limit_stop else "Stopping")
@@ -255,6 +293,13 @@ class XDeleterCore:
             return
         if reset is not None:
             self.rate_limit_pace_until = max(self.rate_limit_pace_until, now + reset)
+            if self._action_journal is not None:
+                try:
+                    self._action_journal.persist_isolated_deadline(self.rate_limit_pace_until)
+                except BaseException:
+                    self.request_cancel()
+                    self._browser.disable_action_network(self.rate_limit_pace_until)
+                    raise
 
     def request_cancel(self) -> None:
         self._pending_view = None
@@ -960,6 +1005,21 @@ class XDeleterCore:
             self._pending_view = None
             self._verified_post_action = None
 
+    def _resume_identity(self, target: PostActionTarget | None) -> bool:
+        expected = self._action_viewer or self.resume_viewer
+        if expected is None:
+            return False
+        page = self.page
+        if page is None or page.is_closed() or self._resume_page is not None and page is not self._resume_page:
+            return False
+        if not self.is_logged_in() or (self.get_logged_in_username() or "").casefold() != expected.casefold():
+            return False
+        if target is not None and target.kind == "post":
+            from kusamushiri.parsing import extract_post_author_username
+
+            return (extract_post_author_username(target.url) or "").casefold() == expected.casefold()
+        return True
+
     def execute_post_action(self, target: PostActionTarget) -> PostActionResult:
         verified = self._verified_post_action
         if verified is not None and not verified.begin(target):
@@ -990,7 +1050,7 @@ class XDeleterCore:
                                         isolated_dependency_failed=self._browser.ancillary_isolation.fail,
                                         isolation_pending=lambda: bool(self._browser.ancillary_isolation.deadlines),
                                         diagnostics=diagnostics, reuse_view=reuse, on_target_loaded=record_loaded,
-                                        identity_check=verified.can_submit if verified is not None else lambda: True,
+                                        identity_check=verified.can_submit if verified is not None else lambda: self._resume_identity(target),
                                         prepare_control=verified.prepare_control if verified is not None else lambda locator, _: locator.click)
             if traffic.enforcing and not result.success and not result.deferred and traffic.mutations == 0 \
                     and result.failure_kind not in {"auth", "ambiguous"}:
@@ -1004,14 +1064,22 @@ class XDeleterCore:
                 self._pending_view = PendingView.capture(page, target.url, loaded)
             return result
 
+    def _action_evidence(self, target: PostActionTarget) -> actions.ActionEvidence:
+        return actions.ActionEvidence(should_cancel=self.is_cancel_requested,
+                                      rate_limit_pending=lambda: self.rate_limit_status is not None,
+                                      identity_check=lambda: self._resume_identity(target))
+
     def undo_repost(self, post_url: str) -> tuple[bool, str | None]:
         page = self._browser._require_page()
-        return _undo_repost(page, post_url, find_locator=self._find_first_visible_locator)
+        return _undo_repost(page, post_url, find_locator=self._find_first_visible_locator,
+                            _evidence=self._action_evidence(PostActionTarget(post_url, "repost")))
 
     def unlike_post(self, post_url: str) -> tuple[bool, str | None]:
         page = self._browser._require_page()
-        return _unlike_post(page, post_url, find_locator=self._find_first_visible_locator)
+        return _unlike_post(page, post_url, find_locator=self._find_first_visible_locator,
+                            _evidence=self._action_evidence(PostActionTarget(post_url, "like")))
 
     def delete_post(self, post_url: str) -> tuple[bool, str | None]:
         page = self._browser._require_page()
-        return _delete_post(page, post_url, find_locator=self._find_first_visible_locator)
+        return _delete_post(page, post_url, find_locator=self._find_first_visible_locator,
+                            _evidence=self._action_evidence(PostActionTarget(post_url, "post")))

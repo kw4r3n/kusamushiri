@@ -212,20 +212,20 @@ kusamushiri-cli unfollow follows.csv --profile main --headless
   these labels describe request roles, not independent server quota buckets. Unknown limits are
   treated conservatively too. An ancillary limit never implies that the deletion API rejected an action.
 - A limit before the irreversible click leaves that item **pending/unprocessed**, without adding
-  a deletion failure or consuming action retries. Rate cooldowns have their own maximum of three
-  per run, starting at 120, 240 and 480 seconds. Actual safe action failures still have at most
+  a deletion failure or consuming action retries. In default `per-wait` mode, server-directed waits
+  repeat without consuming a cumulative budget or cooldown count. Only waits without a server
+  deadline have a maximum of three per run (120, 240, 480 seconds). Actual safe action failures still have at most
   three additional retries, starting at 60, 120 and 240 seconds. Persistent limits stop the run.
 - Long waits put the browser context offline so new polling requests cannot keep hitting X during
   the cooldown. Already-sent requests/queued callbacks can still arrive; callbacks are dispatched
   while waiting and newly observed `Retry-After` extends the deadline. Numeric seconds and HTTP
   dates are honored even beyond the 900-second backoff cap. If the next wait exceeds the
-  1,800-second retry/cooldown budget, the browser stays paused and the run stops. Routine item
+  1,800-second single-wait cap, the browser stays paused and the run stops. Routine item
   intervals and proactive batch pauses are excluded, unless a rate limit arrives during that pause.
 - X often omits `Retry-After`; a 429's `x-rate-limit-reset` epoch (up to 24 hours ahead) is then
   the same kind of floor, so the cooldown waits for the window instead of only doubling
   `cooldown_delay`. When a target read reports `x-rate-limit-remaining` of 0 or 1, the next item
-  waits for that reset first if it fits the remaining budget and cooldowns are enabled; this wait
-  counts toward the budget.
+  waits for that reset first if cooldowns are enabled, or stops with the deadline retained if it exceeds the single-wait cap. Separate waits are not added together.
 - After any rate limit or saved cooldown resume, the remaining item interval is at least 5 seconds (or the configured
   interval if longer). Successful in-flight deletions are recorded and never repeated.
 - Ctrl+C/the stop button cancels waits promptly. A cancelled/exhausted cooldown preserves the
@@ -256,11 +256,16 @@ explicit saved values are preserved, including values equal to the current defau
 No key is deprecated or silently migrated: action retries, batch pauses and global cooldowns
 serve different purposes. Generated templates omit defaults, and `update-recipe` / `--all`
 never add advanced defaults back. Existing files and their comments are not rewritten.
-`delete --help` / `run --help` show interval, total wait budget and ancillary mode; the other
-eight tuning flags remain accepted and are listed below. No preset or parallel tuning system is added.
+`delete --help` / `run --help` show interval, single-wait cap, wait-limit mode and ancillary mode; other
+tuning flags remain accepted and are listed below. No preset or parallel tuning system is added.
 
 <details>
 <summary>Advanced compatibility settings and safety behavior</summary>
+
+See [stop and resume](docs/stop-resume.md) for the offline inspection, recovery and resume commands.
+Existing numeric settings are preserved, but `retry_max_wait` now caps each wait by default.
+Use `[delete].wait_limit_mode = "total"` or `--wait-limit-mode total` for the old cumulative semantics.
+The GUI uses per-wait semantics. No user configuration is rewritten.
 
 ### Wait and retry settings
 
@@ -311,8 +316,8 @@ max_retries = 3          # actual safe action retries; does not include unsent 4
 retry_delay = 60.0
 retry_max_delay = 900.0  # never shortens Retry-After
 retry_max_wait = 1800.0
-max_cooldowns = 3        # independent rate-limit cooldown budget; 0 stops immediately on a limit
-cooldown_delay = 120.0   # doubles on recurring limits, up to the backoff cap
+max_cooldowns = 3        # fallback cooldown count; server-directed waits are exempt; 0 stops on a limit
+cooldown_delay = 120.0   # fallback without server headers; doubles up to the backoff cap
 rate_limit_interval = 5.0 # minimum item interval after the first limit in a run
 ancillary_rate_limit_mode = "global" # opt-in alternative: "isolate-known"
 ```
@@ -327,8 +332,9 @@ ancillary_rate_limit_mode = "global" # opt-in alternative: "isolate-known"
 | `max_retries` | `--max-retries` | additional safe action retries per item | 3 |
 | `retry_delay` | `--retry-delay` | seconds | 60 |
 | `retry_max_delay` | `--retry-max-delay` | seconds | 900 |
-| `retry_max_wait` | `--retry-max-wait` | seconds per batch | 1800 |
-| `max_cooldowns` | `--max-cooldowns` | rate cooldowns across the whole batch | 3 |
+| `retry_max_wait` | `--retry-max-wait` | maximum seconds for one required wait | 1800 |
+| `wait_limit_mode` | `--wait-limit-mode` | per-wait / total (legacy cumulative mode) | per-wait |
+| `max_cooldowns` | `--max-cooldowns` | fallback cooldowns without a server deadline | 3 |
 | `cooldown_delay` | `--cooldown-delay` | seconds | 120 |
 | `rate_limit_interval` | `--rate-limit-interval` | minimum item spacing in seconds | 5 |
 | `ancillary_rate_limit_mode` | `--ancillary-rate-limit-mode` | global / isolate-known | global |
@@ -412,9 +418,9 @@ because a missing dependency cannot be told apart from a real failure (an alread
 the session's traffic unlike a normal browser; how X treats that is unknown. It is not yet validated on a
 live account: record with `report` first, then try `enforce` on a few posts.
 
-`max_cooldowns` accumulates across the whole batch; successful recovery and further successes
+In default `per-wait` mode, `max_cooldowns` counts only waits without a server deadline; successful recovery and further successes
 do not reset it. `max_retries` counts safe action retries for each item; unsent rate deferrals
-do not consume that counter. Saved-wait resumes count toward `retry_max_wait`. Ordinary item
+do not consume that counter. Saved-wait resumes are checked against `retry_max_wait` separately. Ordinary item
 spacing and rate-free proactive pauses do not; a proactive pause that receives a rate limit does.
 `rate_limit_interval` is a floor: a configured longer interval is never shortened after a limit.
 
@@ -452,7 +458,7 @@ three cooldowns were already used; successful recovery did not reset the batch-w
 Item 67 was recorded as `pending`/unprocessed, not a failed or uncertain deletion. The earlier
 33-success stop involved repeated pre-submit deferrals; these totals do not establish quota independence.
 
-Read the exact logged reason: action retry exhaustion, cooldown count exhaustion and total wait
+Historical cumulative-mode records: action retry exhaustion, cooldown count exhaustion and total wait
 budget exhaustion are different stops. The default three cooldowns total 840 seconds, so count
 exhaustion can occur before the 1800-second budget. A saved future deadline can be the app's
 next backoff estimate when no usable `Retry-After` was received; it is not proof that X will clear

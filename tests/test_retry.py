@@ -631,6 +631,8 @@ class QuietContext:
 def make_quiet_core(monkeypatch):
     clock = FakeCore(monkeypatch)
     core = XDeleterCore()
+    core.is_logged_in = lambda: True
+    core.get_logged_in_username = lambda: "tester"
     context = QuietContext(clock)
     core._browser.context = context
 
@@ -989,6 +991,6 @@ def test_pauses_before_next_item_until_reset_within_wait_budget(monkeypatch, pac
         return PostActionResult(item, "delete", True, None)
 
     core.behavior = behavior
-    results = run_post_actions(core, [target(), target(2)], 0, RetryPolicy(max_cooldowns=cooldowns))
+    results = run_post_actions(core, [target(), target(2)], 0, RetryPolicy(max_cooldowns=cooldowns, wait_limit_mode="total"))
     assert [result.success for result in results] == [True, True]
     assert core.waits == waits and not core.cancelled

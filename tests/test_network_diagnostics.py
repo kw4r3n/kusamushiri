@@ -179,6 +179,9 @@ def test_outcome_does_not_assign_previous_operation_mutation_to_current(recorder
 def attach_action(page, recorder):
     trace, clock, events = recorder
     core = XDeleterCore()
+    core.is_logged_in = lambda: True
+    core.get_logged_in_username = lambda: "tester"
+    core._action_viewer = "tester"
     core._browser.diagnostics = trace
     core._browser.page = page
     core._find_first_visible_locator = lambda owner, selectors: owner.locator(selectors[0])
