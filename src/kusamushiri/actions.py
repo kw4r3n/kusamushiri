@@ -1,4 +1,5 @@
 import re
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import NoReturn
@@ -183,11 +184,14 @@ def _wait_for_mutation_result(
     requests: list[Request],
     mutation_name: str,
     wait_for_success: Callable[[], object],
+    *,
+    page: Page | None = None,
 ) -> str | None:
     """Return the mutation error, or None once the DOM confirms success.
 
     Local pages that never send the mutation keep the DOM-only behavior.
     """
+    deadline = time.monotonic() + ACTION_STATE_TIMEOUT_MS / 1000
     try:
         wait_for_success()
     except PlaywrightTimeoutError:
@@ -195,6 +199,15 @@ def _wait_for_mutation_result(
         if error_message is not None:
             return error_message
         raise
+    if page is not None:
+        # A DOM update can precede Playwright's requestfinished dispatch. Drain it
+        # within the same completion budget, never wait indefinitely in response().
+        page.wait_for_timeout(0)
+        while any(isinstance(request, Request) and request.timing.get("responseEnd", -1) < 0 for request in requests):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            page.wait_for_timeout(min(0.1, remaining) * 1000)
     return _mutation_error(requests, mutation_name)
 
 
@@ -615,6 +628,7 @@ def _toggle_off_post(
                 arg={"article": article_element, "owned": OWNED_NODE_XPATH, "undoId": undo_id, "doId": do_id},
                 timeout=ACTION_STATE_TIMEOUT_MS,
             ),
+            page=page,
         )
         if error_message is not None:
             logger.warning("%s URL=%s", error_message, post_url)
@@ -745,6 +759,7 @@ def delete_post(
                     arg=article_element,
                     timeout=ACTION_STATE_TIMEOUT_MS,
                 ),
+                page=page,
             )
             if error_message is not None:
                 logger.warning("%s URL=%s", error_message, post_url)
@@ -833,6 +848,7 @@ def unfollow_account(
                 arg={"follow": FOLLOW_BUTTON_SELECTOR, "unfollow": UNFOLLOW_BUTTON_SELECTOR},
                 timeout=ACTION_STATE_TIMEOUT_MS,
             ),
+            page=page,
         )
         if error_message is not None:
             return fail(error_message)

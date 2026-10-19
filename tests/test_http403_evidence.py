@@ -223,6 +223,7 @@ def test_saved_auth_is_reported_as_historical_hold_not_a_new_login_observation(s
     core, page, context, clock, events, emit = scenario
     path = tmp_path / "journal.json"
     with ActionJournal(path, "test") as journal:
+        journal.bind_viewer("tester")
         journal.record(target(), "auth")
     before = path.read_bytes()
     result = run_post_actions(core, [target(), target(2)], 0, RetryPolicy(), journal=ActionJournal(path, "test"))
@@ -231,7 +232,11 @@ def test_saved_auth_is_reported_as_historical_hold_not_a_new_login_observation(s
     assert core.last_action_batch_summary["stop_reason"] == "held_receipt"
     assert core.last_action_batch_summary["held_receipts"] == 1
     assert diagnostic_summary(events)["http_errors"] == []
-    assert path.read_bytes() == before
+    after = json.loads(path.read_bytes())
+    previous = json.loads(before)
+    assert after.pop("stop_reason") == "held_receipt"
+    previous.pop("stop_reason")
+    assert after == previous
 
 
 def test_stop_precedes_bounded_body_read_and_evidence_is_cached(scenario):

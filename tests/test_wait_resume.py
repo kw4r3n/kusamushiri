@@ -198,6 +198,44 @@ def test_unfinished_real_request_never_blocks_on_response():
     request.response.assert_not_called()
 
 
+@pytest.mark.parametrize("completes", [True, False])
+@pytest.mark.parametrize("dom_seconds", [0, 9.9])
+def test_receipt_completion_dispatch_uses_remaining_dom_budget(monkeypatch, completes, dom_seconds):
+    clock = [0.0]
+    monkeypatch.setattr(actions.time, "monotonic", lambda: clock[0])
+    request = Mock(spec=actions.Request)
+    request.url = "https://x.com/i/api/graphql/fixture/DeleteTweet"
+    request.method = "POST"
+    request.timing = {"responseEnd": -1}
+    response = Mock(status=200)
+    response.request = request
+    response.json.return_value = {}
+    request.response.return_value = response
+    request.failure = None
+    waits = []
+
+    def dispatch(milliseconds):
+        waits.append(milliseconds)
+        clock[0] += milliseconds / 1000
+        if completes:
+            request.timing["responseEnd"] = 1
+
+    page = Mock()
+    page.wait_for_timeout.side_effect = dispatch
+
+    def dom():
+        clock[0] += dom_seconds
+
+    error = actions._wait_for_mutation_result([request], actions.DELETE_POST_MUTATION, dom, page=page)
+    assert clock[0] <= 10.000001
+    if completes:
+        assert error is None
+        request.response.assert_called_once()
+    else:
+        assert error is not None and clock[0] == pytest.approx(10)
+        request.response.assert_not_called()
+
+
 def test_real_process_exit_recovery_never_clears_uncertain_receipt(tmp_path):
     if os.name != "posix":
         pytest.skip("Dead-owner recovery is POSIX-only")

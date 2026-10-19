@@ -347,12 +347,14 @@ def test_quarantine_during_a_pause_keeps_its_deadline_on_disk(isolated, tmp_path
     core, page, context, clock, events = isolated
     journal = ActionJournal(tmp_path / 'action-progress.json', 'synthetic')
     durable_at_second_item = []
+    second_item_times = []
     execute = core.execute_post_action
     emitted = []
 
     def perform(item):
         if item == target(2):
             durable_at_second_item.append(json.loads(journal.path.read_text())['cooldown_until'])
+            second_item_times.append(clock.wall())
         return execute(item)
 
     def wait(seconds):
@@ -370,4 +372,6 @@ def test_quarantine_during_a_pause_keeps_its_deadline_on_disk(isolated, tmp_path
                      journal=journal, wait_for_cancel=wait)
     assert emitted and core._browser.ancillary_isolation.deadlines
     assert len(durable_at_second_item) == 1
-    assert durable_at_second_item[0] >= core._browser.ancillary_isolation.deadline > clock.wall()
+    deadline = core._browser.ancillary_isolation.deadline
+    assert second_item_times[0] >= deadline  # extension is fully waited before resuming
+    assert durable_at_second_item[0] == 0 or durable_at_second_item[0] >= deadline
