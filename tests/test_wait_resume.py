@@ -12,6 +12,7 @@ import pytest
 from test_retry import ActionPage, FakeCore, target
 
 from kusamushiri import actions, cli
+from kusamushiri.browser import BrowserManager
 from kusamushiri.core import XDeleterCore
 from kusamushiri.models import PostActionResult, RetryPolicy
 from kusamushiri.progress import ActionJournal, _pid_namespace
@@ -149,6 +150,82 @@ def test_recovery_never_unlocks_unproven_owner(monkeypatch, tmp_path, state):
     with pytest.raises((ValueError, RuntimeError)):
         journal.recover_lock()
     assert journal._lock_path.exists()
+    if state != "legacy":
+        with pytest.raises((ValueError, RuntimeError)):
+            journal.recover_lock(legacy_owner_stopped=True)
+        assert journal._lock_path.exists()
+
+
+def test_empty_lock_recovery_requires_attestation_and_preserves_original(tmp_path):
+    journal = ActionJournal(tmp_path / "progress.json", "fixture")
+    with journal:
+        journal.record(target(), "success")
+        journal.defer_until(9999999999, "server")
+    original = journal.path.read_bytes()
+    journal._lock_path.touch()
+    inode = journal._lock_path.stat().st_ino
+    with pytest.raises(ValueError, match="legacy-owner-stopped"):
+        journal.recover_lock()
+    assert journal._lock_path.exists()
+    backup = journal.recover_lock(legacy_owner_stopped=True)
+    assert backup is not None and backup.stat().st_ino == inode and backup.read_bytes() == b""
+    assert not journal._lock_path.exists() and journal.path.read_bytes() == original
+    assert journal.viewer is None
+
+
+@pytest.mark.parametrize("invalid", ["journal", "symlink", "directory", "nonempty"])
+def test_legacy_attestation_does_not_bypass_invalid_storage(tmp_path, invalid):
+    journal = ActionJournal(tmp_path / "progress.json", "fixture")
+    journal._lock_path.touch()
+    if invalid == "journal":
+        journal.path.write_text("{}")
+    elif invalid == "symlink":
+        journal._lock_path.unlink()
+        journal.path.touch()
+        journal._lock_path.symlink_to(journal.path)
+    elif invalid == "directory":
+        journal._lock_path.unlink()
+        journal._lock_path.mkdir()
+    else:
+        journal._lock_path.write_text("not metadata")
+    with pytest.raises(ValueError):
+        journal.recover_lock(legacy_owner_stopped=True)
+    assert journal._lock_path.exists()
+    assert not list(tmp_path.glob("*.bak-legacy-*"))
+
+
+def test_changed_empty_lock_is_not_recovered(monkeypatch, tmp_path):
+    journal = ActionJournal(tmp_path / "progress.json", "fixture")
+    journal._lock_path.touch()
+    monkeypatch.setattr(journal, "_sync_directory", lambda: journal._lock_path.write_text("changed"))
+    with pytest.raises(RuntimeError, match="changed during recovery"):
+        journal.recover_lock(legacy_owner_stopped=True)
+    assert journal._lock_path.read_text() == "changed"
+    assert not list(tmp_path.glob("*.bak-legacy-*"))
+
+
+def test_cli_empty_lock_recovery_is_offline(monkeypatch, tmp_path):
+    monkeypatch.setattr(cli, "account_profile_path", lambda _: tmp_path)
+    monkeypatch.setattr(cli, "XDeleterCore", Mock(side_effect=AssertionError("must stay offline")))
+    lock = tmp_path / "action-progress.json.lock"
+    lock.touch()
+    assert cli.main(["recover", "--profile", "fixture", "--yes"]) != 0
+    assert lock.exists()
+    assert cli.main(["recover", "--profile", "fixture", "--legacy-owner-stopped", "--yes"]) == 0
+    assert len(list(tmp_path.glob("*.bak-legacy-*"))) == 1
+    assert not lock.exists()
+
+
+@pytest.mark.parametrize("failed", [False, True])
+def test_browser_start_distinguishes_lock_from_network_failure(monkeypatch, tmp_path, failed):
+    playwright = Mock(side_effect=AssertionError("must not start"))
+    monkeypatch.setattr("kusamushiri.browser.sync_playwright", playwright)
+    browser = BrowserManager()
+    browser.action_control_failed = failed
+    (tmp_path / "action-progress.json.lock").touch()
+    with pytest.raises(RuntimeError, match="network control failed" if failed else "journal lock exists"):
+        browser.start(user_data_dir=tmp_path)
+    playwright.assert_not_called()
 
 
 def test_resume_account_checks_before_each_submission(monkeypatch):

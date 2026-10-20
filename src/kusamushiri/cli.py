@@ -635,8 +635,11 @@ def cmd_progress(args: argparse.Namespace) -> int:
 
 def cmd_recover(args: argparse.Namespace) -> int:
     _confirm("停止済みプロセスのロックを検査・復旧しますか？結果不明の操作は再送可能にしません。", args.yes)
-    _profile_journal(args.profile).recover_lock()
-    _info("停止済みの所有者のロックを解除しました。progress で状態を確認してください。")
+    backup = _profile_journal(args.profile).recover_lock(legacy_owner_stopped=args.legacy_owner_stopped)
+    if backup is not None:
+        _info(tr("空ロックをバックアップ {path} に保存しました。実行記録・待機期限・アカウント情報は変更していません。", path=backup))
+    else:
+        _info("停止済みの所有者のロックを解除しました。progress で状態を確認してください。")
     return 0
 
 
@@ -1162,9 +1165,11 @@ def build_parser() -> argparse.ArgumentParser:
     progress = commands.add_parser("progress", help="inspect receipt counts, held outcomes and not-before deadline offline")
     _add_profile_arg(progress)
     progress.set_defaults(handler=cmd_progress)
-    recover = commands.add_parser("recover", help="recover only a provably dead local lock owner; never clear uncertain receipts/deadlines")
+    recover = commands.add_parser("recover", help="recover a dead local owner or explicitly stopped empty lock; preserve receipts/deadlines")
     _add_profile_arg(recover)
     _add_confirm_args(recover)
+    recover.add_argument("--legacy-owner-stopped", action="store_true",
+                         help="explicitly attest all jobs using this profile are stopped; back up an empty (legacy or interrupted) lock only")
     recover.set_defaults(handler=cmd_recover)
     resolve = commands.add_parser("resolve", help="record a manually verified held outcome offline; never sends an action")
     _add_profile_arg(resolve)
