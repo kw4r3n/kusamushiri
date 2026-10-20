@@ -1167,7 +1167,8 @@ def build_parser() -> argparse.ArgumentParser:
     progress.set_defaults(handler=cmd_progress)
     recover = commands.add_parser("recover", help="recover a dead local owner or explicitly stopped empty lock; preserve receipts/deadlines")
     _add_profile_arg(recover)
-    _add_confirm_args(recover)
+    # No --dry-run: recover has no preview mode, so argparse must reject it rather than silently act.
+    recover.add_argument("-y", "--yes", action="store_true", help="skip the confirmation prompt")
     recover.add_argument("--legacy-owner-stopped", action="store_true",
                          help="explicitly attest all jobs using this profile are stopped; back up an empty (legacy or interrupted) lock only")
     recover.set_defaults(handler=cmd_recover)

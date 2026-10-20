@@ -216,6 +216,17 @@ def test_cli_empty_lock_recovery_is_offline(monkeypatch, tmp_path):
     assert not lock.exists()
 
 
+def test_cli_recover_rejects_dry_run(monkeypatch, tmp_path):
+    monkeypatch.setattr(cli, "account_profile_path", lambda _: tmp_path)
+    lock = tmp_path / "action-progress.json.lock"
+    lock.touch()
+    with pytest.raises(SystemExit) as exit_info:
+        cli.main(["recover", "--profile", "fixture", "--legacy-owner-stopped", "--dry-run", "--yes"])
+    assert exit_info.value.code == 2
+    assert lock.exists()
+    assert not list(tmp_path.glob("*.bak-legacy-*"))
+
+
 @pytest.mark.parametrize("failed", [False, True])
 def test_browser_start_distinguishes_lock_from_network_failure(monkeypatch, tmp_path, failed):
     playwright = Mock(side_effect=AssertionError("must not start"))
