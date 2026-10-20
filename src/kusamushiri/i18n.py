@@ -35,6 +35,7 @@ ENGLISH: Final[dict[str, str]] = {
     '{reason}: {seconds:.1f} 秒休止。期限 {deadline}。通信を休止し、中止できます。': '{reason}: pausing {seconds:.1f}s until {deadline}. Networking is paused; cancellation is available.',
     '{reason}: {seconds:.1f} 秒休止（{current}/{limit}）。期限 {deadline}。通信を休止し、中止できます。': '{reason}: pausing {seconds:.1f}s ({current}/{limit}) until {deadline}. Networking is paused; cancellation is available.',
     '保存された待機期限 {deadline} まで通信を休止しています。期限後に再開してください。': 'Networking is paused until the saved deadline {deadline}. Start or resume after it expires.',
+    '空ロックをバックアップ {path} に保存しました。実行記録・待機期限・アカウント情報は変更していません。': 'Saved the empty lock as backup {path}. Receipts, deadlines and account identity were not changed.',
     '利用制限を検知したため送信せず保留しました。削除失敗には数えません。': 'A rate limit was observed before submission. The item is pending, not a deletion failure.',
     '制限後の最低項目間隔（秒）': 'Minimum item interval after a limit (s)',
     '通信休止: {scope} / {endpoint}、期限 {deadline}': 'Network pause: {scope} / {endpoint}, until {deadline}',

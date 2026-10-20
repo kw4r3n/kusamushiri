@@ -63,8 +63,32 @@ uv run kusamushiri-cli resume reviewed.json --profile ACCOUNT --expected-viewer 
 復旧操作と通常起動の競合は、POSIXのadvisory lock（flock）で排他します。
 復旧プロセスがクラッシュしてもOSがロックを解放するため、`.recovering` ファイルが残っても再試行できます。
 このファイルは排他の共有先として保持し、存在するだけでは起動を妨げません。
-この所有者検査はPOSIX対応です。Windows、別ホスト、旧版の空ロック、保存途中・保存失敗のロックは
-安全を証明できないため拒否します。PIDが別のプロセスで再利用されていても解除しません。
+この所有者検査はPOSIX対応です。Windows、別ホスト、空ロック、中身が途中まで書かれた不正なロックは
+安全を証明できないため自動では解除しません。PIDが別のプロセスで再利用されていても解除しません。
+
+**空ロックだけ**は、所有者情報がなく自動判定できません。空ロックは旧版が残したものか、現行版が所有者情報を
+書き込む途中で停止したものです。どちらかは区別できません。GUI・CLI・Chromiumなど、同じ
+プロファイルを使うすべてのジョブが終了済みと確認した場合に限り、次を明示的に使えます。
+`--legacy-owner-stopped` はその確認を利用者が行ったという指定で、プロセスの停止や自動検出はしません。
+保存ジャーナルを検証し、元の空ロックを同じディレクトリの `.bak-legacy-*` へ退避します。
+実行記録・成功済み項目・待機期限・viewerは変更しません。空でない不正ロックやシンボリックリンクは拒否します。
+
+```bash
+uv run kusamushiri-cli recover --profile ACCOUNT --legacy-owner-stopped
+```
+
+旧記録にviewerがない場合は、実際のXアカウント名を自分で確認して `X_USERNAME` に指定してください。
+プロファイル名から推測して記録を書き換えることはしません。既に作成したCSVをそのまま使えます。
+
+```bash
+# オフラインでリストを確認するだけ。ログインアカウントの検証・保存は行いません。
+uv run kusamushiri-cli resume reviewed.csv --profile ACCOUNT --expected-viewer X_USERNAME --recipe cleanup.toml --dry-run
+# 以下は実際に削除を再開するため、実行前にリストとアカウントを確認してください。
+uv run kusamushiri-cli resume reviewed.csv --profile ACCOUNT --expected-viewer X_USERNAME --recipe cleanup.toml --headless --failed-output remaining.json
+```
+
+実行時にはURLの作者と期待アカウントを照合し、ログイン中のアカウントが一致した後にviewerを保存します。
+通常のウィザードは、既存結果があるviewer未保存の旧記録に対してこの確認を代行しません。
 
 ```bash
 uv run kusamushiri-cli recover --profile ACCOUNT

@@ -194,8 +194,10 @@ class BrowserManager:
         profile_dir = Path(user_data_dir) if user_data_dir is not None else get_account_profile_dir(account_name)
         # Read only the action receipt metadata, before launching/restoring tabs.
         saved = ActionJournal(profile_dir / "action-progress.json", profile_dir.name.removeprefix("chromium-profile-"))
-        if self.action_control_failed or saved._lock_path.exists():
-            raise RuntimeError("Action journal is locked or network control failed; no browser was started.")
+        if self.action_control_failed:
+            raise RuntimeError("Action network control failed; no browser was started.")
+        if saved._lock_path.exists():
+            raise RuntimeError("Action journal lock exists; no browser was started. Inspect progress and use recover only after stopping the owner.")
         saved._load()
         if saved.cooldown_until > time.time():
             raise RuntimeError(tr("保存された待機期限 {deadline} まで通信を休止しています。期限後に再開してください。",

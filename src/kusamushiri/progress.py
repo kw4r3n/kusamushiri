@@ -6,6 +6,7 @@ import math
 import os
 import re
 import socket
+import stat
 import tempfile
 import time
 from collections import Counter
@@ -172,11 +173,30 @@ class ActionJournal:
             stream.flush()
             os.fsync(stream.fileno())
 
-    def recover_lock(self) -> None:
-        """Explicit offline recovery; never unlock a live, foreign or uncertain owner."""
+    def recover_lock(self, *, legacy_owner_stopped: bool = False) -> Path | None:
+        """Recover dead owners, or back up empty locks with explicit operator attestation."""
         if os.name != "posix":
             raise RuntimeError("Safe owner liveness checks are only supported on POSIX; no lock was removed")
         with self._recovery_guard():
+            info = self._lock_path.lstat()
+            if not stat.S_ISREG(info.st_mode):
+                raise ValueError("Journal lock must be a regular file; no lock was removed")
+            if info.st_size == 0:
+                if not legacy_owner_stopped:
+                    raise ValueError("Empty lock (legacy version, or a write interrupted before owner metadata was saved) has no owner metadata. Stop all jobs using this profile, then explicitly use recover --legacy-owner-stopped. No lock was removed.")
+                self._load()
+                # Keep an exclusive backup before releasing this metadata-free lock.
+                backup_fd, backup_name = tempfile.mkstemp(prefix=self._lock_path.name + ".bak-legacy-", dir=self.path.parent)
+                os.close(backup_fd)
+                backup = Path(backup_name)
+                self._sync_directory()
+                current = self._lock_path.lstat()
+                if (current.st_dev, current.st_ino, current.st_size) != (info.st_dev, info.st_ino, 0):
+                    backup.unlink()
+                    raise RuntimeError("Journal lock changed during recovery; no lock was removed")
+                self._lock_path.replace(backup)
+                self._sync_directory()
+                return backup
             data = json.loads(self._lock_path.read_text())
             if not isinstance(data, dict) or data.get("version") != 1 or data.get("host") != socket.gethostname() or data.get("scope") != self.scope or data.get("recovery_state") != "ready" or data.get("pid_namespace") != _pid_namespace():
                 raise ValueError("Unknown/legacy lock or uncertain storage; automatic recovery is unsafe. No lock was removed.")

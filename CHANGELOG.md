@@ -5,6 +5,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Distinguish journal-lock startup failures from network-control errors. Explicit
+  `recover --legacy-owner-stopped` backs up an empty lock (legacy or an interrupted lock write) after the operator
+  confirms all profile jobs stopped; receipts, deadlines and account identity remain unchanged.
+
 - Default retry/cooldown limits now apply to each wait, without adding earlier waits. Valid server
   deadlines are never shortened and do not exhaust the fallback cooldown count; explicit
   `wait_limit_mode = "total"` preserves the previous cumulative behavior.

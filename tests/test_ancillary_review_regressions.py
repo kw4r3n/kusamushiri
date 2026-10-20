@@ -286,7 +286,7 @@ def test_deadline_storage_failure_retains_durable_lock_and_blocks_restart(isolat
     assert not any('confirmationSheetConfirm' in selector for selector in page.clicks)
     launch = Mock(side_effect=AssertionError('no browser launch'))
     monkeypatch.setattr('kusamushiri.browser.sync_playwright', launch)
-    with pytest.raises(RuntimeError, match='locked'):
+    with pytest.raises(RuntimeError, match='lock exists'):
         BrowserManager().start(user_data_dir=profile)
     launch.assert_not_called()
     assert canary not in str(captured.value)
