@@ -1,4 +1,5 @@
 import json
+import os
 from contextlib import nullcontext
 from pathlib import Path
 from unittest.mock import Mock
@@ -809,3 +810,11 @@ def test_wrong_expected_viewer_is_rejected_before_browser(fake_core, tmp_path):
 def test_rows_with_a_non_numeric_post_id_are_rejected_before_any_action() -> None:
     with pytest.raises(cli.CliError, match="row 2"):
         cli.post_targets_from_rows([{"url": "https://x.com/me/status/1"}, {"url": "https://x.com/me/status/abc"}])
+
+
+def test_progress_line_is_clipped_to_terminal_display_width(monkeypatch, capsys):
+    monkeypatch.setattr("sys.stderr.isatty", lambda: True)
+    monkeypatch.setattr(cli.shutil, "get_terminal_size", lambda: os.terminal_size((12, 24)))
+    cli._progress("[1/2] ポスト削除 https://x.com")
+    cli._end_progress()
+    assert capsys.readouterr().err == "\r[1/2] ポス\n"  # 11 cells: wide characters count twice

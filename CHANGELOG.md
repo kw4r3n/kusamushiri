@@ -5,6 +5,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- A held receipt (`blocked`, `ambiguous`, ...) now names the exact `resolve` command to clear it.
+  The batch summary counts scheduled pauses separately from rate-limit cooldowns, and the CLI
+  progress line is clipped to the terminal width so narrow terminals no longer join lines.
 - Fix deleting a single checked row or retrying one failed post in the GUI: it now opens the post
   instead of failing on the current list page. Only the target-URL field acts on the open page.
 - Treat profile names case-insensitively, so deleting `Default` can no longer remove the default

@@ -27,6 +27,7 @@ class _BatchState:
     executing: bool = False
     reason: str = "completed"
     cooldowns: int = 0
+    scheduled_pauses: int = 0
     deferrals: int = 0
     retries: int = 0
     waited: float = 0.0
@@ -406,6 +407,7 @@ def _run_post_actions(
                 if policy.batch_size and policy.batch_pause_seconds > 0 and completed_since_pause >= policy.batch_size:
                     if not pause(policy.batch_pause_seconds, 0, 0, tr("完了件数による定期休止"), proactive=True):
                         break
+                    _state.scheduled_pauses += 1
                     completed_since_pause = 0
                     if journal is not None:
                         journal.reset_batch_count()
@@ -578,8 +580,9 @@ def run_post_actions(
             callback = getattr(core, "record_action_batch_summary", None)
             if callback is not None:
                 callback(report)
-            on_status(tr("バッチ終了: 成功{successes}、未処理{unprocessed}、失敗{failed}。理由: {reason}。休止{cooldowns}回／{seconds:.1f}秒。",
+            on_status(tr("バッチ終了: 成功{successes}、未処理{unprocessed}、失敗{failed}。理由: {reason}。通信休止{cooldowns}回／{seconds:.1f}秒、定期休止{pauses}回。",
                          successes=report["successes"], unprocessed=report["unprocessed"], failed=report["failed"],
-                         reason=reason_labels[state.reason], cooldowns=report["cooldowns"], seconds=report["waited_seconds"]))
+                         reason=reason_labels[state.reason], cooldowns=report["cooldowns"], seconds=report["waited_seconds"],
+                         pauses=state.scheduled_pauses))
         except Exception:
             pass
