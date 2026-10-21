@@ -28,21 +28,30 @@ class DeletedPostStore:
         return cls(get_account_profile_dir(account_name) / STORE_FILE_NAME)
 
     def load(self) -> set[str]:
+        """Stored IDs for filtering; an unreadable file reads as empty but is never overwritten."""
+        try:
+            return self._read()
+        except (OSError, ValueError) as error:
+            logger.warning("Ignoring unreadable deleted-post file %s: %s", self.path, error)
+            return set()
+
+    def _read(self) -> set[str]:
         try:
             data = json.loads(self.path.read_text(encoding="utf-8"))
         except FileNotFoundError:
             return set()
-        except (OSError, ValueError) as error:
-            logger.warning("Ignoring unreadable deleted-post file %s: %s", self.path, error)
-            return set()
         ids = data.get("post_ids") if isinstance(data, dict) else None
         if not isinstance(ids, list):
-            return set()
+            raise ValueError("post_ids is not a list")
         return {post_id for post_id in ids if isinstance(post_id, str) and post_id}
 
     def record(self, post_ids: Iterable[str]) -> set[str]:
         """Merge the IDs into the file and return every stored ID."""
-        stored = self.load()
+        try:
+            stored = self._read()
+        except ValueError as error:
+            # Replacing a damaged file would drop every ID it still holds.
+            raise OSError(f"{self.path} is unreadable, not overwriting it: {error}") from error
         new_ids = {post_id for post_id in post_ids if post_id} - stored
         if not new_ids:
             return stored

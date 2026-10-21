@@ -260,9 +260,12 @@ class ActionJournal:
     def record(self, target: PostActionTarget, state: str, *, count_completion: bool = True) -> None:
         if state not in STATES:
             raise ValueError("Invalid action state")
-        if count_completion and state == "success" and self.entries.get(self.key(target)) != "success":
+        key = self.key(target)
+        if self.entries.get(key) == state:
+            return  # Already durable; rewriting the whole journal per item makes long batches quadratic.
+        if count_completion and state == "success":
             self.completed_since_pause += 1
-        self.entries[self.key(target)] = state
+        self.entries[key] = state
         self._write()
 
     def reset_batch_count(self) -> None:
@@ -294,7 +297,7 @@ class ActionJournal:
         fd, temp_name = tempfile.mkstemp(prefix=f".{self.path.name}.", dir=self.path.parent)
         try:
             with os.fdopen(fd, "w") as stream:
-                json.dump(payload, stream, indent=2)
+                json.dump(payload, stream, separators=(",", ":"))
                 stream.write("\n")
                 stream.flush()
                 os.fsync(stream.fileno())

@@ -13,6 +13,14 @@ class TargetReadStopError(RuntimeError):
     pass
 
 
+class ActionNotSentError(RuntimeError):
+    """A pre-send check failed, so the outcome is known: nothing was sent for the target."""
+
+
+class TargetNotSentError(TargetReadStopError, ActionNotSentError):
+    """Single-post verification stopped before sending; callers still see a TargetReadStopError."""
+
+
 class ActiveTargetSession:
     def __init__(
         self,

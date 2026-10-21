@@ -28,10 +28,6 @@ def ensure_private_directory(path: Path) -> Path:
     return path
 
 
-def _ensure_directory(path: Path) -> Path:
-    return ensure_private_directory(path)
-
-
 def _get_app_data_path() -> Path:
     if _app_data_path_override is not None:
         return _app_data_path_override
@@ -55,7 +51,7 @@ def migrate_legacy_app_data(legacy_dir: Path | None = None) -> bool:
 
 
 def get_app_data_dir() -> Path:
-    return _ensure_directory(_get_app_data_path())
+    return ensure_private_directory(_get_app_data_path())
 
 
 def configure_frozen_browser_path() -> None:
@@ -147,12 +143,7 @@ def get_account_profile_dir(account_name: str | None = None) -> Path:
             target,
             app_data_dir / LEGACY_PROFILE_DIR_NAME,
         )
-    return _ensure_directory(target)
-
-
-def get_browser_profile_dir() -> Path:
-    """レガシー互換: デフォルトアカウントのプロファイルディレクトリ"""
-    return get_account_profile_dir(DEFAULT_ACCOUNT_NAME)
+    return ensure_private_directory(target)
 
 
 def list_saved_accounts() -> list[str]:
@@ -178,11 +169,6 @@ def list_saved_accounts() -> list[str]:
     )
 
 
-def get_legacy_browser_profile_dir() -> Path:
-    """レガシー単一プロファイルディレクトリ（移行用）"""
-    return get_app_data_dir() / LEGACY_PROFILE_DIR_NAME
-
-
 def get_log_file_path() -> Path:
-    log_dir = _ensure_directory(Path(user_log_dir(APP_NAME, appauthor=False)))
+    log_dir = ensure_private_directory(Path(user_log_dir(APP_NAME, appauthor=False)))
     return log_dir / "kusamushiri.log"

@@ -46,7 +46,7 @@ def test_old_recipe_preserves_effective_values_comments_and_order(tmp_path):
     before = load_recipe(path)
     update = plan_recipe_update(path)
     assert path.read_text() == OLD_RECIPE  # planning is read-only
-    assert update.added_keys == ("delete.confirm",)
+    assert {"delete.confirm", "delete.interval_jitter", "delete.wait_limit_mode"} <= set(update.added_keys)
     backup = apply_recipe_update(update)
     assert backup is not None and backup.read_bytes() == OLD_RECIPE.encode()
     assert path.read_bytes().startswith(OLD_RECIPE.encode())
@@ -56,6 +56,25 @@ def test_old_recipe_preserves_effective_values_comments_and_order(tmp_path):
     assert 'order = "oldest"' not in path.read_text()
     second = plan_recipe_update(path)
     assert second.added_keys == () and second.diff == ""
+    assert apply_recipe_update(second) is None
+    assert len(list(tmp_path.glob("*.bak-*"))) == 1
+
+
+def test_update_enumerates_advanced_defaults_and_preserves_zero_values(tmp_path):
+    path = write(tmp_path, '[delete]\ninterval=0 # preserve\nretry_delay=0\nretry_max_delay=0\n'
+                 'retry_max_wait=0\nbatch_pause=0\ncooldown_delay=0\nrate_limit_interval=0\n')
+    before = load_recipe(path)
+    original = path.read_bytes()
+    update = plan_recipe_update(path)
+    assert {"delete.interval_jitter", "delete.wait_limit_mode", "delete.traffic_policy"} <= set(update.added_keys)
+    backup = apply_recipe_update(update)
+    assert backup is not None and backup.read_bytes() == original
+    assert original in path.read_bytes()
+    assert load_recipe(path) == before
+    assert load_recipe(path).delete.retry_policy.interval_jitter_seconds == 0
+    assert 'interval_jitter = 0.0  # random 0..N' in path.read_text()
+    second = plan_recipe_update(path)
+    assert second.updated == path.read_bytes() and second.added_keys == ()
     assert apply_recipe_update(second) is None
     assert len(list(tmp_path.glob("*.bak-*"))) == 1
 

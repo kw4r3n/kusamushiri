@@ -439,7 +439,9 @@ def test_minimal_template_keeps_every_explicit_legacy_value(tmp_path):
     assert parse_recipe(exported, base.path) == parsed
     base.path.write_text(format_recipe(parsed))
     update = plan_recipe_update(base.path)
-    assert not any(key.startswith("delete.") for key in update.added_keys)
+    # Updates add only the advanced keys the compact file omitted, never the explicit legacy ones.
+    added = {key.removeprefix("delete.") for key in update.added_keys if key.startswith("delete.")}
+    assert added == DELETE_KEYS - set(exported["delete"])
     assert not update.unknown_keys
     assert set(exported["delete"]) <= DELETE_KEYS
 
@@ -459,7 +461,7 @@ def test_hidden_compatibility_flags_keep_exact_precedence(tmp_path, capsys):
     with pytest.raises(SystemExit):
         cli.build_parser().parse_args(["delete", "--help"])
     text = capsys.readouterr().out
-    assert "--max-cooldowns" not in text and "--retry-max-wait" in text
+    assert "--max-cooldowns" in text and "--retry-max-wait" in text
 
 
 def test_cli_restores_global_console_handler_after_return(monkeypatch, tmp_path):

@@ -52,6 +52,9 @@ class FakeCore:
     def start_browser(self, user_data_dir=None, account_name=None) -> None:
         self.started_profile = account_name
 
+    def prepare_post_action_policy(self, policy) -> None:
+        self.prepared_policy = policy
+
     def go_to_home(self) -> None:
         pass
 
@@ -288,8 +291,12 @@ def test_unfollow_skips_mutual_follows(fake_core, tmp_path) -> None:
         [FollowRecord("bob", "Bob", "https://x.com/bob", True), FollowRecord("carol", "", "https://x.com/carol", False)],
     )
 
-    assert cli.main(["unfollow", str(path), "--skip-mutual", "--yes", "--interval", "0"]) == 0
+    assert cli.main(["unfollow", str(path), "--yes", "--interval", "1"]) == 0
     assert fake_core.instances[0].unfollowed == ["carol"]
+    assert cli.main(["unfollow", str(path), "--include-mutual", "--yes", "--interval", "1"]) == 0
+    assert fake_core.instances[1].unfollowed == ["bob", "carol"]
+    with pytest.raises(SystemExit):
+        cli.main(["unfollow", str(path), "--yes", "--interval", "0"])
 
 
 def test_last_posts_records_and_writes_dates(fake_core, tmp_path) -> None:
@@ -376,7 +383,7 @@ def test_run_deletes_only_rows_left_in_the_edited_list(fake_core, tmp_path, monk
         lines = list_path.read_text(encoding="utf-8-sig").splitlines()
         list_path.write_text("\n".join(line for line in lines if ",repost," not in line) + "\n", encoding="utf-8-sig")
 
-    prompts = interactive(monkeypatch, ["y"], on_ask=drop_repost_row)
+    prompts = interactive(monkeypatch, ["yes"], on_ask=drop_repost_row)
 
     assert cli.main(["run", str(recipe)]) == 0
 
@@ -465,7 +472,7 @@ def test_no_arguments_reuses_the_saved_recipe(fake_core, tmp_path, monkeypatch) 
     monkeypatch.chdir(tmp_path)
     write_recipe(tmp_path, "")
     # Pick the saved recipe (default), run it, then the closing "press Enter" prompt.
-    prompts = interactive(monkeypatch, ["", "y", ""])
+    prompts = interactive(monkeypatch, ["", "yes", ""])
 
     assert cli.main([]) == 0
 
@@ -488,7 +495,7 @@ def test_no_arguments_keeps_an_unreadable_recipe_unless_asked(fake_core, tmp_pat
 def test_run_from_archive_opens_the_browser_only_to_delete(fake_core, tmp_path, monkeypatch) -> None:
     entries = [{"tweet": {"id_str": "7", "created_at": "Wed Oct 10 20:19:24 +0000 2018", "full_text": "old"}}]
     (tmp_path / "tweets.js").write_text(f"window.YTD.tweets.part0 = {json.dumps(entries)}", encoding="utf-8")
-    interactive(monkeypatch, ["y"])
+    interactive(monkeypatch, ["yes"])
 
     assert cli.main(["run", str(write_recipe(tmp_path, 'archive = "tweets.js"\n[delete]\ninterval = 0\n'))]) == 0
 
@@ -547,7 +554,7 @@ def test_dry_run_has_no_browser_journal_or_wait(fake_core, tmp_path, monkeypatch
 
 
 @pytest.mark.parametrize("option, value", [("--max-retries", "-1"), ("--retry-delay", "nan"),
-                                         ("--batch-size", "-1"), ("--batch-pause", "0")])
+                                         ("--batch-size", "-1"), ("--batch-pause", "-1")])
 def test_invalid_retry_option_rejected_before_browser(fake_core, tmp_path, option, value):
     assert cli.main(["delete", str(tmp_path / "missing.json"), "--dry-run", option, value]) == cli.EXIT_USAGE
     assert fake_core.instances == []
@@ -614,7 +621,7 @@ def test_run_overrides_cannot_enable_deletion_for_collect_only_recipe(tmp_path, 
 
 
 @pytest.mark.parametrize("option, value", [("--max-retries", "-1"), ("--retry-delay", "nan"),
-                                         ("--batch-pause", "0"), ("--retry-max-delay", "30")])
+                                         ("--batch-pause", "-1"), ("--retry-max-delay", "30")])
 def test_run_invalid_retry_override_stops_before_execution(tmp_path, monkeypatch, option, value):
     recipe_path = tmp_path / "cleanup.toml"
     recipe_path.write_text("[delete]\n")
@@ -797,3 +804,8 @@ def test_wrong_expected_viewer_is_rejected_before_browser(fake_core, tmp_path):
     write_post_list(path, [make_post("9")])
     assert cli.main(["delete", str(path), "--expected-viewer", "other", "--yes"]) == cli.EXIT_USAGE
     assert not fake_core.instances
+
+
+def test_rows_with_a_non_numeric_post_id_are_rejected_before_any_action() -> None:
+    with pytest.raises(cli.CliError, match="row 2"):
+        cli.post_targets_from_rows([{"url": "https://x.com/me/status/1"}, {"url": "https://x.com/me/status/abc"}])

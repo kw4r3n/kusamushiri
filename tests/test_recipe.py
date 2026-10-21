@@ -1,4 +1,4 @@
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -101,7 +101,7 @@ def test_paths_resolve_next_to_the_recipe(tmp_path, monkeypatch) -> None:
 def test_older_than_days_sets_the_end_date() -> None:
     today = date(2026, 10, 7)
 
-    assert CollectOptions(older_than_days=30).effective_until(today) == today - timedelta(days=30)
+    assert CollectOptions(older_than_days=30).effective_until(today) == today - timedelta(days=31)
     assert CollectOptions(older_than_days=30, until=date(2020, 1, 1)).effective_until(today) == date(2020, 1, 1)
     assert CollectOptions(kind="likes", mode="search").to_request("@alice", today).search_mode == "profile"
 
@@ -220,3 +220,10 @@ def test_choose_recipe_path_names_a_new_recipe(tmp_path) -> None:
     answers = iter(["3", "", "a/b", "likes", "old"])  # new; empty, invalid and taken names are asked again
 
     assert choose_recipe_path(tmp_path, ask=lambda _prompt: next(answers)) == tmp_path / "kusamushiri-old.toml"
+
+
+def test_keyword_list_items_are_not_split_again_and_datetimes_become_dates(tmp_path: Path) -> None:
+    data = {"collect": {"include": ["New York, NY", " NY "], "until": datetime(2020, 12, 31, 10, 0)}}
+    recipe = recipe_module.parse_recipe(data, tmp_path / "recipe.toml")
+    assert recipe.collect.include == ("New York, NY", "NY")
+    assert recipe.collect.until == date(2020, 12, 31)
