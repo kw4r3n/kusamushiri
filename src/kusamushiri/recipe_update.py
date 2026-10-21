@@ -201,7 +201,10 @@ def plan_recipe_update(path: Path) -> RecipeUpdate:
         text = original.decode("utf-8")
         data = tomllib.loads(text)
         _known_recipe(data, path)
-        defaults = tomllib.loads(format_recipe(Recipe(path, delete=DeleteOptions())))
+        # Updates enumerate the complete supported schema; normal templates may
+        # intentionally omit advanced settings that still have their default value.
+        canonical = format_recipe(Recipe(path, delete=DeleteOptions(), explicit_delete_keys=DELETE_KEYS))
+        defaults = tomllib.loads(canonical)
         missing: dict[str, dict[str, object]] = {
             "": {key: value for key, value in defaults.items() if key not in {"collect", "delete"} and key not in data},
         }
@@ -215,7 +218,6 @@ def plan_recipe_update(path: Path) -> RecipeUpdate:
                 missing[name].pop("order", None)
 
         # Use the canonical formatter's literals/notes, but keep every original byte.
-        canonical = format_recipe(Recipe(path, delete=DeleteOptions()))
         lines: dict[str, dict[str, str]] = {"": {}, "collect": {}, "delete": {}}
         section = ""
         for line in canonical.splitlines():

@@ -266,3 +266,12 @@ def test_deleted_post_store_ignores_unreadable_file(tmp_path: Path, content: str
     path.write_text(content, encoding="utf-8")
 
     assert DeletedPostStore(path).load() == ({"2"} if "[1" in content else set())
+
+
+def test_deleted_post_store_never_overwrites_an_unreadable_file(tmp_path: Path) -> None:
+    store = DeletedPostStore(tmp_path / "deleted-posts.json")
+    store.path.write_text('{"post_ids": ["1", "2"]} trailing', encoding="utf-8")
+    assert store.load() == set()
+    with pytest.raises(OSError):
+        store.record(["3"])
+    assert "trailing" in store.path.read_text(encoding="utf-8")

@@ -9,7 +9,7 @@ import math
 import tomllib
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Final, TypeVar, cast
 
@@ -62,7 +62,8 @@ class CollectOptions:
     def effective_until(self, today: date) -> date | None:
         if self.older_than_days is None:
             return self.until
-        cutoff = today - timedelta(days=self.older_than_days)
+        # "Older than N days" excludes the day exactly N days ago; until is inclusive.
+        cutoff = today - timedelta(days=self.older_than_days + 1)
         return cutoff if self.until is None else min(self.until, cutoff)
 
     def to_request(self, username: str, today: date | None = None) -> CollectRequest:
@@ -92,15 +93,16 @@ class DeleteOptions:
 
 DELETE_ADVANCED_FIELDS = (
     ("max_retries", "max_retries", int, "additional safe action retries per item (0..20)"),
-    ("retry_delay", "initial_delay_seconds", float, "seconds before the first safe action retry"),
-    ("retry_max_delay", "max_delay_seconds", float, "backoff cap; never shortens Retry-After"),
-    ("retry_max_wait", "max_wait_seconds", float, "maximum seconds for one retry/cooldown/saved wait (legacy total mode available)"),
+    ("retry_delay", "initial_delay_seconds", float, "local retry backoff seconds; 0 disables; server deadline remains"),
+    ("retry_max_delay", "max_delay_seconds", float, "local backoff/cooldown cap; 0 disables local delay, never Retry-After"),
+    ("retry_max_wait", "max_wait_seconds", float, "one required wait cap; 0 stops with deadline retained; total mode is legacy cumulative"),
     ("wait_limit_mode", "wait_limit_mode", str, "per-wait (default) / total (legacy cumulative budget)"),
     ("batch_size", "batch_size", int, "new confirmed successes; 0 disables proactive pauses"),
-    ("batch_pause", "batch_pause_seconds", float, "seconds in each quiet proactive pause"),
+    ("batch_pause", "batch_pause_seconds", float, "proactive pause seconds; 0 disables"),
     ("max_cooldowns", "max_cooldowns", int, "fallback cooldowns across the batch; server-directed waits exempt in per-wait mode; 0 disables all (0..20)"),
-    ("cooldown_delay", "cooldown_delay_seconds", float, "seconds before the first rate-limit resume"),
-    ("rate_limit_interval", "rate_limit_interval_seconds", float, "minimum post-limit item interval in seconds"),
+    ("cooldown_delay", "cooldown_delay_seconds", float, "fallback cooldown seconds; 0 stops if server deadline is absent"),
+    ("rate_limit_interval", "rate_limit_interval_seconds", float, "post-limit item interval floor in seconds; 0 disables this floor"),
+    ("interval_jitter", "interval_jitter_seconds", float, "random 0..N seconds added to each item interval; 0 disables"),
     ("ancillary_rate_limit_mode", "ancillary_rate_limit_mode", str, "global / isolate-known; known GETs only"),
     ("traffic_policy", "traffic_policy", str, "off / report / enforce; post-action allowlist"),
 )
@@ -158,6 +160,8 @@ def _date(table: Mapping[str, object], key: str) -> date | None:
     if value is None or value == "":
         return None
     # tomllib returns bare dates as date; quoted ones arrive as text.
+    if isinstance(value, datetime):
+        return value.date()
     if isinstance(value, date):
         return value
     if isinstance(value, str):
@@ -175,7 +179,8 @@ def _keywords(table: Mapping[str, object], key: str) -> tuple[str, ...]:
     if isinstance(value, str):
         return parse_keywords(value)
     if isinstance(value, list) and all(isinstance(item, str) for item in value):
-        return parse_keywords(",".join(value))
+        # Each list item is one keyword; re-splitting "New York, NY" would also match "NY".
+        return tuple(dict.fromkeys(keyword for item in value if (keyword := item.strip())))
     raise RecipeError(f"collect.{key}: expected a list of strings")
 
 
@@ -331,7 +336,7 @@ def format_recipe(recipe: Recipe) -> str:
         lines += [
             "",
             "[delete]",
-            _line("interval", recipe.delete.interval, "seconds between items"),
+            _line("interval", recipe.delete.interval, "fixed seconds between items; 0 disables; optional jitter is added"),
             _line("confirm", recipe.delete.confirm, "false runs without asking"),
             "# Advanced values are optional; omitted values keep built-in safety defaults.",
         ]

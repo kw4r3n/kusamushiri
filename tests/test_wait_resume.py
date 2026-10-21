@@ -568,17 +568,6 @@ def test_legacy_receipts_need_explicit_verified_account(monkeypatch, tmp_path):
     assert journal.viewer == "tester"
 
 
-@pytest.mark.parametrize("method, kind", [("delete_post", "post"), ("undo_repost", "repost"), ("unlike_post", "like")])
-def test_legacy_core_entrypoints_cannot_bypass_bound_owner(method, kind, tmp_path):
-    core = authenticated_core()
-    journal = ActionJournal(tmp_path / "progress.json", "fixture")
-    with journal, core.post_action_journal_scope(journal):
-        core.get_logged_in_username = lambda: "wrong_account"
-        success, _ = getattr(core, method)(target(kind=kind).url)
-    assert not success
-    assert not any("confirmationSheetConfirm" in click or "@data-testid='unlike'" in click for click in core._browser.page.clicks)
-
-
 @pytest.mark.parametrize("kind", ["post", "repost", "like"])
 def test_cancel_at_submit_phase_is_positive_unsent_and_resumable(monkeypatch, tmp_path, kind):
     core = FakeCore(monkeypatch)

@@ -90,7 +90,7 @@ def test_retry_after_http_date_and_past_date():
         {"max_retries": -1},
         {"max_retries": 21},
         {"max_retries": True},
-        {"initial_delay_seconds": 0},
+        {"initial_delay_seconds": -1},
         {"max_wait_seconds": float("inf")},
         {"max_delay_seconds": 1},
         {"batch_size": -1},
@@ -805,7 +805,7 @@ def test_quiet_wait_pumps_events_and_cancels_within_a_tick(monkeypatch):
         {"max_cooldowns": -1},
         {"max_cooldowns": 21},
         {"max_cooldowns": True},
-        {"cooldown_delay_seconds": 0},
+        {"cooldown_delay_seconds": -1},
         {"rate_limit_interval_seconds": float("nan")},
         {"max_delay_seconds": 100},
     ],
@@ -994,3 +994,34 @@ def test_pauses_before_next_item_until_reset_within_wait_budget(monkeypatch, pac
     results = run_post_actions(core, [target(), target(2)], 0, RetryPolicy(max_cooldowns=cooldowns, wait_limit_mode="total"))
     assert [result.success for result in results] == [True, True]
     assert core.waits == waits and not core.cancelled
+
+
+def test_retry_after_is_capped_so_a_bad_header_cannot_lock_the_profile() -> None:
+    assert parse_retry_after("3153600000", now=0) == 86400
+    assert parse_retry_after("Fri, 31 Dec 9999 23:59:59 GMT", now=0) == 86400
+
+
+def test_failure_before_sending_stays_resumable(monkeypatch, tmp_path) -> None:
+    from kusamushiri.active_target_session import ActionNotSentError
+
+    core = FakeCore(monkeypatch)
+
+    def not_sent(item):
+        raise ActionNotSentError("Browser page is not initialized.")
+
+    core.execute_post_action = not_sent
+    journal = ActionJournal(tmp_path / "progress.json", "fixture")
+    with pytest.raises(ActionBatchError) as error:
+        run_post_actions(core, [target()], 0, RetryPolicy(), journal=journal)
+    assert journal.entries[journal.key(target())] == "pending"
+    assert journal.previous_result(target()) is None
+    assert error.value.results == []
+
+
+def test_journal_skips_rewriting_an_unchanged_state(tmp_path, monkeypatch) -> None:
+    with ActionJournal(tmp_path / "progress.json", "fixture") as journal:
+        journal.record(target(), "success")
+        writes = []
+        monkeypatch.setattr(journal, "_write", lambda: writes.append(1))
+        journal.record(target(), "success", count_completion=False)
+        assert writes == [] and journal.completed_since_pause == 1

@@ -142,6 +142,15 @@ class AccountSettingsManager:
     def list_accounts(self) -> list[str]:
         return list_saved_accounts()
 
+    def resolve_account_name(self, account_name: str | None) -> str:
+        """Return the existing profile's spelling, so case-insensitive filesystems never alias two names."""
+        normalized = normalize_account_name(account_name)
+        folded = normalized.casefold()
+        for existing in (DEFAULT_ACCOUNT_NAME, *self.list_accounts()):
+            if existing.casefold() == folded:
+                return existing
+        return normalized
+
     def rename_account(self, old_name: str, new_name: str) -> None:
         old_name = normalize_account_name(old_name)
         if not new_name.strip().removeprefix("@").strip():
@@ -178,7 +187,7 @@ class AccountSettingsManager:
 
     def delete_account(self, account_name: str) -> None:
         account_name = normalize_account_name(account_name)
-        if account_name == DEFAULT_ACCOUNT_NAME:
+        if account_name.casefold() == DEFAULT_ACCOUNT_NAME.casefold():
             raise ValueError(tr("default プロファイルは削除できません。"))
         profile_dir = get_app_data_dir() / f"{ACCOUNT_PROFILE_PREFIX}{account_name}"
         # Drop settings first: a failed rmtree then leaves a still-listed profile

@@ -240,3 +240,14 @@ def test_migrate_legacy_settings_copies_only_into_empty_settings(tmp_path: Path,
     legacy.setValue("default/username", "changed")
     assert x_deleter_settings.migrate_legacy_settings(qsettings, legacy) is False
     assert qsettings.value("default/username") == "old_user"
+
+
+def test_profile_names_differing_only_in_case_never_alias_default(qsettings, tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(x_deleter_paths, "_app_data_path_override", tmp_path / "data")
+    manager = AccountSettingsManager(qsettings)
+    x_deleter_paths.get_account_profile_dir("alice")
+    with pytest.raises(ValueError):
+        manager.delete_account("Default")
+    assert manager.resolve_account_name("@Default") == "default"
+    assert manager.resolve_account_name("ALICE") == "alice"
+    assert manager.resolve_account_name("Bob") == "Bob"

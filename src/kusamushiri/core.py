@@ -12,11 +12,9 @@ from playwright.sync_api import Browser, BrowserContext, Locator, Page, Playwrig
 
 from kusamushiri import actions
 from kusamushiri.actions import OWNED_TIMESTAMP_LINK_SELECTOR, POST_ARTICLE_SELECTOR
-from kusamushiri.actions import delete_post as _delete_post
 from kusamushiri.actions import execute_post_action as _execute_post_action
-from kusamushiri.actions import undo_repost as _undo_repost
 from kusamushiri.actions import unfollow_account as _unfollow_account
-from kusamushiri.actions import unlike_post as _unlike_post
+from kusamushiri.active_target_session import ActionNotSentError, TargetNotSentError, TargetReadStopError
 from kusamushiri.ancillary_isolation import isolatable_endpoint
 from kusamushiri.browser import (
     BASE_X_URL,
@@ -228,7 +226,10 @@ class XDeleterCore:
         return not self._browser.ancillary_isolation.owns(response)
 
     def _stop_on_rate_limit(self, response: Response) -> None:
-        if self._browser.ancillary_isolation.quarantine(response, self._post_action_policy.cooldown_delay_seconds):
+        fallback = self._post_action_policy.cooldown_delay(1)
+        server_delay = max(parse_retry_after(response.headers.get("retry-after")) or 0.0,
+                           parse_rate_limit_reset(response.headers.get("x-rate-limit-reset")) or 0.0)
+        if (fallback > 0 or server_delay > 0) and self._browser.ancillary_isolation.quarantine(response, fallback):
             return
         try:
             reusable = isolatable_endpoint(response.url, response.request.method) is not None
@@ -258,7 +259,7 @@ class XDeleterCore:
         reset = parse_rate_limit_reset(response.headers.get("x-rate-limit-reset"), now=self.rate_limit_seen_at)
         if reset is not None:
             self.rate_limit_retry_until = max(self.rate_limit_retry_until, self.rate_limit_seen_at + reset)
-        deadline = self.rate_limit_retry_until or self.rate_limit_seen_at + self._post_action_policy.cooldown_delay_seconds
+        deadline = self.rate_limit_retry_until or self.rate_limit_seen_at + fallback
         try:
             if self._action_journal is not None:
                 self._action_journal.persist_isolated_deadline(deadline)
@@ -1030,9 +1031,14 @@ class XDeleterCore:
             self._browser.ancillary_isolation.begin_operation((target.kind, target.url))
             traffic = self._browser.traffic_policy
             traffic.begin_operation((target.kind, target.url))
-            if verified is not None:
-                verified.check(target_required=verified.loaded)
-            page = verified.session.page if verified is not None else self._browser._require_page()
+            try:
+                if verified is not None:
+                    verified.check(target_required=verified.loaded)
+                page = verified.session.page if verified is not None else self._browser._require_page()
+            except TargetReadStopError as error:
+                raise TargetNotSentError(*error.args) from error
+            except RuntimeError as error:
+                raise ActionNotSentError(*error.args) from error
             loaded: Locator | None = None
 
             def record_loaded(locator: Locator) -> None:
@@ -1064,22 +1070,3 @@ class XDeleterCore:
                 self._pending_view = PendingView.capture(page, target.url, loaded)
             return result
 
-    def _action_evidence(self, target: PostActionTarget) -> actions.ActionEvidence:
-        return actions.ActionEvidence(should_cancel=self.is_cancel_requested,
-                                      rate_limit_pending=lambda: self.rate_limit_status is not None,
-                                      identity_check=lambda: self._resume_identity(target))
-
-    def undo_repost(self, post_url: str) -> tuple[bool, str | None]:
-        page = self._browser._require_page()
-        return _undo_repost(page, post_url, find_locator=self._find_first_visible_locator,
-                            _evidence=self._action_evidence(PostActionTarget(post_url, "repost")))
-
-    def unlike_post(self, post_url: str) -> tuple[bool, str | None]:
-        page = self._browser._require_page()
-        return _unlike_post(page, post_url, find_locator=self._find_first_visible_locator,
-                            _evidence=self._action_evidence(PostActionTarget(post_url, "like")))
-
-    def delete_post(self, post_url: str) -> tuple[bool, str | None]:
-        page = self._browser._require_page()
-        return _delete_post(page, post_url, find_locator=self._find_first_visible_locator,
-                            _evidence=self._action_evidence(PostActionTarget(post_url, "post")))

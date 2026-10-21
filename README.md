@@ -337,7 +337,12 @@ ancillary_rate_limit_mode = "global" # opt-in alternative: "isolate-known"
 | `max_cooldowns` | `--max-cooldowns` | fallback cooldowns without a server deadline | 3 |
 | `cooldown_delay` | `--cooldown-delay` | seconds | 120 |
 | `rate_limit_interval` | `--rate-limit-interval` | minimum item spacing in seconds | 5 |
+| `interval_jitter` | `--interval-jitter` | random 0..N seconds added to fixed spacing; 0 disables | 0 |
 | `ancillary_rate_limit_mode` | `--ancillary-rate-limit-mode` | global / isolate-known | global |
+
+Client waits accept explicit zero seconds. Zero fallback/backoff stops automatic retries
+without a server deadline; it never bypasses server/saved deadlines or readiness checks.
+See [wait settings](docs/wait-settings.md) for individual settings and examples.
 
 `global` preserves existing behavior and is the default for old TOML, newly generated recipes,
 the wizard and GUI. To opt in for one source CLI invocation, add
@@ -425,8 +430,9 @@ spacing and rate-free proactive pauses do not; a proactive pause that receives a
 `rate_limit_interval` is a floor: a configured longer interval is never shortened after a limit.
 
 Retry/cooldown counts must be integers 0–20; `batch_size` must be an integer 0–10000.
-`interval` must be finite and nonnegative (0 removes ordinary spacing); delays, the wait budget
-and post-limit floor must be finite and positive. The backoff cap must be at least both initial delays. `max_retries = 0` disables actual action retries; use `max_cooldowns = 0`
+All wait values must be finite and nonnegative. Zero disables the corresponding local delay;
+a zero wait-acceptance limit instead stops with any required deadline retained. A nonzero
+backoff cap must be at least both initial delays. `max_retries = 0` disables actual action retries; use `max_cooldowns = 0`
 to stop immediately on a rate limit. Neither permits traffic before a known cooldown deadline.
 
 Tune conservatively: retain/increase the item interval and quiet pause if limits recur, and stop

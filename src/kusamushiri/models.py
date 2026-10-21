@@ -74,6 +74,7 @@ class RetryPolicy:
     wait_limit_mode: Literal["per-wait", "total"] = "per-wait"
     ancillary_rate_limit_mode: Literal["global", "isolate-known"] = "global"
     traffic_policy: Literal["off", "report", "enforce"] = "off"
+    interval_jitter_seconds: float = 0.0
 
     def validate(self) -> None:
         if self.wait_limit_mode not in ("per-wait", "total"):
@@ -88,11 +89,11 @@ class RetryPolicy:
             raise ValueError("max_cooldowns must be an integer between 0 and 20")
         if isinstance(self.batch_size, bool) or not isinstance(self.batch_size, int) or not 0 <= self.batch_size <= 10000:
             raise ValueError("batch_size must be an integer between 0 and 10000")
-        for name in ("initial_delay_seconds", "max_delay_seconds", "max_wait_seconds", "batch_pause_seconds", "cooldown_delay_seconds", "rate_limit_interval_seconds"):
+        for name in ("initial_delay_seconds", "max_delay_seconds", "max_wait_seconds", "batch_pause_seconds", "cooldown_delay_seconds", "rate_limit_interval_seconds", "interval_jitter_seconds"):
             value = getattr(self, name)
-            if isinstance(value, bool) or not math.isfinite(value) or value <= 0:
-                raise ValueError(f"{name} must be finite and positive")
-        if self.max_delay_seconds < max(self.initial_delay_seconds, self.cooldown_delay_seconds):
+            if isinstance(value, bool) or not math.isfinite(value) or value < 0:
+                raise ValueError(f"{name} must be finite and non-negative")
+        if self.max_delay_seconds and self.max_delay_seconds < max(self.initial_delay_seconds, self.cooldown_delay_seconds):
             raise ValueError("max_delay_seconds must be at least both initial_delay_seconds and cooldown_delay_seconds")
 
     def cooldown_delay(self, cooldown: int, retry_after: float | None = None) -> float:

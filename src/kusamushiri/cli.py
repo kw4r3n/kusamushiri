@@ -150,6 +150,14 @@ def _non_negative_float(text: str) -> float:
     return value
 
 
+def _unfollow_interval(text: str) -> float:
+    value = float(text)
+    # Same floor as the GUI: back-to-back unfollows look automated.
+    if not math.isfinite(value) or value < 1:
+        raise argparse.ArgumentTypeError("must be finite and 1 or greater")
+    return value
+
+
 def _non_negative_int(text: str) -> int:
     value = int(text)
     if value < 0:
@@ -198,7 +206,12 @@ def post_targets_from_rows(rows: Sequence[Mapping[str, object]]) -> list[PostAct
         if kind not in POST_KINDS:
             raise CliError(f"row {number}: kind must be post, repost or like (got {kind!r})")
         post_kind: PostKind = kind  # type: ignore[assignment]
-        targets.append(PostActionTarget(url=url, kind=post_kind))
+        target = PostActionTarget(url=url, kind=post_kind)
+        try:
+            ActionJournal.key(target)  # Reject here, not mid-batch as a misleading storage error.
+        except ValueError:
+            raise CliError(f"row {number}: url must be a post URL with a numeric ID (got {url!r})") from None
+        targets.append(target)
     return targets
 
 
@@ -544,19 +557,20 @@ def cmd_archive(args: argparse.Namespace) -> int:
 
 RETRY_ARGUMENTS = (
     ("max_retries", "max_retries", int, "additional safe action retries per item (0..20); unsent rate-limit deferrals do not count"),
-    ("retry_delay", "initial_delay_seconds", float, "initial retry wait in seconds"),
-    ("retry_max_delay", "max_delay_seconds", float, "backoff cap in seconds; never shortens Retry-After"),
-    ("retry_max_wait", "max_wait_seconds", float, "maximum seconds for ONE required wait (default); --wait-limit-mode total restores the legacy cumulative budget"),
+    ("retry_delay", "initial_delay_seconds", float, "local safe-retry backoff start in seconds; 0 disables; server deadlines remain"),
+    ("retry_max_delay", "max_delay_seconds", float, "local backoff/cooldown cap in seconds; 0 disables local delays, never server deadlines"),
+    ("retry_max_wait", "max_wait_seconds", float, "maximum seconds for ONE required wait; 0 stops with deadline retained; total mode restores cumulative budget"),
     ("batch_size", "batch_size", int, "confirmed new successes between proactive pauses (0 disables)"),
-    ("batch_pause", "batch_pause_seconds", float, "proactive pause in seconds; not a known optimal X window"),
+    ("batch_pause", "batch_pause_seconds", float, "proactive pause in seconds; 0 disables, independent of server deadlines"),
     ("max_cooldowns", "max_cooldowns", int, "fallback cooldown limit (0..20); per-wait mode exempts server-directed waits; 0 disables all automatic cooldowns"),
-    ("cooldown_delay", "cooldown_delay_seconds", float, "initial rate-limit quiet cooldown in seconds"),
-    ("rate_limit_interval", "rate_limit_interval_seconds", float, "minimum seconds between items for the rest of a run after a rate limit"),
+    ("cooldown_delay", "cooldown_delay_seconds", float, "fallback cooldown in seconds when server supplies no future deadline; 0 stops instead of retrying"),
+    ("rate_limit_interval", "rate_limit_interval_seconds", float, "post-limit item interval floor in seconds; 0 disables this floor"),
+    ("interval_jitter", "interval_jitter_seconds", float, "random 0..N seconds added to fixed item interval; 0 disables"),
 )
 
 
 def _needs_action_context(policy: RetryPolicy) -> bool:
-    return policy.ancillary_rate_limit_mode == "isolate-known" or policy.traffic_policy != "off"
+    return policy != RetryPolicy()
 
 
 def _retry_policy_from_args(args: argparse.Namespace, defaults: RetryPolicy | None = None) -> RetryPolicy:
@@ -585,7 +599,7 @@ def _add_retry_args(parser: argparse.ArgumentParser, *, recipe_overrides: bool =
         note = f"override recipe; omitted keeps recipe value (fallback {value:g})" if recipe_overrides else f"default {value:g}"
         parser.add_argument("--" + name.replace("_", "-"), type=kind,
                             default=None if recipe_overrides else value,
-                            help=f"{description} ({note})" if name == "retry_max_wait" else argparse.SUPPRESS)
+                            help=f"{description} ({note})")
     parser.add_argument("--wait-limit-mode", choices=("per-wait", "total"),
                         default=None if recipe_overrides else "per-wait",
                         help="per-wait: compare each required wait with --retry-max-wait; total: legacy cumulative budget")
@@ -756,7 +770,7 @@ def cmd_following(args: argparse.Namespace) -> int:
 
 def _read_follow_targets(args: argparse.Namespace) -> list[FollowRecord]:
     records = follow_records_from_rows(read_rows(args.file))
-    if getattr(args, "skip_mutual", False):
+    if not getattr(args, "include_mutual", True):
         records = [record for record in records if not record.follows_you]
     if not records:
         raise CliError(tr("対象のアカウントがありません。"), EXIT_USAGE)
@@ -863,7 +877,10 @@ def run_recipe(recipe: Recipe, *, interactive: bool) -> int:
         if recipe.delete.confirm:
             _preview([asdict(post) for post in posts])
             _info(tr("一覧のファイルを編集すると、残した行だけを実行します（行を消すと対象外）。"))
-            if not _ask_yes_no(tr("{count} 件を削除/解除しますか？元に戻せません。", count=len(posts))):
+            # Irreversible: require the full "yes" like `delete`, not the y/N shortcut.
+            answer = _ask(tr("{prompt} 続ける場合は yes と入力してください: ",
+                             prompt=tr("{count} 件を削除/解除しますか？元に戻せません。", count=len(posts))))
+            if answer.strip().casefold() != "yes":
                 _info(tr("削除/解除は行いませんでした。"))
                 return 0
         # Re-read the file so edits made while the question was open take effect.
@@ -1156,7 +1173,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--interval",
         type=_non_negative_float,
         default=None,
-        help=f"seconds between items; flags override recipe settings (fallback: {DEFAULT_ACTION_INTERVAL_SECONDS:g})",
+        help=f"fixed seconds between items; 0 disables fixed spacing; optional jitter is added (fallback: {DEFAULT_ACTION_INTERVAL_SECONDS:g})",
     )
     delete.add_argument("--failed-output", type=_output_path, help="write failed and unprocessed rows; recorded unsafe outcomes remain held")
     _add_retry_args(delete, recipe_overrides=True)
@@ -1193,10 +1210,12 @@ def build_parser() -> argparse.ArgumentParser:
     unfollow.add_argument("file", type=Path, help="CSV/JSON from `following` or the GUI (needs username)")
     _add_browser_args(unfollow)
     _add_confirm_args(unfollow)
-    unfollow.add_argument("--skip-mutual", action="store_true", help="leave out accounts that follow you back")
+    # Like the GUI, mutual follows are left out unless asked for; --skip-mutual stays accepted.
+    unfollow.add_argument("--include-mutual", action="store_true", help="also unfollow accounts that follow you back")
+    unfollow.add_argument("--skip-mutual", action="store_false", dest="include_mutual", help=argparse.SUPPRESS)
     unfollow.add_argument(
         "--interval",
-        type=_non_negative_float,
+        type=_unfollow_interval,
         default=DEFAULT_UNFOLLOW_INTERVAL_SECONDS,
         help="seconds between accounts (default: %(default)s)",
     )

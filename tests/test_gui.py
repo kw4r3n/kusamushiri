@@ -173,7 +173,7 @@ def test_handle_delete_confirmation_emits_request(
     assert len(emitted_requests) == 1
     request = emitted_requests[0]
     assert request.targets == [PostActionTarget(url="https://x.com/user/status/42", kind="post")]
-    assert request.expected_viewer == "user" and request.current_view_only
+    assert request.expected_viewer == "user" and not request.current_view_only
 
 
 def test_ctrl_return_shortcut_triggers_delete(
@@ -793,8 +793,8 @@ def test_retry_failed_rechecks_account_match(window, monkeypatch) -> None:
     window.username_input.setText("user")
     window._retry_failed([failure])
     assert len(emitted) == 1
-    # A one-post retry keeps the confirmed-viewer and current-view guards.
-    assert emitted[0].expected_viewer == "user" and emitted[0].current_view_only
+    # A one-post retry keeps the confirmed-viewer guard and navigates to the post.
+    assert emitted[0].expected_viewer == "user" and not emitted[0].current_view_only
 
     # Complete the first dispatched operation before exercising another retry.
     window.set_busy(False)
@@ -1330,6 +1330,20 @@ def test_gui_cooldown_controls_match_policy_and_request(window):
     window.action_rate_limit_interval_seconds_input.setValue(7)
     policy = window._action_retry_policy()
     assert (policy.max_cooldowns, policy.cooldown_delay_seconds, policy.rate_limit_interval_seconds) == (2, 300, 7)
+
+
+def test_gui_wait_controls_accept_and_preserve_zero(window):
+    fields = ("action_retry_delay_seconds_input", "action_retry_max_delay_seconds_input",
+              "action_retry_max_wait_seconds_input", "action_batch_pause_seconds_input",
+              "action_cooldown_delay_seconds_input", "action_rate_limit_interval_seconds_input")
+    for field in fields:
+        control = getattr(window, field)
+        assert control.minimum() == 0 and control.toolTip()
+        control.setValue(0)
+    policy = window._action_retry_policy()
+    policy.validate()
+    assert policy.initial_delay_seconds == policy.max_delay_seconds == policy.max_wait_seconds == 0
+    assert policy.batch_pause_seconds == policy.cooldown_delay_seconds == policy.rate_limit_interval_seconds == 0
 
 
 def test_ambiguous_result_never_becomes_a_retry_request(window):

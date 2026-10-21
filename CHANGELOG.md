@@ -5,6 +5,30 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Fix deleting a single checked row or retrying one failed post in the GUI: it now opens the post
+  instead of failing on the current list page. Only the target-URL field acts on the open page.
+- Treat profile names case-insensitively, so deleting `Default` can no longer remove the default
+  profile's folder on Windows/macOS.
+- Never overwrite an unreadable deleted-post file; cap `Retry-After` at one day so a bad header
+  cannot block a profile for years.
+- Recipe keyword lists keep each item whole (`"New York, NY"` no longer also matches `NY`); TOML
+  datetimes in `since`/`until` are read as dates; `older_than_days = N` now excludes the day
+  exactly N days ago.
+- CLI: reject list rows without a numeric post ID before the batch starts; `unfollow` leaves out
+  mutual follows unless `--include-mutual` and needs `--interval` of at least 1 second; the recipe
+  delete prompt requires `yes`.
+- Keep failures detected before anything is sent resumable instead of holding them as ambiguous;
+  log the cause when a batch stops on an internal error; skip unchanged journal rewrites.
+- Pin GitHub Actions to commit SHAs and ignore local CLI output files.
+
+- Make `update-recipe` add all supported missing advanced fields, including
+  `interval_jitter`, while preserving explicit zero values and effective behavior.
+
+- Accept explicit zero-second client waits without restoring defaults; stop safe
+  retries/cooldowns when neither a local delay nor a server deadline is available.
+  Add optional `interval_jitter` / `--interval-jitter` (default 0), expose wait flags
+  in CLI help, and document pacing separately from server deadlines and readiness.
+
 - Distinguish journal-lock startup failures from network-control errors. Explicit
   `recover --legacy-owner-stopped` backs up an empty lock (legacy or an interrupted lock write) after the operator
   confirms all profile jobs stopped; receipts, deadlines and account identity remain unchanged.

@@ -572,17 +572,20 @@ class XDeleterWindow(QMainWindow):
         retry_grid.addWidget(QLabel(tr("再試行上限")), 0, 0)
         retry_grid.addWidget(self.action_max_retries_input, 0, 1)
         self.action_retry_delay_seconds_input = QDoubleSpinBox()
-        self.action_retry_delay_seconds_input.setRange(0.1, 86400.0)
+        self.action_retry_delay_seconds_input.setRange(0.0, 86400.0)
+        self.action_retry_delay_seconds_input.setToolTip(tr("ローカル再試行の初期待機。0秒で無効。サーバー指定がなければ再送せず停止します。"))
         self.action_retry_delay_seconds_input.setValue(60.0)
         retry_grid.addWidget(QLabel(tr("再試行の初期待機（秒）")), 0, 2)
         retry_grid.addWidget(self.action_retry_delay_seconds_input, 0, 3)
         self.action_retry_max_delay_seconds_input = QDoubleSpinBox()
-        self.action_retry_max_delay_seconds_input.setRange(0.1, 86400.0)
+        self.action_retry_max_delay_seconds_input.setRange(0.0, 86400.0)
+        self.action_retry_max_delay_seconds_input.setToolTip(tr("ローカルのバックオフ・通信休止の上限。0秒でローカル分を無効。サーバー期限は短縮しません。"))
         self.action_retry_max_delay_seconds_input.setValue(900.0)
         retry_grid.addWidget(QLabel(tr("待機増加の上限（秒）")), 1, 0)
         retry_grid.addWidget(self.action_retry_max_delay_seconds_input, 1, 1)
         self.action_retry_max_wait_seconds_input = QDoubleSpinBox()
-        self.action_retry_max_wait_seconds_input.setRange(0.1, 86400.0)
+        self.action_retry_max_wait_seconds_input.setRange(0.0, 86400.0)
+        self.action_retry_max_wait_seconds_input.setToolTip(tr("1回の必要待機の許容上限。0秒なら待機が必要な時点で期限を保持して停止します。"))
         self.action_retry_max_wait_seconds_input.setValue(1800.0)
         retry_grid.addWidget(QLabel(tr("1回の待機上限（秒）")), 1, 2)
         retry_grid.addWidget(self.action_retry_max_wait_seconds_input, 1, 3)
@@ -592,7 +595,8 @@ class XDeleterWindow(QMainWindow):
         retry_grid.addWidget(QLabel(tr("定期休止の完了件数（0で無効）")), 2, 0)
         retry_grid.addWidget(self.action_batch_size_input, 2, 1)
         self.action_batch_pause_seconds_input = QDoubleSpinBox()
-        self.action_batch_pause_seconds_input.setRange(0.1, 86400.0)
+        self.action_batch_pause_seconds_input.setRange(0.0, 86400.0)
+        self.action_batch_pause_seconds_input.setToolTip(tr("完了件数ごとの定期休止。0秒で無効です。"))
         self.action_batch_pause_seconds_input.setValue(RetryPolicy().batch_pause_seconds)
         retry_grid.addWidget(QLabel(tr("定期休止（秒）")), 2, 2)
         retry_grid.addWidget(self.action_batch_pause_seconds_input, 2, 3)
@@ -602,12 +606,14 @@ class XDeleterWindow(QMainWindow):
         retry_grid.addWidget(QLabel(tr("サーバー指定なしの休止回数")), 3, 0)
         retry_grid.addWidget(self.action_max_cooldowns_input, 3, 1)
         self.action_cooldown_delay_seconds_input = QDoubleSpinBox()
-        self.action_cooldown_delay_seconds_input.setRange(0.1, 86400.0)
+        self.action_cooldown_delay_seconds_input.setRange(0.0, 86400.0)
+        self.action_cooldown_delay_seconds_input.setToolTip(tr("サーバー期限がないときの代替休止。0秒なら自動再送せず停止します。"))
         self.action_cooldown_delay_seconds_input.setValue(RetryPolicy().cooldown_delay_seconds)
         retry_grid.addWidget(QLabel(tr("通信休止の初期待機（秒）")), 3, 2)
         retry_grid.addWidget(self.action_cooldown_delay_seconds_input, 3, 3)
         self.action_rate_limit_interval_seconds_input = QDoubleSpinBox()
-        self.action_rate_limit_interval_seconds_input.setRange(0.1, 86400.0)
+        self.action_rate_limit_interval_seconds_input.setRange(0.0, 86400.0)
+        self.action_rate_limit_interval_seconds_input.setToolTip(tr("制限後の項目間隔の最低値。0秒でこの最低値を無効にします。"))
         self.action_rate_limit_interval_seconds_input.setValue(RetryPolicy().rate_limit_interval_seconds)
         retry_grid.addWidget(QLabel(tr("制限後の最低項目間隔（秒）")), 4, 0)
         retry_grid.addWidget(self.action_rate_limit_interval_seconds_input, 4, 1)
@@ -891,7 +897,7 @@ class XDeleterWindow(QMainWindow):
         return True
 
     def show_error(self, message: str) -> None:
-        self._stop_pending = False
+        # A queued stop still owns the controls; on_browser_stopped releases them.
         self._rate_limit_message = None
         self.set_busy(False)
         QMessageBox.critical(self, tr("エラー"), message)
@@ -945,7 +951,7 @@ class XDeleterWindow(QMainWindow):
 
     def _change_current_account(self, account_name: str, *, load_settings: bool) -> str:
         """アカウント選択が変更された時の処理"""
-        normalized_account_name = normalize_account_name(account_name)
+        normalized_account_name = self._settings_manager.resolve_account_name(account_name)
         if self._busy:
             return self._current_account or normalized_account_name
         self._ensure_account_option(normalized_account_name)
@@ -1030,7 +1036,10 @@ class XDeleterWindow(QMainWindow):
             QMessageBox.warning(self, tr("プロファイル追加"), tr("プロファイル名を入力してください。"))
             return
         account_name = normalize_account_name(name)
-        if self.account_combo.findText(account_name) >= 0 or account_name in self._settings_manager.list_accounts():
+        taken = (DEFAULT_ACCOUNT_NAME, *self._settings_manager.list_accounts(),
+                 *(self.account_combo.itemText(index) for index in range(self.account_combo.count())))
+        # Profile folders alias by case on Windows/macOS, so "Alice" and "alice" are the same profile.
+        if account_name.casefold() in {taken_name.casefold() for taken_name in taken}:
             QMessageBox.warning(self, tr("プロファイル追加"), tr("同じ名前のプロファイルが既にあります。"))
             return
 
@@ -1802,7 +1811,8 @@ class XDeleterWindow(QMainWindow):
             interval_seconds=self.delete_interval_input.value(),
             retry_policy=self._action_retry_policy(),
             expected_viewer=self._last_logged_in_username if len(targets) == 1 and targets[0].kind == "post" else None,
-            current_view_only=len(targets) == 1 and targets[0].kind == "post",
+            # Only the target-URL field acts on the page already open; checked rows navigate first.
+            current_view_only=current_target is not None,
         )
         try:
             request.validate()
@@ -1909,7 +1919,6 @@ class XDeleterWindow(QMainWindow):
             interval_seconds=self.delete_interval_input.value(),
             retry_policy=self._action_retry_policy(),
             expected_viewer=self._last_logged_in_username if len(failures) == 1 and failures[0].target.kind == "post" else None,
-            current_view_only=len(failures) == 1 and failures[0].target.kind == "post",
         )
         self._submit_delete(retry_request, tr("失敗分を再試行しています..."))
 

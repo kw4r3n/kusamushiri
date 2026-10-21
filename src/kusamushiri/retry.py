@@ -1,6 +1,7 @@
 """Bounded post-action retries; no browser, network or credentials are managed here."""
 
 import math
+import random
 import time
 from collections.abc import Callable, Sequence
 from contextlib import contextmanager, nullcontext, suppress
@@ -9,6 +10,7 @@ from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from typing import Protocol
 
+from kusamushiri.active_target_session import ActionNotSentError
 from kusamushiri.i18n import tr
 from kusamushiri.logger import logger
 from kusamushiri.models import PostActionResult, PostActionTarget, RetryPolicy
@@ -39,8 +41,16 @@ class ActionBatchError(RuntimeError):
         self.summary = summary
 
 
+# Rejects epoch-millisecond or otherwise implausible values; waits remain bounded by max_wait.
+MAX_RATE_LIMIT_RESET_SECONDS = 86400.0
+
+
 def parse_retry_after(value: object, *, now: float | None = None) -> float | None:
-    """Read HTTP delta-seconds or an HTTP-date, ignoring malformed/nonfinite values."""
+    """Read HTTP delta-seconds or an HTTP-date, ignoring malformed/nonfinite values.
+
+    Values are capped at MAX_RATE_LIMIT_RESET_SECONDS: they are persisted as cooldown deadlines,
+    and an absurd header must not lock the profile for years.
+    """
     if not isinstance(value, str):
         return None
     value = value.strip()
@@ -49,18 +59,15 @@ def parse_retry_after(value: object, *, now: float | None = None) -> float | Non
             seconds = float(value)
         except ValueError:
             return None
-        return seconds if math.isfinite(seconds) else None
+        return min(seconds, MAX_RATE_LIMIT_RESET_SECONDS) if math.isfinite(seconds) else None
     try:
         deadline = parsedate_to_datetime(value)
         if deadline.tzinfo is None:
             deadline = deadline.replace(tzinfo=UTC)
-        return max(0.0, deadline.timestamp() - (time.time() if now is None else now))
+        delay = deadline.timestamp() - (time.time() if now is None else now)
+        return min(max(0.0, delay), MAX_RATE_LIMIT_RESET_SECONDS)
     except (ValueError, TypeError, OverflowError):
         return None
-
-
-# Rejects epoch-millisecond or otherwise implausible values; waits remain bounded by max_wait.
-MAX_RATE_LIMIT_RESET_SECONDS = 86400.0
 
 
 def parse_rate_limit_reset(value: object, *, now: float | None = None) -> float | None:
@@ -201,7 +208,7 @@ def _run_post_actions(
             if observed != generation:
                 generation = observed
                 server_deadline = number("rate_limit_retry_until")
-                floor = server_deadline if policy.wait_limit_mode == "per-wait" and server_deadline > time.time() else number("rate_limit_seen_at") + (rate_floor or policy.cooldown_delay_seconds)
+                floor = server_deadline if policy.wait_limit_mode == "per-wait" and server_deadline > time.time() else number("rate_limit_seen_at") + (rate_floor or policy.cooldown_delay(1))
                 deadline = max(deadline, server_deadline, floor)
             if core.rate_limit_status is not None:
                 paced = True
@@ -291,6 +298,11 @@ def _run_post_actions(
         _state.cooldowns = cooldowns
         paced = True
         deadline, reason = preserve_limit(max(1, ordinal))
+        if max(deadline, protected_until()) <= time.time():
+            _state.reason = "cooldown_limit"
+            emit(tr("有効な待機期限がなく、ローカル休止も無効なため停止します。自動再送しません。"))
+            core.request_cancel()
+            return False
         if policy.max_cooldowns == 0 or bounded and fallback_cooldowns > policy.max_cooldowns:
             _state.reason = "cooldown_limit"
             emit(tr("通信休止の上限に達したため停止します。未送信の項目は未処理で保持します。"))
@@ -363,7 +375,7 @@ def _run_post_actions(
                     journal.cooldown_reason or tr("前回の待機を再開"),
                 ):
                     return results
-                if policy.batch_size and completed_since_pause >= policy.batch_size:
+                if policy.batch_size and policy.batch_pause_seconds > 0 and completed_since_pause >= policy.batch_size:
                     completed_since_pause = 0
                     journal.reset_batch_count()
         for index, target in enumerate(targets, 1):
@@ -391,7 +403,7 @@ def _run_post_actions(
                     paced = True
                     if not pause(pace, 0, 0, tr("利用枠の残りが少ないため先回り休止")):
                         break
-                if policy.batch_size and completed_since_pause >= policy.batch_size:
+                if policy.batch_size and policy.batch_pause_seconds > 0 and completed_since_pause >= policy.batch_size:
                     if not pause(policy.batch_pause_seconds, 0, 0, tr("完了件数による定期休止"), proactive=True):
                         break
                     completed_since_pause = 0
@@ -460,6 +472,10 @@ def _run_post_actions(
                         emit(tr("再試行上限に達しました。処理を停止します。"))
                         break
                     retries += 1
+                    if core.rate_limit_status is None and pending is None and policy.delay(retries, result.retry_after_seconds) <= 0:
+                        _state.reason = "retry_limit"
+                        emit(tr("再試行の待機が無効で、サーバー指定もないため停止します。自動再送しません。"))
+                        break
                     if (
                         core.rate_limit_status is None
                         and pending is None
@@ -482,9 +498,9 @@ def _run_post_actions(
                 emit(result.error_message or result.failure_kind)
                 core.request_cancel()
                 break
-            effective_interval = (
-                max(interval_seconds, policy.rate_limit_interval_seconds) if paced else interval_seconds
-            )
+            item_interval = interval_seconds + (random.uniform(0, policy.interval_jitter_seconds)
+                                                if policy.interval_jitter_seconds > 0 and index < len(targets) else 0.0)
+            effective_interval = max(item_interval, policy.rate_limit_interval_seconds) if paced else item_interval
             if (
                 core.rate_limit_status is None
                 and not core.is_cancel_requested()
@@ -526,8 +542,16 @@ def run_post_actions(
                                  on_status=on_status, on_result=on_result, wait_for_cancel=wait_for_cancel,
                                  known_successes=known_successes, _state=state)
     except Exception as error:
+        # The raised error stays generic; the local log keeps the cause (stale lock, wrong account, ...).
+        logger.error("Action batch stopped by %s: %s", type(error).__name__, error)
         state.reason = "storage_error" if isinstance(error, (OSError, ValueError)) or (journal is not None and journal._retain_lock) else "unexpected_error"
         core.request_cancel()
+        if isinstance(error, ActionNotSentError) and state.executing:
+            # Nothing was sent: keep the item resumable instead of holding it as ambiguous.
+            state.executing = False
+            if journal is not None and state.current is not None:
+                with suppress(Exception):
+                    journal.record(state.current, "pending")
         if state.current is not None and len(state.results) < state.index:
             result = state.current_result
             if state.executing:

@@ -308,9 +308,12 @@ class XDeleterWorker:
                     continue
 
                 if isinstance(command, StopBrowserCommand):
-                    core.stop_browser()
-                    self.events.status_changed.emit(tr("ブラウザを停止しました。"))
-                    self.events.browser_stopped.emit()
+                    try:
+                        core.stop_browser()
+                        self.events.status_changed.emit(tr("ブラウザを停止しました。"))
+                    finally:
+                        # The window keeps its controls locked until this arrives, even if stopping failed.
+                        self.events.browser_stopped.emit()
                     continue
 
                 if isinstance(command, CheckLoginCommand):

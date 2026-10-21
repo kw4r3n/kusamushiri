@@ -61,7 +61,8 @@ def test_help_explains_preview_scope_batch_cooldown_and_deadlines(command, capsy
         cli.build_parser().parse_args([command, "--help"])
     assert result.value.code == 0
     help_text = " ".join(capsys.readouterr().out.split())
-    assert "--retry-max-wait" in help_text and "--max-cooldowns" not in help_text
+    # Every wait setting is documented in help (docs/wait-settings.md), including --max-cooldowns.
+    assert "--retry-max-wait" in help_text and "--max-cooldowns" in help_text
     assert "saved" in help_text and "--dry-run" in help_text
     if command == "run":
         assert "No --dry-run here" in help_text and "--interval" in help_text

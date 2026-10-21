@@ -4,9 +4,10 @@ from urllib.parse import parse_qs, urlparse
 import pytest
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
+from kusamushiri import actions
 from kusamushiri.browser import BrowserManager
 from kusamushiri.core import POST_ARTICLE_SELECTOR, XDeleterCore
-from kusamushiri.models import CollectRequest, PostKind
+from kusamushiri.models import CollectRequest, PostActionTarget, PostKind
 from kusamushiri.parsing import (
     extract_post_id,
     extract_profile_username,
@@ -160,8 +161,13 @@ def authorized_action(core, method, url):
     core.is_logged_in = lambda: True
     core.get_logged_in_username = lambda: "user"
     core._browser.page.is_closed = lambda: False
+    kind = {"delete_post": "post", "undo_repost": "repost", "unlike_post": "like"}[method]
     with core.post_action_journal_scope(None):
-        return getattr(core, method)(url)
+        evidence = actions.ActionEvidence(should_cancel=core.is_cancel_requested,
+                                          rate_limit_pending=lambda: core.rate_limit_status is not None,
+                                          identity_check=lambda: core._resume_identity(PostActionTarget(url, kind)))
+        return getattr(actions, method)(core._browser._require_page(), url,
+                                        find_locator=core._find_first_visible_locator, _evidence=evidence)
 
 
 def test_post_matches_filters_respects_all_filters() -> None:
@@ -654,7 +660,7 @@ def test_post_actions_reject_unidentifiable_urls_before_navigation(action_name, 
     core = XDeleterCore()
     core._browser.page = NavigationRecordingPage()
 
-    success, error_message = getattr(core, action_name)(url)
+    success, error_message = getattr(actions, action_name)(core._browser.page, url, find_locator=core._find_first_visible_locator)
 
     assert success is False
     assert error_message is not None

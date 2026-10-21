@@ -580,6 +580,22 @@ ENGLISH: Final[dict[str, str]] = {
     "操作対象のメニューまたは確認ボタンを一意に照合できないため停止しました。": (
         "Stopped: the menu item or confirmation button could not be matched uniquely."
     ),
+    "1回の必要待機の許容上限。0秒なら待機が必要な時点で期限を保持して停止します。":
+        "Longest single required wait. At 0 s the run stops and keeps the deadline as soon as a wait is needed.",
+    "サーバー期限がないときの代替休止。0秒なら自動再送せず停止します。":
+        "Fallback pause when the server gives no deadline. At 0 s the run stops instead of retrying.",
+    "ローカルのバックオフ・通信休止の上限。0秒でローカル分を無効。サーバー期限は短縮しません。":
+        "Cap on local backoff and network pauses. 0 s disables the local part; server deadlines are never shortened.",
+    "ローカル再試行の初期待機。0秒で無効。サーバー指定がなければ再送せず停止します。":
+        "Initial wait before a local retry. 0 s disables it; without a server deadline the run stops instead of retrying.",
+    "再試行の待機が無効で、サーバー指定もないため停止します。自動再送しません。":
+        "Stopping: retry waits are disabled and the server gave no deadline. Nothing is resent automatically.",
+    "制限後の項目間隔の最低値。0秒でこの最低値を無効にします。":
+        "Minimum interval between items after a rate limit. 0 s disables this minimum.",
+    "完了件数ごとの定期休止。0秒で無効です。":
+        "Regular pause after a number of completed items. 0 s disables it.",
+    "有効な待機期限がなく、ローカル休止も無効なため停止します。自動再送しません。":
+        "Stopping: there is no valid wait deadline and local pauses are disabled. Nothing is resent automatically.",
 }
 
 TRANSLATIONS: Final[dict[str, dict[str, str]]] = {"en": ENGLISH}
