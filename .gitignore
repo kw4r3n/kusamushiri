@@ -11,3 +11,8 @@ chrome_data/
 .opencode-trace/
 build/
 dist/
+# Local CLI output: post lists, diagnostics and recipes with personal paths
+kusamushiri-lists/
+kusamushiri-diagnostic*.jsonl
+kusamushiri-*.toml
+kusamushiri-*.toml.bak-*
