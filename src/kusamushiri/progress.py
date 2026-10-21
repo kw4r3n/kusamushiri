@@ -5,6 +5,7 @@ import json
 import math
 import os
 import re
+import shlex
 import socket
 import stat
 import tempfile
@@ -252,7 +253,8 @@ class ActionJournal:
             target,
             action_label_for(target.kind),
             False,
-            tr("記録された {state} のため再実行しません。X と実行記録を確認してください。", state=kind),
+            tr("記録された {state} のため再実行しません。X で確認し、kusamushiri-cli resolve --profile {profile} --kind {kind} --post-id {post_id} に、反映済みなら --verified-applied、未反映なら --verified-not-applied を付けて記録してください。",
+               state=kind, profile=shlex.quote(self.scope), kind=target.kind, post_id=extract_post_id(target.url)),
             failure_kind=cast(FailureKind, kind),
             attempts=0,
         )

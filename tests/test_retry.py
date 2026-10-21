@@ -104,12 +104,15 @@ def test_invalid_policy(overrides):
 
 def test_proactive_pause_after_33_confirmed_successes(monkeypatch):
     core = FakeCore(monkeypatch)
+    statuses = []
     results = run_post_actions(
-        core, [target(i) for i in range(1, 36)], 0, RetryPolicy(batch_size=33, batch_pause_seconds=60)
+        core, [target(i) for i in range(1, 36)], 0, RetryPolicy(batch_size=33, batch_pause_seconds=60),
+        on_status=statuses.append,
     )
     assert all(r.success for r in results)
     assert core.waits == [(33, 60)]
     assert len(core.calls) == 35
+    assert "通信休止0回／0.0秒、定期休止1回" in statuses[-1]
 
 
 def test_item_34_failure_recovers_with_exponential_waits(monkeypatch):
@@ -1025,3 +1028,11 @@ def test_journal_skips_rewriting_an_unchanged_state(tmp_path, monkeypatch) -> No
         monkeypatch.setattr(journal, "_write", lambda: writes.append(1))
         journal.record(target(), "success", count_completion=False)
         assert writes == [] and journal.completed_since_pause == 1
+
+
+def test_held_receipt_message_names_the_resolve_command(tmp_path):
+    journal = ActionJournal(tmp_path / "progress.json", "Work Account")
+    with journal:
+        journal.record(target(7), "blocked")
+        message = journal.previous_result(target(7)).error_message
+    assert "resolve --profile 'Work Account' --kind post --post-id 7" in message

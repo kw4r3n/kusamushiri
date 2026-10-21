@@ -10,11 +10,14 @@ import csv
 import json
 import logging
 import math
+import os
 import re
+import shutil
 import signal
 import sys
 import threading
 import time
+import unicodedata
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import ExitStack, contextmanager, nullcontext, suppress
 from dataclasses import asdict, replace
@@ -115,10 +118,21 @@ _progress_width = 0
 def _progress(message: str) -> None:
     # Overwrite one status line on a terminal; stay quiet when stderr is redirected.
     # Pad with spaces instead of ANSI codes so a plain Windows console shows it correctly.
+    # Clip to the terminal in display cells: a wrapped line cannot be overwritten by "\r".
     global _progress_width
     if sys.stderr.isatty():
-        print(f"\r{message.ljust(_progress_width)}", end="", file=sys.stderr, flush=True)
-        _progress_width = len(message)
+        try:
+            columns = os.get_terminal_size(sys.stderr.fileno()).columns - 1  # the line goes to stderr, not stdout
+        except (AttributeError, OSError, ValueError):
+            columns = shutil.get_terminal_size().columns - 1
+        shown, width = "", 0
+        for char in message:
+            cell = 2 if unicodedata.east_asian_width(char) in "WF" else 1
+            if width + cell > columns:
+                break
+            shown, width = shown + char, width + cell
+        print(f"\r{shown}{' ' * max(0, _progress_width - width)}", end="", file=sys.stderr, flush=True)
+        _progress_width = width
 
 
 def _end_progress() -> None:
