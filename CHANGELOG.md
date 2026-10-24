@@ -5,6 +5,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Save recipes atomically while preserving updater validation and backups.
 - Reject corrupt profile settings and refuse changes to externally locked profiles.
 - A held receipt (`blocked`, `ambiguous`, ...) now names the exact `resolve` command to clear it.
   The batch summary counts scheduled pauses separately from rate-limit cooldowns, and the CLI

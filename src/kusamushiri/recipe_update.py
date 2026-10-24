@@ -8,7 +8,6 @@ import difflib
 import math
 import os
 import stat
-import tempfile
 import tomllib
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
@@ -21,6 +20,7 @@ from kusamushiri.recipe import (
     DeleteOptions,
     Recipe,
     RecipeError,
+    _staged_recipe,
     find_recipes,
     format_recipe,
     parse_recipe,
@@ -302,40 +302,28 @@ def _assert_unchanged(update: RecipeUpdate) -> None:
 
 def apply_recipe_update(update: RecipeUpdate) -> Path | None:
     """Validate, stage, back up exclusively, then atomically replace the recipe."""
-    temporary: Path | None = None
     try:
         _assert_unchanged(update)
         _validate_update(update.original, update.updated, update.path)
         if update.updated == update.original:
             return None
-        with tempfile.NamedTemporaryFile(
-            dir=update.path.parent, prefix=f".{update.path.name}.", suffix=".tmp", delete=False
-        ) as file:
-            temporary = Path(file.name)
-            os.chmod(temporary, update.mode)
-            file.write(update.updated)
-            file.flush()
-            os.fsync(file.fileno())
-        _validate_update(update.original, temporary.read_bytes(), update.path)
-        _assert_unchanged(update)
-        stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S.%fZ")
-        backup = update.path.with_name(f"{update.path.name}.bak-{stamp}")
-        # O_EXCL prevents clobbering another backup, and mode applies at creation.
-        descriptor = os.open(backup, os.O_WRONLY | os.O_CREAT | os.O_EXCL, update.mode)
-        try:
-            with os.fdopen(descriptor, "wb") as file:
-                file.write(update.original)
-                file.flush()
-                os.fsync(file.fileno())
-        except BaseException:
-            backup.unlink(missing_ok=True)
-            raise
-        _assert_unchanged(update)
-        os.replace(temporary, update.path)
-        temporary = None
-        return backup
+        with _staged_recipe(update.path, update.updated, update.mode) as temporary:
+            _validate_update(update.original, temporary.read_bytes(), update.path)
+            _assert_unchanged(update)
+            stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S.%fZ")
+            backup = update.path.with_name(f"{update.path.name}.bak-{stamp}")
+            # O_EXCL prevents clobbering another backup, and mode applies at creation.
+            descriptor = os.open(backup, os.O_WRONLY | os.O_CREAT | os.O_EXCL, update.mode)
+            try:
+                with os.fdopen(descriptor, "wb") as file:
+                    file.write(update.original)
+                    file.flush()
+                    os.fsync(file.fileno())
+            except BaseException:
+                backup.unlink(missing_ok=True)
+                raise
+            _assert_unchanged(update)
+            os.replace(temporary, update.path)
+            return backup
     except (OSError, UnicodeError, tomllib.TOMLDecodeError) as error:
         raise RecipeError(f"{update.path}: {error}") from error
-    finally:
-        if temporary is not None:
-            temporary.unlink(missing_ok=True)

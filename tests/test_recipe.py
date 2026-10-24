@@ -1,3 +1,4 @@
+import stat
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -57,6 +58,39 @@ def test_recipe_without_delete_table_only_collects(tmp_path) -> None:
 
     assert loaded.delete is None
     assert "# [delete]" in format_recipe(loaded)
+
+
+@pytest.mark.parametrize("operation", ["fsync", "replace"])
+def test_recipe_save_failure_preserves_existing_filters(tmp_path, monkeypatch, operation) -> None:
+    path = tmp_path / "r.toml"
+    original = Recipe(path=path, collect=CollectOptions(exclude=("keep me",), min_likes=100))
+    save_recipe(original)
+    saved = path.read_bytes()
+
+    def fail(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(recipe_module.os, operation, fail)
+    with pytest.raises(RecipeError, match="disk full"):
+        save_recipe(Recipe(path=path))
+
+    assert path.read_bytes() == saved
+    assert load_recipe(path).collect == original.collect
+    assert list(tmp_path.iterdir()) == [path]
+
+
+def test_recipe_save_atomically_replaces_existing_file_and_preserves_permissions(tmp_path) -> None:
+    path = tmp_path / "r.toml"
+    path.write_text("# old recipe")
+    path.chmod(0o600)
+    inode = path.stat().st_ino
+
+    save_recipe(Recipe(path=path, collect=CollectOptions(exclude=("keep me",))))
+
+    assert path.stat().st_ino != inode
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert load_recipe(path).collect.exclude == ("keep me",)
+    assert list(tmp_path.iterdir()) == [path]
 
 
 def test_dates_may_be_bare_or_quoted(tmp_path) -> None:

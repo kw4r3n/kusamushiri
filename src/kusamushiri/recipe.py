@@ -6,8 +6,12 @@ filters as the app, and an optional [delete] table. Without [delete] a run only 
 
 import json
 import math
+import os
+import stat
+import tempfile
 import tomllib
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -350,7 +354,28 @@ def format_recipe(recipe: Recipe) -> str:
 
 def save_recipe(recipe: Recipe) -> None:
     recipe.path.parent.mkdir(parents=True, exist_ok=True)
-    recipe.path.write_text(format_recipe(recipe), encoding="utf-8")
+    try:
+        mode = stat.S_IMODE(recipe.path.stat().st_mode) if recipe.path.exists() else 0o600
+        with _staged_recipe(recipe.path, format_recipe(recipe).encode("utf-8"), mode) as temporary:
+            os.replace(temporary, recipe.path)
+    except (OSError, UnicodeError) as error:
+        raise RecipeError(f"{recipe.path}: {error}") from error
+
+
+@contextmanager
+def _staged_recipe(path: Path, contents: bytes, mode: int) -> Iterator[Path]:
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp", delete=False) as file:
+            temporary = Path(file.name)
+            os.chmod(temporary, mode)
+            file.write(contents)
+            file.flush()
+            os.fsync(file.fileno())
+        yield temporary
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
 
 
 Ask = Callable[[str], str]
