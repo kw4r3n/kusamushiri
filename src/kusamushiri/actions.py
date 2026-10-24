@@ -187,10 +187,7 @@ def _wait_for_mutation_result(
     *,
     page: Page | None = None,
 ) -> str | None:
-    """Return the mutation error, or None once the DOM confirms success.
-
-    Local pages that never send the mutation keep the DOM-only behavior.
-    """
+    """Require a mutation receipt on X as well as the DOM completion signal."""
     deadline = time.monotonic() + ACTION_STATE_TIMEOUT_MS / 1000
     try:
         wait_for_success()
@@ -208,6 +205,9 @@ def _wait_for_mutation_result(
             if remaining <= 0:
                 break
             page.wait_for_timeout(min(0.1, remaining) * 1000)
+    host = urlparse(getattr(page, "url", "")).hostname if page is not None else None
+    if host and (host in {"x.com", "twitter.com"} or host.endswith((".x.com", ".twitter.com"))) and len(requests) != 1:
+        return tr("{mutation} の応答を確認できませんでした。結果不明です。", mutation=mutation_name)
     return _mutation_error(requests, mutation_name)
 
 

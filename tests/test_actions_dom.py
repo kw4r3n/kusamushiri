@@ -34,8 +34,15 @@ def local_page() -> Iterator[Callable[[str], tuple[Page, list[str]]]]:
                 navigations: list[str] = []
 
                 def fulfill_locally(route) -> None:
-                    navigations.append(route.request.url)
-                    route.fulfill(content_type="text/html", body=html)
+                    request = route.request
+                    if request.resource_type == "document":
+                        navigations.append(request.url)
+                        route.fulfill(content_type="text/html", body=html)
+                    elif (request.method == "POST" and request.url.startswith("https://x.com/i/api/graphql/abc/")
+                          and request.url.rsplit("/", 1)[-1] in ACTION_MUTATIONS.values()):
+                        route.fulfill(content_type="application/json", body='{"data": {}}')
+                    else:
+                        route.abort()
 
                 page.route("**/*", fulfill_locally)
                 return page, navigations
@@ -57,8 +64,11 @@ def _article(post_id: str, *, extra_content: str = "") -> str:
     """
 
 
-def _document(articles: list[str], *, leave_success_state_unchanged: bool = False) -> str:
+def _document(
+    articles: list[str], *, leave_success_state_unchanged: bool = False, send_mutations: bool = True
+) -> str:
     unchanged = "true" if leave_success_state_unchanged else "false"
+    send = "true" if send_mutations else "false"
     return f"""
         <!doctype html>
         <html><head><meta charset="utf-8"></head><body>
@@ -70,6 +80,9 @@ def _document(articles: list[str], *, leave_success_state_unchanged: bool = Fals
           <button data-testid="unretweetConfirm" hidden onclick="confirmUndo()">Undo repost</button>
           <script>
             window.actionLog = [];
+            window.sendMutation = async mutation => {{
+              if ({send}) await fetch(`/i/api/graphql/abc/${{mutation}}`, {{method: 'POST'}}).catch(() => null);
+            }};
             window.selectedPostId = null;
             window.leaveSuccessStateUnchanged = {unchanged};
             window.articleFor = (postId) => document.querySelector(`article[data-post-id="${{postId}}"]`);
@@ -82,8 +95,9 @@ def _document(articles: list[str], *, leave_success_state_unchanged: bool = Fals
               window.actionLog.push(`delete-menu:${{window.selectedPostId}}`);
               document.querySelector('[data-testid="confirmationSheetConfirm"]').hidden = false;
             }};
-            window.confirmDelete = () => {{
+            window.confirmDelete = async () => {{
               window.actionLog.push(`delete-confirm:${{window.selectedPostId}}`);
+              await window.sendMutation('DeleteTweet');
               if (!window.leaveSuccessStateUnchanged) window.articleFor(window.selectedPostId).remove();
             }};
             window.openUndo = (postId) => {{
@@ -91,14 +105,16 @@ def _document(articles: list[str], *, leave_success_state_unchanged: bool = Fals
               window.selectedPostId = postId;
               document.querySelector('[data-testid="unretweetConfirm"]').hidden = false;
             }};
-            window.unlikePost = (postId) => {{
+            window.unlikePost = async (postId) => {{
               window.actionLog.push(`unlike:${{postId}}`);
+              await window.sendMutation('UnfavoriteTweet');
               if (!window.leaveSuccessStateUnchanged) {{
                 window.articleFor(postId).querySelector('[data-testid="unlike"]').dataset.testid = 'like';
               }}
             }};
-            window.confirmUndo = () => {{
+            window.confirmUndo = async () => {{
               window.actionLog.push(`undo-confirm:${{window.selectedPostId}}`);
+              await window.sendMutation('DeleteRetweet');
               if (!window.leaveSuccessStateUnchanged) {{
                 const button = window.articleFor(window.selectedPostId).querySelector('[data-testid="unretweet"]');
                 button.dataset.testid = 'retweet';
@@ -114,6 +130,7 @@ ACTIONS = {
     "undo": x_deleter_actions.undo_repost,
     "unlike": x_deleter_actions.unlike_post,
 }
+ACTION_MUTATIONS = {"delete": "DeleteTweet", "undo": "DeleteRetweet", "unlike": "UnfavoriteTweet"}
 EXPECTED_ACTION_LOGS = {
     "delete": [f"caret:{TARGET_ID}", f"delete-menu:{TARGET_ID}", f"delete-confirm:{TARGET_ID}"],
     "undo": [f"unretweet:{TARGET_ID}", f"undo-confirm:{TARGET_ID}"],
@@ -279,6 +296,8 @@ def test_action_targets_primary_timestamp_article_not_preceding_article(
     monkeypatch.setattr(x_deleter_actions, "ACTION_STATE_TIMEOUT_MS", 1_000)
     monkeypatch.setattr(x_deleter_actions, "NAVIGATION_TIMEOUT_MS", 1_000)
     page, navigations = local_page(_document([_article("999"), _article(TARGET_ID)]))
+    mutations: list[str] = []
+    page.on("request", lambda request: mutations.append(request.url) if request.method == "POST" else None)
 
     success, error_message = _run_action(page, action_name)
 
@@ -293,6 +312,7 @@ def test_action_targets_primary_timestamp_article_not_preceding_article(
     else:
         assert page.locator(f'article[data-post-id="{TARGET_ID}"] [data-testid="like"]').count() == 1
     assert navigations == [TARGET_URL]
+    assert mutations == [f"https://x.com/i/api/graphql/abc/{ACTION_MUTATIONS[action_name]}"]
 
 
 @pytest.mark.parametrize("action_name", ["delete", "undo", "unlike"])
@@ -362,8 +382,8 @@ def test_action_fails_when_target_success_state_does_not_change(local_page, monk
 
 @pytest.mark.parametrize("action_name", ["delete", "undo", "unlike"])
 def test_quote_before_own_timestamp_does_not_hide_target(local_page, monkeypatch, action_name: str) -> None:
-    monkeypatch.setattr(x_deleter_actions, "ACTION_STATE_TIMEOUT_MS", 100)
-    monkeypatch.setattr(x_deleter_actions, "NAVIGATION_TIMEOUT_MS", 100)
+    monkeypatch.setattr(x_deleter_actions, "ACTION_STATE_TIMEOUT_MS", 1000)
+    monkeypatch.setattr(x_deleter_actions, "NAVIGATION_TIMEOUT_MS", 1000)
     markup = _article(TARGET_ID).replace(
         '<a href=',
         '<blockquote><a href="/quoted/status/999"><time>quote first</time></a></blockquote><a href=',
@@ -614,9 +634,30 @@ def test_delete_accepts_exact_localized_delete_item(local_page, monkeypatch, lab
     assert _run_action(page, "delete") == (True, None)
 
 
+@pytest.mark.parametrize("action_name", ["delete", "undo", "unlike"])
+def test_dom_success_without_mutation_request_is_uncertain(local_page, monkeypatch, action_name: str) -> None:
+    monkeypatch.setattr(x_deleter_actions, "ACTION_STATE_TIMEOUT_MS", 1000)
+    page, navigations = local_page(_document([_article(TARGET_ID)], send_mutations=False))
+    mutations: list[str] = []
+    page.on("request", lambda request: mutations.append(request.url) if request.method == "POST" else None)
+
+    success, error = _run_action(page, action_name)
+
+    assert success is False
+    assert error is not None and ACTION_MUTATIONS[action_name] in error and "結果不明" in error
+    assert _action_log(page) == EXPECTED_ACTION_LOGS[action_name]
+    if action_name == "delete":
+        assert page.locator("article").count() == 0
+    else:
+        state = "retweet" if action_name == "undo" else "like"
+        assert page.locator(f'article [data-testid="{state}"]').count() == 1
+    assert mutations == []
+    assert navigations == [TARGET_URL]
+
+
 def _document_with_mutation(mutation: str) -> str:
     """Confirm buttons send the X GraphQL mutation, then update the DOM as if successful."""
-    html = _document([_article(TARGET_ID)])
+    html = _document([_article(TARGET_ID)], send_mutations=False)
     return html + f"""<script>
         const sendMutation = () => fetch('https://x.com/i/api/graphql/abc/{mutation}', {{method: 'POST'}})
           .catch(() => null);

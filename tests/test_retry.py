@@ -322,6 +322,7 @@ class ActionPage:
     """Playwright-shaped local double; action functions execute all their real stages."""
 
     def __init__(self, *, status=200, body=None, navigation_status=None, request_missing=False, timeout=False):
+        self.url = "https://x.com/tester/status/1"
         self.handlers = {"request": [], "response": []}
         self.response = Mock(
             url="https://x.com/i/api/graphql/fixture/DeleteTweet", status=status, headers={"retry-after": "120"}
@@ -350,6 +351,7 @@ class ActionPage:
             handler(value)
 
     def goto(self, url, *, timeout):
+        self.url = url
         if self.navigation_status is not None:
             response = Mock(url=url, status=self.navigation_status, headers={"retry-after": "120"})
             self.emit("response", response)

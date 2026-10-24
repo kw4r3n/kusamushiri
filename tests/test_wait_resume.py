@@ -310,6 +310,7 @@ def test_receipt_completion_dispatch_uses_remaining_dom_budget(monkeypatch, comp
 
     page = Mock()
     page.wait_for_timeout.side_effect = dispatch
+    page.url = "https://x.com/tester/status/1"
 
     def dom():
         clock[0] += dom_seconds

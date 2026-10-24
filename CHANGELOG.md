@@ -5,6 +5,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Hold deletion and undo outcomes as uncertain when X mutation requests cannot be confirmed.
 - Decode archived text and display URLs; skip unreadable or collapsed text when exclusions are configured.
 - Exclude offline-only prototypes from the application package while retaining development fixtures.
 - Unify endpoint roles and host lists, and apply explicit CLI traffic overrides to recipes.
