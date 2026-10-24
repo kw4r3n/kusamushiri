@@ -6,9 +6,10 @@ import pytest
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
 from kusamushiri import actions
+from kusamushiri import core as core_module
 from kusamushiri.browser import BrowserManager
 from kusamushiri.core import POST_ARTICLE_SELECTOR, XDeleterCore
-from kusamushiri.models import CollectRequest, PostActionTarget, PostKind
+from kusamushiri.models import CollectRequest, PostActionTarget, PostKind, is_within_date_range
 from kusamushiri.parsing import (
     extract_post_id,
     extract_profile_username,
@@ -168,7 +169,7 @@ def authorized_action(core, method, url):
                                           rate_limit_pending=lambda: core.rate_limit_status is not None,
                                           identity_check=lambda: core._resume_identity(PostActionTarget(url, kind)))
         return getattr(actions, method)(core._browser._require_page(), url,
-                                        find_locator=core._find_first_visible_locator, _evidence=evidence)
+                                        find_locator=core_module.find_first_visible_locator, _evidence=evidence)
 
 
 def test_post_matches_filters_respects_all_filters() -> None:
@@ -310,7 +311,7 @@ def test_unlike_post_verifies_like_button_becomes_visible(monkeypatch) -> None:
 
     core = XDeleterCore()
     core._browser.page = RecordingPage()
-    monkeypatch.setattr(core, "_find_first_visible_locator", lambda root, selectors: ClickableLocator())
+    monkeypatch.setattr(core_module, "find_first_visible_locator", lambda root, selectors: ClickableLocator())
 
     assert authorized_action(core, "unlike_post", "https://x.com/someone/status/12345") == (True, None)
     assert len(calls) == 1
@@ -321,7 +322,7 @@ def test_unlike_post_verifies_like_button_becomes_visible(monkeypatch) -> None:
 def test_unlike_post_fails_without_unlike_button(monkeypatch) -> None:
     core = XDeleterCore()
     core._browser.page = DeletePage()
-    monkeypatch.setattr(core, "_find_first_visible_locator", lambda root, selectors: None)
+    monkeypatch.setattr(core_module, "find_first_visible_locator", lambda root, selectors: None)
 
     assert authorized_action(core, "unlike_post", "https://x.com/someone/status/12345") == (
         False,
@@ -537,7 +538,7 @@ def test_delete_post_uses_shared_delete_candidates(monkeypatch) -> None:
         selector_calls.append(selectors)
         return ClickableLocator()
 
-    monkeypatch.setattr(core, "_find_first_visible_locator", find_first_visible_locator)
+    monkeypatch.setattr(core_module, "find_first_visible_locator", find_first_visible_locator)
     monkeypatch.setattr(actions, "delete_menu_items", delete_candidates)
 
     success, error_message = authorized_action(core, "delete_post", "https://x.com/user/status/12345")
@@ -558,7 +559,7 @@ def test_delete_post_fails_when_delete_menu_item_is_not_identified(monkeypatch) 
         call_count += 1
         return ClickableLocator() if call_count == 1 else None
 
-    monkeypatch.setattr(core, "_find_first_visible_locator", find_first_visible_locator)
+    monkeypatch.setattr(core_module, "find_first_visible_locator", find_first_visible_locator)
     monkeypatch.setattr("kusamushiri.actions.delete_menu_items", lambda _: type(
         "Missing", (ArticleLocator,), {"count": lambda self: 0},
     )())
@@ -586,7 +587,7 @@ def test_delete_post_waits_for_identified_menu_item_and_does_not_guess_on_timeou
         selector_calls.append(selectors)
         return ClickableLocator()
 
-    monkeypatch.setattr(core, "_find_first_visible_locator", find_first_visible_locator)
+    monkeypatch.setattr(core_module, "find_first_visible_locator", find_first_visible_locator)
     monkeypatch.setattr("kusamushiri.actions.delete_menu_items", lambda _: SlowMenu())
 
     success, error = authorized_action(core, "delete_post", "https://x.com/user/status/12345")
@@ -604,7 +605,7 @@ def test_delete_post_fails_when_deleted_article_does_not_disappear(monkeypatch) 
 
     core = XDeleterCore()
     core._browser.page = AttachedPage()
-    monkeypatch.setattr(core, "_find_first_visible_locator", lambda root, selectors: ClickableLocator())
+    monkeypatch.setattr(core_module, "find_first_visible_locator", lambda root, selectors: ClickableLocator())
 
     success, error_message = authorized_action(core, "delete_post", "https://x.com/user/status/12345")
 
@@ -618,7 +619,7 @@ def test_delete_post_fails_when_deleted_article_does_not_disappear(monkeypatch) 
 def test_undo_repost_verifies_retweet_button_becomes_visible(monkeypatch) -> None:
     core = XDeleterCore()
     core._browser.page = DeletePage()
-    monkeypatch.setattr(core, "_find_first_visible_locator", lambda root, selectors: ClickableLocator())
+    monkeypatch.setattr(core_module, "find_first_visible_locator", lambda root, selectors: ClickableLocator())
 
     success, error_message = authorized_action(core, "undo_repost", "https://x.com/user/status/12345")
 
@@ -633,7 +634,7 @@ def test_undo_repost_fails_when_button_state_does_not_change(monkeypatch) -> Non
 
     core = XDeleterCore()
     core._browser.page = UnchangedPage()
-    monkeypatch.setattr(core, "_find_first_visible_locator", lambda root, selectors: ClickableLocator())
+    monkeypatch.setattr(core_module, "find_first_visible_locator", lambda root, selectors: ClickableLocator())
 
     success, error_message = authorized_action(core, "undo_repost", "https://x.com/user/status/12345")
 
@@ -661,7 +662,7 @@ def test_post_actions_reject_unidentifiable_urls_before_navigation(action_name, 
     core = XDeleterCore()
     core._browser.page = NavigationRecordingPage()
 
-    success, error_message = getattr(actions, action_name)(core._browser.page, url, find_locator=core._find_first_visible_locator)
+    success, error_message = getattr(actions, action_name)(core._browser.page, url, find_locator=core_module.find_first_visible_locator)
 
     assert success is False
     assert error_message is not None
@@ -711,16 +712,15 @@ def test_build_post_record_truncates_long_text_preview() -> None:
 
 
 def test_is_post_within_date_range_is_inclusive() -> None:
-    core = XDeleterCore()
     request = build_request(
         since_date=date(2026, 4, 10),
         until_date=date(2026, 4, 19),
     )
 
-    assert core._is_post_within_date_range(date(2026, 4, 10), request) is True
-    assert core._is_post_within_date_range(date(2026, 4, 19), request) is True
-    assert core._is_post_within_date_range(date(2026, 4, 9), request) is False
-    assert core._is_post_within_date_range(date(2026, 4, 20), request) is False
+    assert is_within_date_range(date(2026, 4, 10), request) is True
+    assert is_within_date_range(date(2026, 4, 19), request) is True
+    assert is_within_date_range(date(2026, 4, 9), request) is False
+    assert is_within_date_range(date(2026, 4, 20), request) is False
 
 
 def test_unfollow_refuses_before_saved_rate_limit_deadline(monkeypatch, tmp_path) -> None:

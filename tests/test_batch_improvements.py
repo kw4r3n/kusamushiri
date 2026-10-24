@@ -72,7 +72,6 @@ def scenario(monkeypatch):
     core._browser.diagnostics = trace
     core._browser.ancillary_isolation.diagnostics = trace
     core._browser.page, core._browser.context = page, context
-    core._find_first_visible_locator = lambda owner, selectors: owner.locator(selectors[0])
 
     def request_event(request):
         if request.method == "POST":

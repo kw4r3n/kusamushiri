@@ -11,16 +11,15 @@ DEFAULT_LANGUAGE: Final = "ja"
 LANGUAGE_NAMES: Final = {"ja": "日本語", "en": "English"}
 
 ENGLISH: Final[dict[str, str]] = {
-    '確認結果を保存しました。サーバーの待機期限は保持しています。': 'Saved the verified outcome. The server cooldown deadline is retained.',
-    'X で確認した操作結果を記録しますか？このコマンドは削除を実行しません。': 'Record the action outcome you verified on X? This command does not delete anything.',
-    '停止済みの所有者のロックを解除しました。progress で状態を確認してください。': "Removed the stopped owner's lock. Check the state with progress.",
-    '停止済みプロセスのロックを検査・復旧しますか？結果不明の操作は再送可能にしません。': 'Inspect and recover the stopped process lock? Uncertain actions will remain held.',
-    '現在ログイン中のアカウントと入力された対象アカウントが一致していません。\nログイン中: @{logged_in}\n入力値: @{entered}\n\nフォロー・いいね・リポストの解除は、ログイン中のアカウントに対して実行されます。\n対象アカウントを確認してください。続行しますか？': 'The signed-in account does not match the entered target account.\nSigned in: @{logged_in}\nEntered: @{entered}\n\nUnfollowing and undoing likes or reposts affect the signed-in account.\nCheck the accounts. Continue?',
-    '最終ポスト日の記録を削除できませんでした: {message}': 'Could not remove cached last-post dates: {message}',
-    'フォロー解除はログイン中の @{username} に対して実行されます。': 'Unfollows will affect the signed-in account @{username}.',
-    'ログイン中のアカウントを確認できませんでした。フォロー解除は実行しません。': 'Could not verify the signed-in account. No unfollows will be sent.',
-    'X の利用制限の待機中のため、フォロー解除を送りませんでした。': 'Not sent: the X rate-limit wait has not ended yet.',
     "プロファイルは使用中です。ブラウザと処理を終了してからやり直してください。": "The profile is in use. Close its browser and stop its jobs before trying again.",
+    "停止済みプロセスのロックを検査・復旧しますか？結果不明の操作は再送可能にしません。": "Inspect and recover the stopped process lock? Uncertain actions will remain held.",
+    "停止済みの所有者のロックを解除しました。progress で状態を確認してください。": "Removed the stopped owner's lock. Check the state with progress.",
+    "X で確認した操作結果を記録しますか？このコマンドは削除を実行しません。": "Record the action outcome you verified on X? This command does not delete anything.",
+    "確認結果を保存しました。サーバーの待機期限は保持しています。": "Saved the verified outcome. The server cooldown deadline is retained.",
+    "ログイン中のアカウントを確認できませんでした。フォロー解除は実行しません。": "Could not verify the signed-in account. No unfollows will be sent.",
+    "フォロー解除はログイン中の @{username} に対して実行されます。": "Unfollows will affect the signed-in account @{username}.",
+    "最終ポスト日の記録を削除できませんでした: {message}": "Could not remove cached last-post dates: {message}",
+    "現在ログイン中のアカウントと入力された対象アカウントが一致していません。\nログイン中: @{logged_in}\n入力値: @{entered}\n\nフォロー・いいね・リポストの解除は、ログイン中のアカウントに対して実行されます。\n対象アカウントを確認してください。続行しますか？": "The signed-in account does not match the entered target account.\nSigned in: @{logged_in}\nEntered: @{entered}\n\nUnfollowing and undoing likes or reposts affect the signed-in account.\nCheck the accounts. Continue?",
     "保存済みの期限まで {seconds:.1f} 秒、ブラウザを開かず待機します。Ctrl+C で中止できます。": "Waiting {seconds:.1f}s before opening the browser to honor the saved deadline. Ctrl+C cancels.",
     "新しい操作を止めます。送信済みの操作は結果確認後に停止します（もう一度 Ctrl+C で即中断・結果不明として保持）。": "Stopping new actions and recording the submitted action result (press Ctrl+C again to abort and hold the uncertain outcome).",
     "保存済みの保留記録（今回の通信結果ではありません）": "saved held receipt (not a current HTTP observation)",
@@ -426,6 +425,9 @@ ENGLISH: Final[dict[str, str]] = {
     "フォロー解除ボタンの表示待ち": "Waiting for the Following button",
     "フォロー解除ボタンが見つかりませんでした。": "The Following button was not found.",
     "このアカウントをフォローしていません。": "You do not follow this account.",
+    "X の利用制限の待機中のため、フォロー解除を送りませんでした。": (
+        "Not sent: the X rate-limit wait has not ended yet."
+    ),
     "フォロー解除確認画面の表示": "Opening the unfollow confirmation",
     "フォロー解除の確認ボタンが見つかりませんでした。": "The unfollow confirmation button was not found.",
     "フォロー解除後の完了確認（結果不明。再試行前にXで確認してください）": (

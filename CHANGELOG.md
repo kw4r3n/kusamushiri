@@ -5,18 +5,22 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-- Translate recovery confirmations and reject resolve --dry-run instead of writing a receipt.
-- Clarify the acting account, share GUI result dialogs, restrict retry offers, suppress row redraws and evict unfollowed cache entries.
-- Refuse unfollows while a saved rate-limit deadline remains active.
-- Write CLI deletion IDs once per batch and merge concurrent writers under a process-shared file lock.
-- Distinguish explicit resumes from new undo batches, clear recovered view-change stops, and compact known deletion receipts.
-- Allow a login recheck to clear cancellation without clearing active rate limits.
-- Hold deletion and undo outcomes as uncertain when X mutation requests cannot be confirmed.
-- Decode archived text and display URLs; skip unreadable or collapsed text when exclusions are configured.
-- Exclude offline-only prototypes from the application package while retaining development fixtures.
-- Unify endpoint roles and host lists, and apply explicit CLI traffic overrides to recipes.
-- Save recipes atomically while preserving updater validation and backups.
-- Reject corrupt profile settings and refuse changes to externally locked profiles.
+- A finished unlike/unrepost batch forgets its success receipts, so a later batch acts on posts
+  you liked or reposted again. Explicit resumes skip interrupted successes; new batches clear
+  old unlike/unrepost successes. Recovering from a changed view now reports completion correctly.
+- Protect keyword exclusions when archive text contains HTML entities or shortened links,
+  and skip unreadable or collapsed post text when exclusion keywords are set.
+- Require observed mutation receipts on X before recording deletion or undo success.
+- Login rechecks restore single-post deletion after cancellation while preserving active limits.
+- Ignore corrupt setting values, save recipes atomically, and refuse profile changes with external locks.
+- Batch CLI deleted-post writes, serialize concurrent store writers, and prune redundant journal receipts.
+- Clarify which signed-in account receives unfollows/undo actions, simplify failure dialogs, reduce table
+  redraws, and remove last-post cache entries after unfollowing.
+- Share endpoint classifications, move offline prototypes out of the app package, remove unused code,
+  and translate CLI recovery confirmations into English.
+- `resolve` rejects `--dry-run` instead of writing the receipt anyway.
+- `run` applies `--traffic-policy` and `--ancillary-rate-limit-mode` over the recipe's values.
+- GUI unfollow no longer sends while a saved X rate-limit deadline is still in the future.
 - A held receipt (`blocked`, `ambiguous`, ...) now names the exact `resolve` command to clear it.
   The batch summary counts scheduled pauses separately from rate-limit cooldowns, and the CLI
   progress line is clipped to the terminal width so narrow terminals no longer join lines.

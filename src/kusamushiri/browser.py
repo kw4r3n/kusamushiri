@@ -1,7 +1,6 @@
 import subprocess
 import sys
 import time
-import warnings
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -316,11 +315,6 @@ class BrowserManager:
             raise
         finally:
             self.diagnostics.phase("idle")
-
-    def go_to_twitter(self) -> None:
-        warnings.warn("go_to_twitter() is deprecated, use go_to_home()", DeprecationWarning, stacklevel=2)
-        logger.warning("go_to_twitter() called - deprecated, delegating to go_to_home()")
-        self.go_to_home()
 
     def is_logged_in(self) -> bool:
         """現在ログイン状態かどうかを簡易判定する"""

@@ -180,8 +180,6 @@ class PostTableManager(QObject):
         self.table.setRowCount(0)
         if self._select_all_button is not None:
             self._select_all_button.setEnabled(False)
-        if self.table.rowCount() > 0:
-            self.table.setSortingEnabled(True)
 
     def selected_targets(self) -> list[PostActionTarget]:
         """Get list of checked PostActionTarget items."""

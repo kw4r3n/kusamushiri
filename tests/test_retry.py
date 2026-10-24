@@ -396,6 +396,9 @@ class ActionLocator:
     def count(self):
         return 1
 
+    def is_visible(self):
+        return True
+
     def locator(self, selector):
         return ActionLocator(self.page, selector)
 
@@ -657,7 +660,6 @@ def make_quiet_core(monkeypatch):
         return cancelled or core.is_cancel_requested()
 
     core.wait_for_action_cancel = wait
-    core._find_first_visible_locator = lambda owner, selectors: owner.locator(selectors[0])
     return core, context, clock
 
 

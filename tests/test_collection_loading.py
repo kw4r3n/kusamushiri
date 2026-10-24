@@ -4,7 +4,7 @@ from datetime import date
 import pytest
 
 from kusamushiri.core import EmptySearchState, XDeleterCore
-from kusamushiri.models import CollectRequest, PostRecord
+from kusamushiri.models import CollectRequest, PostRecord, is_within_date_range
 
 
 def request() -> CollectRequest:
@@ -156,7 +156,7 @@ def test_profile_collection_continues_past_old_posts(monkeypatch):
     monkeypatch.setattr(core, "_get_article_date_text", lambda article: article.date)
 
     def parse(**kwargs):
-        if core._is_post_within_date_range(kwargs["post_date"], kwargs["request"]):
+        if is_within_date_range(kwargs["post_date"], kwargs["request"]):
             return kwargs["article"]
         return None
 

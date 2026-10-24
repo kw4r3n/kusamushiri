@@ -35,7 +35,6 @@ from kusamushiri.models import (
     PostKind,
     PostRecord,
     RetryPolicy,
-    is_within_date_range,
     post_skip_reason,
 )
 from kusamushiri.parsing import (
@@ -436,17 +435,6 @@ class XDeleterCore:
             )
         except Exception as error:
             logger.debug("Timeline height did not change before timeout: %s", error)
-
-
-    def _is_post_within_date_range(self, post_date: date | None, request: CollectRequest) -> bool:
-        return is_within_date_range(post_date, request)
-
-    def _find_first_visible_locator(
-        self,
-        root: Page | Locator,
-        selectors: tuple[str, ...],
-    ) -> Locator | None:
-        return find_first_visible_locator(root, selectors)
 
     def _build_search_query(self, normalized_username: str, request: CollectRequest) -> str:
         query = f"from:{normalized_username}"
@@ -1062,7 +1050,7 @@ class XDeleterCore:
 
             reuse = self._pending_view if target.kind == "post" and self._pending_view is not None and self._pending_view.target_url == target.url else None
             self._pending_view = None
-            result = _execute_post_action(page, target, find_locator=self._find_first_visible_locator,
+            result = _execute_post_action(page, target, find_locator=find_first_visible_locator,
                                         should_cancel=self.is_cancel_requested,
                                         rate_limit_pending=lambda: self.rate_limit_status is not None,
                                         rate_limit_blocking=self.is_action_rate_blocking,

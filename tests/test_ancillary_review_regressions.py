@@ -187,7 +187,7 @@ def test_new_quarantine_messages_and_diagnostics_do_not_leak_url_or_secret(isola
     assert canary not in json.dumps(events) and url not in json.dumps(events)
 
 
-def test_later_missing_control_stops_without_retry_and_keeps_item_pending(isolated, tmp_path):
+def test_later_missing_control_stops_without_retry_and_keeps_item_pending(isolated, tmp_path, monkeypatch):
     core, page, context, clock, events = isolated
     navigations, waits = [], []
 
@@ -198,7 +198,8 @@ def test_later_missing_control_stops_without_retry_and_keeps_item_pending(isolat
         else:
             context.handler(Route(BADGES))
 
-    core._find_first_visible_locator = lambda owner, selectors: owner.locator(selectors[0]) if navigations[-1].endswith('/1') else None
+    monkeypatch.setattr('kusamushiri.core.find_first_visible_locator',
+                        lambda owner, selectors: owner.locator(selectors[0]) if navigations[-1].endswith('/1') else None)
     page.goto = navigate
     journal = ActionJournal(tmp_path / 'action-progress.json', 'synthetic')
     results = run_post_actions(core, [target(1), target(2)], 0,

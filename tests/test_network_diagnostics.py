@@ -184,7 +184,6 @@ def attach_action(page, recorder):
     core._action_viewer = "tester"
     core._browser.diagnostics = trace
     core._browser.page = page
-    core._find_first_visible_locator = lambda owner, selectors: owner.locator(selectors[0])
 
     def bind_request(request):
         clock.tick()

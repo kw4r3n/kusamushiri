@@ -518,7 +518,6 @@ def test_predicted_or_persisted_extension_after_dispatch_is_not_erased(monkeypat
 def authenticated_core(viewer="tester"):
     core = XDeleterCore()
     core._browser.page = ActionPage()
-    core._find_first_visible_locator = lambda owner, selectors: owner.locator(selectors[0])
     core.is_logged_in = lambda: True
     core.get_logged_in_username = lambda: viewer
     return core
