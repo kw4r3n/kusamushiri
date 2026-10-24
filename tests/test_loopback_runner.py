@@ -6,8 +6,7 @@ import sys
 from pathlib import Path
 
 import pytest
-
-from kusamushiri.readonly_startup import LoopbackReadOnlyPlan, _canonical_loopback, _read_binding
+from readonly_startup import LoopbackReadOnlyPlan, _canonical_loopback, _read_binding
 
 RUNNER = Path(__file__).resolve().parents[1] / "scripts/loopback_fixture_runner.py"
 spec = importlib.util.spec_from_file_location("owned_loopback_runner", RUNNER)

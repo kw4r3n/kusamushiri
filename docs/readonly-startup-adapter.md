@@ -1,5 +1,7 @@
 # Unauthenticated loopback startup fixture
 
+The adapter lives in `scripts/readonly_startup.py` and is excluded from the application package.
+
 This experimental adapter and runner are isolated from the production CLI and GUI.
 They test a fresh unauthenticated browser against synthetic localhost fixtures.
 They cannot accept an X URL, authentication export or existing browser profile.

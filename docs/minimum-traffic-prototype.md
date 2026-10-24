@@ -23,9 +23,9 @@ then bounded `enforce` runs, each separately authorized).
 
 The direction is to build deletion from the smallest established dependency set.
 An accumulating list of incidental endpoint exceptions does not establish that set.
-The new `minimum_traffic.py` is deliberately **offline only**, opt-in, unreferenced
-by every production command. It accepts synthetic records, refuses Playwright
-routes/real receipts, and has no transport, credential or header interface. It is
+The development script `scripts/minimum_traffic.py` is deliberately **offline only**,
+opt-in, unreferenced by every production command and excluded from the application
+package. It accepts synthetic records, refuses Playwright routes/real receipts, and has no transport, credential or header interface. It is
 not a ready-to-use X allowlist or a new authentication/API deletion implementation.
 The earlier suppression experiment is preserved separately as superseded evidence.
 

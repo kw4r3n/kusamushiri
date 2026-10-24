@@ -3,8 +3,7 @@
 from dataclasses import replace
 
 import pytest
-
-from kusamushiri.minimum_traffic import (
+from minimum_traffic import (
     MinimumTrafficPrototype,
     OfflineDependencyCapsule,
     OfflineRoute,
@@ -22,6 +21,7 @@ DELETE = "https://x.com/i/api/graphql/fixture/DeleteTweet"
 def fixture_capsule():
     return OfflineDependencyCapsule(
         assets=frozenset({(ASSET, "script")}), bootstrap_complete=True, scope="offline-fixture",
+        target_reads=frozenset({"TweetDetail", "TweetResultByRestId"}),
         api_requests=frozenset({("GET", DETAIL, "xhr"), ("GET", RESULT, "xhr"), ("POST", DELETE, "xhr")}),
     )
 
@@ -244,6 +244,8 @@ def test_single_read_ablation_is_fixture_evidence_only():
 def test_no_production_command_imports_or_enables_minimum_traffic():
     from pathlib import Path
     root = Path(__file__).resolve().parents[1] / "src/kusamushiri"
+    assert not (root / "minimum_traffic.py").exists()
+    assert not (root / "readonly_startup.py").exists()
     for name in ("cli.py", "core.py", "browser.py", "app.py", "gui.py", "retry.py"):
         assert "minimum_traffic" not in (root / name).read_text()
 

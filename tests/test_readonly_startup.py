@@ -6,8 +6,7 @@ from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
-
-from kusamushiri.readonly_startup import TRANSPORT_GUARD, LoopbackReadOnlyPlan, ReadOnlyStartupAdapter
+from readonly_startup import TRANSPORT_GUARD, LoopbackReadOnlyPlan, ReadOnlyStartupAdapter
 
 TARGET = "http://127.0.0.1:8765/target/123"
 ASSET = "http://127.0.0.1:8765/bootstrap.js"
@@ -445,7 +444,7 @@ def test_adapter_cannot_restart_after_one_observation():
 
 
 def test_read_only_policy_cannot_arm_the_approved_mutation_model():
-    from kusamushiri.minimum_traffic import OfflineDependencyCapsule
+    from minimum_traffic import OfflineDependencyCapsule
     adapter = ReadOnlyStartupAdapter(OfflineDependencyCapsule())
     browser = FixtureBrowser(Clock())
     result = adapter.run(browser)
@@ -530,7 +529,7 @@ def test_installed_request_uses_url_and_post_data_not_fixture_target_attribute()
 
     from playwright.sync_api import Request as ActualRequest
     assert "target_id" not in ActualRequest.__dict__ and "post_data" in ActualRequest.__dict__
-    source = (Path(__file__).resolve().parents[1] / "src/kusamushiri/readonly_startup.py").read_text()
+    source = (Path(__file__).resolve().parents[1] / "scripts/readonly_startup.py").read_text()
     assert 'getattr(request, "target_id"' not in source and 'request.post_data' in source
 
 

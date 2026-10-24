@@ -29,7 +29,7 @@ from typing import cast
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from kusamushiri.readonly_startup import LoopbackReadOnlyPlan, ReadOnlyStartupAdapter  # noqa: E402
+from readonly_startup import LoopbackReadOnlyPlan, ReadOnlyStartupAdapter  # noqa: E402
 
 WALL_SECONDS = 30
 CASES = ("baseline", "post", "unknown", "redirect", "wrong-target", "frame", "popup", "worker", "websocket")

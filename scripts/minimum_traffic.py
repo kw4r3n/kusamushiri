@@ -9,8 +9,9 @@ import re
 from dataclasses import dataclass, field
 from urllib.parse import ParseResult, urlparse
 
-TARGET_READ_CANDIDATES = frozenset({"TweetDetail", "TweetResultByRestId"})
-_GRAPH = re.compile(r"/i/api/graphql/[A-Za-z0-9_-]{1,128}/(TweetDetail|TweetResultByRestId|DeleteTweet)")
+from kusamushiri.rate_limits import TARGET_READS as TARGET_READ_CANDIDATES
+
+_GRAPH = re.compile(r"/i/api/graphql/[A-Za-z0-9_-]{1,128}/([A-Za-z0-9_]+)")
 
 
 @dataclass(frozen=True)
