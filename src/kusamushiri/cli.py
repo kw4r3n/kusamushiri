@@ -805,9 +805,12 @@ def cmd_unfollow(args: argparse.Namespace) -> int:
             print(f"@{record.username}")
         _info(tr("{count} 件（確認のみ、何も変更していません）。", count=len(records)))
         return 0
-    _confirm(tr("{path} の {count} 件をフォロー解除しますか？", path=args.file, count=len(records)), args.yes)
-
     with browser_session(args.profile, headless=args.headless) as core:
+        username = core.get_logged_in_username()
+        if not username:
+            raise CliError(tr("ログイン中のアカウントを確認できませんでした。フォロー解除は実行しません。"))
+        _info(tr("フォロー解除はログイン中の @{username} に対して実行されます。", username=username))
+        _confirm(tr("{path} の {count} 件をフォロー解除しますか？", path=args.file, count=len(records)), args.yes)
         results = _run_batch(
             core,
             records,
@@ -817,6 +820,10 @@ def cmd_unfollow(args: argparse.Namespace) -> int:
         )
         cancelled = core.is_cancel_requested()
 
+    try:
+        LastPostStore.for_account(args.profile).remove(record.username for record, success, _ in results if success)
+    except OSError as error:
+        _info(tr("最終ポスト日の記録を削除できませんでした: {message}", message=error))
     failed = [(record, error) for record, success, error in results if not success]
     for record, error in failed:
         _info(tr("失敗: {target}: {error}", target=f"@{record.username}", error=error or "?"))

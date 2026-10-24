@@ -11,6 +11,10 @@ DEFAULT_LANGUAGE: Final = "ja"
 LANGUAGE_NAMES: Final = {"ja": "日本語", "en": "English"}
 
 ENGLISH: Final[dict[str, str]] = {
+    '現在ログイン中のアカウントと入力された対象アカウントが一致していません。\nログイン中: @{logged_in}\n入力値: @{entered}\n\nフォロー・いいね・リポストの解除は、ログイン中のアカウントに対して実行されます。\n対象アカウントを確認してください。続行しますか？': 'The signed-in account does not match the entered target account.\nSigned in: @{logged_in}\nEntered: @{entered}\n\nUnfollowing and undoing likes or reposts affect the signed-in account.\nCheck the accounts. Continue?',
+    '最終ポスト日の記録を削除できませんでした: {message}': 'Could not remove cached last-post dates: {message}',
+    'フォロー解除はログイン中の @{username} に対して実行されます。': 'Unfollows will affect the signed-in account @{username}.',
+    'ログイン中のアカウントを確認できませんでした。フォロー解除は実行しません。': 'Could not verify the signed-in account. No unfollows will be sent.',
     'X の利用制限の待機中のため、フォロー解除を送りませんでした。': 'Not sent: the X rate-limit wait has not ended yet.',
     "プロファイルは使用中です。ブラウザと処理を終了してからやり直してください。": "The profile is in use. Close its browser and stop its jobs before trying again.",
     "保存済みの期限まで {seconds:.1f} 秒、ブラウザを開かず待機します。Ctrl+C で中止できます。": "Waiting {seconds:.1f}s before opening the browser to honor the saved deadline. Ctrl+C cancels.",
@@ -193,13 +197,6 @@ ENGLISH: Final[dict[str, str]] = {
     ),
     "プロファイルを作成できませんでした: {error}": "Could not create the profile: {error}",
     "アカウント不一致": "Account mismatch",
-    "現在ログイン中のアカウントと入力された対象アカウントが一致していません。\n"
-    "ログイン中: @{logged_in}\n入力値: @{entered}\n\n"
-    "このまま実行すると削除/解除に失敗する可能性があります。続行しますか？": (
-        "The logged-in account does not match the target account you entered.\n"
-        "Logged in: @{logged_in}\nEntered: @{entered}\n\n"
-        "Deleting or undoing may fail if you continue. Continue anyway?"
-    ),
     "現在ログイン中のアカウントと入力された対象アカウントが一致していません。\n"
     "ログイン中: @{logged_in}\n入力値: @{entered}\n\n"
     "必要に応じて対象アカウントを修正してください。": (

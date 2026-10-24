@@ -183,3 +183,20 @@ def test_apply_entries_matches_usernames_case_insensitively() -> None:
     assert applied[0].checked_at == "2026-10-01T09:30:00+00:00"
     assert applied[0].last_post_at is None and applied[0].last_post_note == "These posts are protected"
     assert applied[1] == records[1]
+
+
+def test_store_remove_matches_case_insensitively_and_keeps_other_accounts(app_data_dir: Path) -> None:
+    store = LastPostStore.for_account("work")
+    store.record([
+        LastPostResult("Alice", "2026-10-01T00:00:00+00:00"),
+        LastPostResult("bob", "2026-10-01T00:00:00+00:00"),
+    ])
+    store.remove(["ALICE", "missing"])
+    assert set(store.load()) == {"bob"}
+    assert json.loads(store.path.read_text(encoding="utf-8"))["accounts"].keys() == {"bob"}
+
+
+def test_store_remove_noop_does_not_create_a_cache(app_data_dir: Path) -> None:
+    store = LastPostStore.for_account("work")
+    store.remove(["missing"])
+    assert not store.path.exists()

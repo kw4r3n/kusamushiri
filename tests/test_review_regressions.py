@@ -15,6 +15,9 @@ from test_retry import FakeCore, target
 from kusamushiri import actions, cli
 from kusamushiri.core import XDeleterCore
 from kusamushiri.deleted_posts import DeletedPostStore
+from kusamushiri.follows import FollowRecord, write_follow_list
+from kusamushiri.i18n import get_language, set_language
+from kusamushiri.last_posts import LastPostResult, LastPostStore
 from kusamushiri.models import PostActionResult, RetryPolicy
 from kusamushiri.progress import ActionJournal
 from kusamushiri.retry import run_post_actions
@@ -138,3 +141,17 @@ store.record([number])
             if process.poll() is None:
                 process.kill()
                 process.wait()
+
+
+def test_cli_unfollow_names_actor_and_removes_successful_cache(fake_core, tmp_path, capsys):  # noqa: F811
+    path = tmp_path / "following.json"
+    write_follow_list(path, [FollowRecord("bob", "Bob", "https://x.com/bob", False)])
+    store = LastPostStore(tmp_path / "last.json")
+    store.record([LastPostResult("bob", "2026-10-01"), LastPostResult("carol", "2026-10-01")])
+    previous = get_language()
+    try:
+        assert cli.main(["--lang", "en", "unfollow", str(path), "--yes"]) == 0
+        assert "signed-in account @alice" in capsys.readouterr().err
+        assert set(store.load()) == {"carol"}
+    finally:
+        set_language(previous)

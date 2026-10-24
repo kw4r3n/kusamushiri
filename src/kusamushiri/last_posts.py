@@ -215,6 +215,16 @@ class LastPostStore:
         self._write(entries)
         return entries
 
+    def remove(self, usernames: Iterable[str]) -> None:
+        """Forget cached results for successfully unfollowed accounts."""
+        entries = self.load()
+        removed = False
+        for username in usernames:
+            if entries.pop(username.casefold(), None) is not None:
+                removed = True
+        if removed:
+            self._write(entries)
+
     def _write(self, entries: Mapping[str, LastPostEntry]) -> None:
         payload = {
             "version": STORE_VERSION,

@@ -16,8 +16,8 @@ from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from kusamushiri.follows import FollowRecord, UnfollowRequest, UnfollowResult
-from kusamushiri.gui import XDeleterWindow, format_action_failures, remove_successful_rows
-from kusamushiri.gui_follows import CHECKED_AT_COLUMN, LAST_POST_COLUMN, FollowListDialog
+from kusamushiri.gui import XDeleterWindow, remove_successful_rows
+from kusamushiri.gui_follows import CHECKED_AT_COLUMN, LAST_POST_COLUMN, FollowListDialog, format_failures
 from kusamushiri.last_posts import FetchLastPostsRequest, LastPostResult, LastPostStore
 from kusamushiri.models import (
     CollectRequest,
@@ -338,12 +338,16 @@ def test_confirm_account_match_returns_false_for_rejected_mismatch(
 ) -> None:
     window._last_logged_in_username = "logged_in_user"
     window.username_input.setText("other_user")
-    monkeypatch.setattr(
-        "PySide6.QtWidgets.QMessageBox.question",
-        lambda *a, **kw: QMessageBox.StandardButton.No,
-    )
+    messages: list[str] = []
+
+    def reject(_parent, _title, message, *_args):
+        messages.append(message)
+        return QMessageBox.StandardButton.No
+
+    monkeypatch.setattr("PySide6.QtWidgets.QMessageBox.question", reject)
 
     assert window._confirm_account_match() is False
+    assert "フォロー・いいね・リポストの解除は、ログイン中のアカウントに対して実行されます。" in messages[0]
 
 
 def test_on_delete_done_removes_successful_rows_without_dialog_hang(
@@ -371,7 +375,7 @@ def test_on_delete_done_removes_successful_rows_without_dialog_hang(
     assert window.table.item(0, 2).text() == "https://x.com/user/status/2"
 
 
-def test_format_action_failures_returns_labels_urls_and_error_messages() -> None:
+def test_format_failures_returns_labels_urls_and_error_messages() -> None:
     failures = [
         PostActionResult(
             target=PostActionTarget(url="https://x.com/user/status/1", kind="post"),
@@ -387,7 +391,7 @@ def test_format_action_failures_returns_labels_urls_and_error_messages() -> None
         ),
     ]
 
-    assert format_action_failures(failures) == (
+    assert format_failures(failures) == (
         "[削除] https://x.com/user/status/1\n"
         "  failed\n"
         "[リポスト解除] https://x.com/user/status/2\n"
@@ -795,6 +799,7 @@ def test_retry_failed_rechecks_account_match(window, monkeypatch) -> None:
     assert len(emitted) == 1
     # A one-post retry keeps the confirmed-viewer guard and navigates to the post.
     assert emitted[0].expected_viewer == "user" and not emitted[0].current_view_only
+    assert emitted[0].resume is True
 
     # Complete the first dispatched operation before exercising another retry.
     window.set_busy(False)
@@ -1179,14 +1184,17 @@ def test_unfollow_rechecks_account_match(window, qtbot, monkeypatch) -> None:
         dialog.close()
 
 
-def test_unfollow_done_removes_successes_and_offers_retry(window, qtbot, monkeypatch) -> None:
+def test_unfollow_done_removes_successes_and_cache_without_offering_unsafe_retry(window, qtbot, monkeypatch) -> None:
     dialog = _open_follow_dialog(window)
     records = _follows()
     window._requested_unfollow_count = 2
-    retried: list[list[UnfollowResult]] = []
-    monkeypatch.setattr(window, "_retry_failed_unfollows", retried.append)
-    monkeypatch.setattr("PySide6.QtWidgets.QMessageBox.exec", lambda box: 0)
-    monkeypatch.setattr("PySide6.QtWidgets.QMessageBox.clickedButton", lambda box: box.buttons()[0])
+    store = window._last_post_store()
+    store.record([
+        LastPostResult("ONE_WAY", "2026-10-01T00:00:00+00:00"),
+        LastPostResult("quiet", "2026-10-01T00:00:00+00:00"),
+    ])
+    dialogs: list[QMessageBox] = []
+    monkeypatch.setattr("PySide6.QtWidgets.QMessageBox.exec", lambda box: dialogs.append(box))
     try:
         window.on_unfollow_done([
             UnfollowResult(records[1], True),
@@ -1194,22 +1202,29 @@ def test_unfollow_done_removes_successes_and_offers_retry(window, qtbot, monkeyp
         ])
         remaining = {dialog._record(row).username for row in range(dialog.table.rowCount())}
         assert remaining == {"mutual", "quiet"}
+        assert set(store.load()) == {"quiet"}
         assert "1 / 2" in window.status_label.text()
-        assert [_usernames([result.target for result in batch]) for batch in retried] == [["quiet"]]
+        assert len(dialogs) == 1
+        assert all("再試行" not in button.text() for button in dialogs[0].buttons())
+        assert "@quiet" in dialogs[0].detailedText()
     finally:
         dialog.close()
 
 
-def test_retry_failed_unfollows_uses_dialog_interval(window, qtbot) -> None:
+def test_unfollow_cache_failure_keeps_successful_row_removed(window, qtbot, monkeypatch) -> None:
     dialog = _open_follow_dialog(window)
-    emitted: list[UnfollowRequest] = []
-    window.unfollow_requested.connect(emitted.append)
-    dialog.interval_input.setValue(30)
+    warnings: list[str] = []
+    monkeypatch.setattr("PySide6.QtWidgets.QMessageBox.warning", lambda _parent, _title, text: warnings.append(text))
+    monkeypatch.setattr("PySide6.QtWidgets.QMessageBox.information", lambda *_args: None)
+
+    def fail_remove(_store, _usernames):
+        raise OSError("read only")
+
+    monkeypatch.setattr(LastPostStore, "remove", fail_remove)
     try:
-        window._retry_failed_unfollows([UnfollowResult(_follows()[1], False, "failed")])
-        assert len(emitted) == 1
-        assert emitted[0].interval_seconds == 30
-        assert _usernames(emitted[0].targets) == ["one_way"]
+        window.on_unfollow_done([UnfollowResult(_follows()[1], True)])
+        assert {dialog._record(row).username for row in range(dialog.table.rowCount())} == {"mutual", "quiet"}
+        assert warnings == ["最終ポスト日の記録を削除できませんでした: read only"]
     finally:
         dialog.close()
 
@@ -1427,3 +1442,73 @@ def test_passive_menu_gui_stop_retains_existing_mode_without_caret_attempt(windo
     fields = json.loads(details[0])
     assert fields["reason"] == "cancelled_or_stale" and not fields["caret_click_attempted"]
     assert fields["inspection_mode"] == "existing_overlay_read_only" and fields["snapshot"] is None
+
+
+@pytest.mark.parametrize("updates_enabled", [True, False])
+def test_remove_successful_rows_batches_repaints_and_restores_state(window, monkeypatch, updates_enabled) -> None:
+    window.display_posts([_sample()])
+    window.table.setUpdatesEnabled(updates_enabled)
+    original_remove = window.table.removeRow
+    painting: list[bool] = []
+
+    def remove(row):
+        painting.append(window.table.updatesEnabled())
+        original_remove(row)
+
+    monkeypatch.setattr(window.table, "removeRow", remove)
+    remove_successful_rows(window.table, [
+        PostActionResult(PostActionTarget("https://x.com/user/status/1", "post"), "削除", True, None),
+    ])
+    assert painting == [False]
+    assert window.table.updatesEnabled() is updates_enabled
+
+
+@pytest.mark.parametrize("failure_kind", ["permanent", "auth", "ambiguous", "blocked"])
+def test_completion_does_not_recommend_retry_for_held_failures(window, monkeypatch, failure_kind) -> None:
+    dialogs: list[QMessageBox] = []
+    monkeypatch.setattr("PySide6.QtWidgets.QMessageBox.exec", lambda box: dialogs.append(box))
+    window.on_delete_done([
+        PostActionResult(PostActionTarget("https://x.com/user/status/1", "post"), "削除", False,
+                         "held", failure_kind),
+    ])
+    assert len(dialogs) == 1
+    assert all("再試行" not in button.text() for button in dialogs[0].buttons())
+    assert "再試行" not in dialogs[0].informativeText()
+
+
+def test_format_failures_handles_follow_and_last_post_results() -> None:
+    record = _follows()[1]
+    assert format_failures([UnfollowResult(record, False, "failed")]) == "@one_way https://x.com/one_way\n  failed"
+    assert format_failures([LastPostResult("quiet", "now", error_message="failed")]) == "@quiet\n  failed"
+
+
+def test_completion_retry_submits_only_retryable_failures(window, monkeypatch) -> None:
+    window._login_verified = True
+    window._last_logged_in_username = "user"
+    window.username_input.setText("user")
+    requests: list[ExecuteActionsRequest] = []
+    window.delete_requested.connect(requests.append)
+    monkeypatch.setattr("PySide6.QtWidgets.QMessageBox.exec", lambda box: 0)
+    monkeypatch.setattr("PySide6.QtWidgets.QMessageBox.clickedButton", lambda box: box.buttons()[0])
+    retryable = PostActionResult(PostActionTarget("https://x.com/user/status/1", "post"), "削除", False,
+                                 "temporary", "retryable")
+    held = PostActionResult(PostActionTarget("https://x.com/user/status/2", "post"), "削除", False,
+                           "unknown", "ambiguous")
+    window.on_delete_done([retryable, held])
+    assert len(requests) == 1
+    assert requests[0].targets == [retryable.target]
+    assert requests[0].resume is True
+
+
+def test_remove_successful_rows_restores_updates_when_removal_fails(window, monkeypatch) -> None:
+    window.display_posts([_sample()])
+
+    def fail_remove(_row):
+        raise RuntimeError("remove failed")
+
+    monkeypatch.setattr(window.table, "removeRow", fail_remove)
+    with pytest.raises(RuntimeError, match="remove failed"):
+        remove_successful_rows(window.table, [
+            PostActionResult(PostActionTarget("https://x.com/user/status/1", "post"), "削除", True, None),
+        ])
+    assert window.table.updatesEnabled() is True

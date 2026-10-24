@@ -1,6 +1,6 @@
 """Review dialog for the collected following list: filter, check, save and unfollow."""
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from datetime import date, datetime
 from pathlib import Path
 
@@ -25,6 +25,7 @@ from kusamushiri.follows import DEFAULT_UNFOLLOW_INTERVAL_SECONDS, FollowRecord,
 from kusamushiri.gui_table import save_selected_with_dialog
 from kusamushiri.i18n import tr
 from kusamushiri.last_posts import LastPostEntry, LastPostResult, apply_last_post_entries
+from kusamushiri.models import PostActionResult
 from kusamushiri.parsing import parse_post_date
 
 USERNAME_COLUMN = 1
@@ -57,18 +58,15 @@ def format_checked_at(checked_at: str | None) -> str:
         return checked_at
 
 
-def format_last_post_failures(failures: list[LastPostResult]) -> str:
+def format_failures(failures: Iterable[PostActionResult | UnfollowResult | LastPostResult]) -> str:
     lines: list[str] = []
     for result in failures:
-        lines.append(f"@{result.username}")
-        lines.append(f"  {result.error_message or tr('詳細不明')}")
-    return "\n".join(lines)
-
-
-def format_unfollow_failures(failures: list[UnfollowResult]) -> str:
-    lines: list[str] = []
-    for result in failures:
-        lines.append(f"@{result.target.username} {result.target.profile_url}")
+        if isinstance(result, PostActionResult):
+            lines.append(f"[{result.action_label}] {result.target.url}")
+        elif isinstance(result, UnfollowResult):
+            lines.append(f"@{result.target.username} {result.target.profile_url}")
+        else:
+            lines.append(f"@{result.username}")
         lines.append(f"  {result.error_message or tr('詳細不明')}")
     return "\n".join(lines)
 
@@ -275,6 +273,7 @@ class FollowListDialog(QDialog):
     def remove_usernames(self, usernames: set[str]) -> None:
         folded = {username.casefold() for username in usernames}
         # One repaint for the whole batch instead of one per removed row.
+        updates_enabled = self.table.updatesEnabled()
         self.table.setUpdatesEnabled(False)
         try:
             for row in range(self.table.rowCount() - 1, -1, -1):
@@ -282,7 +281,7 @@ class FollowListDialog(QDialog):
                 if record is not None and record.username.casefold() in folded:
                     self.table.removeRow(row)
         finally:
-            self.table.setUpdatesEnabled(True)
+            self.table.setUpdatesEnabled(updates_enabled)
         self._update_selection_label()
 
     def _update_selection_label(self, *_args: object) -> None:

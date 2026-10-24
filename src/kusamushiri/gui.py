@@ -38,13 +38,12 @@ from kusamushiri.archive import ArchiveError, ArchiveSelection, load_archive_pos
 from kusamushiri.deleted_posts import DeletedPostStore
 from kusamushiri.exporting import write_post_list
 from kusamushiri.follows import (
-    DEFAULT_UNFOLLOW_INTERVAL_SECONDS,
     ExportFollowingRequest,
     FollowRecord,
     UnfollowRequest,
     UnfollowResult,
 )
-from kusamushiri.gui_follows import FollowListDialog, format_last_post_failures, format_unfollow_failures
+from kusamushiri.gui_follows import FollowListDialog, format_failures
 from kusamushiri.gui_table import URL_COLUMN_WIDTH, PostTableManager, ask_export_path, save_selected_with_dialog
 from kusamushiri.i18n import LANGUAGE_NAMES, get_language, tr, translate
 from kusamushiri.last_posts import FetchLastPostsRequest, LastPostEntry, LastPostResult, LastPostStore
@@ -145,15 +144,6 @@ QSplitter::handle { background: #303a49; height: 3px; }
 """
 
 
-def format_action_failures(failures: list[PostActionResult]) -> str:
-    lines: list[str] = []
-    for result in failures:
-        error_message = result.error_message or tr("詳細不明")
-        lines.append(f"[{result.action_label}] {result.target.url}")
-        lines.append(f"  {error_message}")
-    return "\n".join(lines)
-
-
 def remove_successful_rows(table: QTableWidget, results: list[PostActionResult]) -> None:
     succeeded = {
         (result.target.url, result.target.kind)
@@ -163,15 +153,20 @@ def remove_successful_rows(table: QTableWidget, results: list[PostActionResult])
     if not succeeded:
         return
 
-    for row_index in range(table.rowCount() - 1, -1, -1):
-        item = table.item(row_index, 0)
-        if item is None:
-            continue
-        target = item.data(Qt.ItemDataRole.UserRole)
-        if not isinstance(target, PostActionTarget):
-            continue
-        if (target.url, target.kind) in succeeded:
-            table.removeRow(row_index)
+    updates_enabled = table.updatesEnabled()
+    table.setUpdatesEnabled(False)
+    try:
+        for row_index in range(table.rowCount() - 1, -1, -1):
+            item = table.item(row_index, 0)
+            if item is None:
+                continue
+            target = item.data(Qt.ItemDataRole.UserRole)
+            if not isinstance(target, PostActionTarget):
+                continue
+            if (target.url, target.kind) in succeeded:
+                table.removeRow(row_index)
+    finally:
+        table.setUpdatesEnabled(updates_enabled)
 
 
 class XDeleterWindow(QMainWindow):
@@ -1191,7 +1186,8 @@ class XDeleterWindow(QMainWindow):
                 "現在ログイン中のアカウントと入力された対象アカウントが一致していません。\n"
                 "ログイン中: @{logged_in}\n"
                 "入力値: @{entered}\n\n"
-                "このまま実行すると削除/解除に失敗する可能性があります。続行しますか？",
+                "フォロー・いいね・リポストの解除は、ログイン中のアカウントに対して実行されます。\n"
+                "対象アカウントを確認してください。続行しますか？",
                 logged_in=self._last_logged_in_username,
                 entered=input_username,
             ),
@@ -1577,9 +1573,7 @@ class XDeleterWindow(QMainWindow):
 
     def on_last_posts_done(self, results: list[LastPostResult]) -> None:
         requested = max(self._requested_last_post_count, len(results))
-        failures = [result for result in results if not result.success]
-        succeeded = len(results) - len(failures)
-        skipped = requested - len(results)
+        succeeded = sum(result.success for result in results)
         save_error = ""
         try:
             entries = self._last_post_store().record(results)
@@ -1595,32 +1589,16 @@ class XDeleterWindow(QMainWindow):
             self.follow_dialog.apply_last_posts(entries)
         stopped = self._job_stopped()
         self.set_busy(False)
-        heading = tr("最終ポスト日の取得を中止") if stopped else tr("最終ポスト日の取得完了")
-        message = tr("{heading}: {success} / {requested} 件成功", heading=heading, success=succeeded, requested=requested)
-        notes = [tr("{count} 件失敗", count=len(failures))] if failures else []
-        if skipped > 0:
-            notes.append(tr("{count} 件未処理", count=skipped))
-        if notes:
-            message += tr("（{notes}）", notes=tr("、").join(notes))
-        self.update_status(message)
         if save_error:
             QMessageBox.warning(
                 self.follow_dialog or self,
                 tr("エラー"),
                 tr("取得結果を保存できませんでした: {message}", message=save_error),
             )
-        if stopped:
-            self._show_rate_limit(self.follow_dialog)
-            return
-        if not failures:
-            return
-        box = QMessageBox(self.follow_dialog or self)
-        box.setIcon(QMessageBox.Icon.Warning)
-        box.setWindowTitle(tr("一部失敗"))
-        box.setText(message)
-        box.setDetailedText(format_last_post_failures(failures))
-        box.addButton(QMessageBox.StandardButton.Close)
-        box.exec()
+        self._show_job_result(
+            tr("最終ポスト日の取得を中止") if stopped else tr("最終ポスト日の取得完了"),
+            succeeded, requested, results, parent=self.follow_dialog, stopped=stopped, show_success=False,
+        )
 
     def _handle_unfollow(self, records: list[FollowRecord], interval_seconds: float) -> None:
         logger.info("GUI: Unfollow requested for %s accounts.", len(records))
@@ -1671,58 +1649,21 @@ class XDeleterWindow(QMainWindow):
     def on_unfollow_done(self, results: list[UnfollowResult]) -> None:
         requested = max(self._requested_unfollow_count, len(results))
         succeeded = {result.target.username for result in results if result.success}
-        failures = [result for result in results if not result.success]
-        skipped = requested - len(results)
         if self.follow_dialog is not None:
             self.follow_dialog.remove_usernames(succeeded)
         stopped = self._job_stopped()
         self.set_busy(False)
-        heading = tr("フォロー解除を中止") if stopped else tr("フォロー解除完了")
-        message = tr("{heading}: {success} / {requested} 件成功", heading=heading, success=len(succeeded), requested=requested)
-        notes = [tr("{count} 件失敗", count=len(failures))] if failures else []
-        if skipped > 0:
-            notes.append(tr("{count} 件未処理", count=skipped))
-        if notes:
-            message += tr("（{notes}）", notes=tr("、").join(notes))
-        self.update_status(message)
-        if stopped:
-            self._show_rate_limit(self.follow_dialog)
-            return
-        parent = self.follow_dialog or self
-        if not failures:
-            QMessageBox.information(parent, tr("完了"), message)
-            return
-
-        box = QMessageBox(parent)
-        box.setIcon(QMessageBox.Icon.Warning)
-        box.setWindowTitle(tr("一部失敗"))
-        box.setText(message)
-        box.setInformativeText(tr("詳細を確認してください。安全に再試行できる失敗だけ再試行します。結果不明・認証・恒久エラーは実行記録で保留します。"))
-        box.setDetailedText(format_unfollow_failures(failures))
-        retry_button = box.addButton(tr("失敗分だけ再試行"), QMessageBox.ButtonRole.AcceptRole)
-        box.addButton(QMessageBox.StandardButton.Close)
-        box.exec()
-
-        if box.clickedButton() == retry_button:
-            self._retry_failed_unfollows(failures)
-
-    def _retry_failed_unfollows(self, failures: list[UnfollowResult]) -> None:
-        if self._busy or not self._login_verified:
-            QMessageBox.information(self, tr("ログイン確認が必要"), tr("現在のアカウントでログインを確認してください。"))
-            return
-        source_username = self.follow_dialog.source_username if self.follow_dialog is not None else None
-        if not self._confirm_account_match(source_username):
-            logger.info("GUI: Unfollow retry cancelled due to account mismatch warning.")
-            return
-        logger.info("GUI: Retrying %s failed unfollows.", len(failures))
-        interval_seconds = (
-            self.follow_dialog.interval_input.value()
-            if self.follow_dialog is not None
-            else DEFAULT_UNFOLLOW_INTERVAL_SECONDS
-        )
-        self._submit_unfollow(
-            UnfollowRequest(targets=[result.target for result in failures], interval_seconds=interval_seconds),
-            tr("失敗分を再試行しています..."),
+        try:
+            self._last_post_store().remove(succeeded)
+        except OSError as error:
+            logger.exception("Failed to remove unfollowed accounts from the last-post store.")
+            QMessageBox.warning(
+                self.follow_dialog or self, tr("エラー"),
+                tr("最終ポスト日の記録を削除できませんでした: {message}", message=str(error)),
+            )
+        self._show_job_result(
+            tr("フォロー解除を中止") if stopped else tr("フォロー解除完了"),
+            len(succeeded), requested, results, parent=self.follow_dialog, stopped=stopped,
         )
 
     def _handle_export_posts(self) -> None:
@@ -1837,8 +1778,6 @@ class XDeleterWindow(QMainWindow):
     def on_delete_done(self, results: list[PostActionResult]) -> None:
         requested = max(self._requested_action_count, len(results))
         success_count = sum(1 for result in results if result.success)
-        failures = [result for result in results if not result.success]
-        skipped = requested - len(results)
         save_error = self._record_deleted_posts(results)
         remove_successful_rows(self.table, results)
         if self.table.rowCount() == 0 and success_count > 0:
@@ -1848,42 +1787,55 @@ class XDeleterWindow(QMainWindow):
             )
         stopped = self._job_stopped()
         self.set_busy(False)
-        heading = tr("削除/解除処理を中止") if stopped else tr("削除/解除処理完了")
-        message = tr("{heading}: {success} / {requested} 件成功", heading=heading, success=success_count, requested=requested)
+        if save_error:
+            QMessageBox.warning(
+                self, tr("エラー"), tr("削除済みポストの記録を保存できませんでした: {message}", message=save_error)
+            )
+        failures = [result for result in results if not result.success]
+        if self._show_job_result(
+            tr("削除/解除処理を中止") if stopped else tr("削除/解除処理完了"),
+            success_count, requested, results, stopped=stopped,
+            retryable=any(result.failure_kind == "retryable" for result in failures),
+        ):
+            self._retry_failed(failures)
+
+    def _show_job_result(
+        self, heading: str, succeeded: int, requested: int,
+        results: list[PostActionResult] | list[UnfollowResult] | list[LastPostResult], *,
+        parent: QWidget | None = None, stopped: bool = False, show_success: bool = True, retryable: bool = False,
+    ) -> bool:
+        """Summarize a finished job and return whether a safe retry was requested."""
+        failures = [result for result in results if not result.success]
+        message = tr("{heading}: {success} / {requested} 件成功", heading=heading, success=succeeded, requested=requested)
         notes = [tr("{count} 件失敗", count=len(failures))] if failures else []
+        skipped = requested - len(results)
         if skipped > 0:
             notes.append(tr("{count} 件未処理", count=skipped))
         if notes:
             message += tr("（{notes}）", notes=tr("、").join(notes))
         self.update_status(message)
-        if save_error:
-            QMessageBox.warning(
-                self, tr("エラー"), tr("削除済みポストの記録を保存できませんでした: {message}", message=save_error)
-            )
         if stopped:
-            self._show_rate_limit()
-            held = [result for result in failures if result.failure_kind in {"auth", "ambiguous", "blocked"}]
+            self._show_rate_limit(parent)
+            held = [result for result in failures if isinstance(result, PostActionResult)
+                    and result.failure_kind in {"auth", "ambiguous", "blocked"}]
             if held:
-                QMessageBox.warning(self, tr("一部失敗"), format_action_failures(held))
-            return
+                QMessageBox.warning(parent or self, tr("一部失敗"), format_failures(held))
+            return False
         if not failures:
-            QMessageBox.information(self, tr("完了"), message)
-            return
-
-        box = QMessageBox(self)
+            if show_success:
+                QMessageBox.information(parent or self, tr("完了"), message)
+            return False
+        box = QMessageBox(parent or self)
         box.setIcon(QMessageBox.Icon.Warning)
         box.setWindowTitle(tr("一部失敗"))
         box.setText(message)
-        box.setInformativeText(tr("詳細を確認してください。安全に再試行できる失敗だけ再試行します。結果不明・認証・恒久エラーは実行記録で保留します。"))
-        box.setDetailedText(format_action_failures(failures))
-        retry_button = None
-        if any(result.failure_kind == "retryable" for result in failures):
-            retry_button = box.addButton(tr("失敗分だけ再試行"), QMessageBox.ButtonRole.AcceptRole)
+        if retryable:
+            box.setInformativeText(tr("詳細を確認してください。安全に再試行できる失敗だけ再試行します。結果不明・認証・恒久エラーは実行記録で保留します。"))
+        box.setDetailedText(format_failures(failures))
+        retry_button = box.addButton(tr("失敗分だけ再試行"), QMessageBox.ButtonRole.AcceptRole) if retryable else None
         box.addButton(QMessageBox.StandardButton.Close)
         box.exec()
-
-        if retry_button is not None and box.clickedButton() == retry_button:
-            self._retry_failed(failures)
+        return retry_button is not None and box.clickedButton() == retry_button
 
     def _record_deleted_posts(self, results: list[PostActionResult]) -> str:
         """Remember deleted post IDs so archive imports skip them; return the save error, if any."""
@@ -1915,6 +1867,7 @@ class XDeleterWindow(QMainWindow):
             return
         logger.info("GUI: Retrying %s failed items.", len(failures))
         retry_request = ExecuteActionsRequest(
+            resume=True,
             targets=[result.target for result in failures],
             interval_seconds=self.delete_interval_input.value(),
             retry_policy=self._action_retry_policy(),
