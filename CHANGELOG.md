@@ -5,6 +5,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Refuse unfollows while a saved rate-limit deadline remains active.
 - Write CLI deletion IDs once per batch and merge concurrent writers under a process-shared file lock.
 - Distinguish explicit resumes from new undo batches, clear recovered view-change stops, and compact known deletion receipts.
 - Allow a login recheck to clear cancellation without clearing active rate limits.

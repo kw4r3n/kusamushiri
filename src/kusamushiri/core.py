@@ -984,7 +984,15 @@ class XDeleterCore:
 
     def unfollow_account(self, username: str) -> tuple[bool, str | None]:
         page = self._require_page()
-        return _unfollow_account(page, username, find_locator=self._find_first_visible_locator)
+        # A new command clears the in-memory limit, so check the saved deadline that outlives it.
+        profile = self._browser.profile_dir
+        if profile is not None:
+            journal = ActionJournal(profile / "action-progress.json", profile.name.removeprefix("chromium-profile-"))
+            journal._load()  # Read-only, like `progress`: no lock is taken.
+            if journal.cooldown_until > time.time():
+                self.request_cancel()
+                return False, tr("X の利用制限の待機中のため、フォロー解除を送りませんでした。")
+        return _unfollow_account(page, username, find_locator=find_first_visible_locator)
 
     def fetch_last_post(self, username: str) -> LastPostResult:
         page = self._require_page()

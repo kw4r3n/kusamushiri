@@ -11,6 +11,7 @@ DEFAULT_LANGUAGE: Final = "ja"
 LANGUAGE_NAMES: Final = {"ja": "日本語", "en": "English"}
 
 ENGLISH: Final[dict[str, str]] = {
+    'X の利用制限の待機中のため、フォロー解除を送りませんでした。': 'Not sent: the X rate-limit wait has not ended yet.',
     "プロファイルは使用中です。ブラウザと処理を終了してからやり直してください。": "The profile is in use. Close its browser and stop its jobs before trying again.",
     "保存済みの期限まで {seconds:.1f} 秒、ブラウザを開かず待機します。Ctrl+C で中止できます。": "Waiting {seconds:.1f}s before opening the browser to honor the saved deadline. Ctrl+C cancels.",
     "新しい操作を止めます。送信済みの操作は結果確認後に停止します（もう一度 Ctrl+C で即中断・結果不明として保持）。": "Stopping new actions and recording the submitted action result (press Ctrl+C again to abort and hold the uncertain outcome).",

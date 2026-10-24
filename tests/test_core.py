@@ -1,3 +1,4 @@
+import time
 from datetime import date
 from urllib.parse import parse_qs, urlparse
 
@@ -720,3 +721,25 @@ def test_is_post_within_date_range_is_inclusive() -> None:
     assert core._is_post_within_date_range(date(2026, 4, 19), request) is True
     assert core._is_post_within_date_range(date(2026, 4, 9), request) is False
     assert core._is_post_within_date_range(date(2026, 4, 20), request) is False
+
+
+def test_unfollow_refuses_before_saved_rate_limit_deadline(monkeypatch, tmp_path) -> None:
+    from kusamushiri.progress import ActionJournal
+
+    core = XDeleterCore()
+    core._browser.page = DeletePage()
+    core._browser.profile_dir = tmp_path / "chromium-profile-work"
+    core._browser.profile_dir.mkdir()
+    sent = []
+    monkeypatch.setattr("kusamushiri.core._unfollow_account", lambda *args, **kwargs: sent.append(args) or (True, None))
+    with ActionJournal(core._browser.profile_dir / "action-progress.json", "work") as journal:
+        journal.defer_until(time.time() + 600, "server")
+    # The next command clears the in-memory limit; the saved deadline must still block the send.
+    core.clear_cancel()
+    success, message = core.unfollow_account("target")
+    assert not success and "待機中" in message and sent == []
+    assert core.is_cancel_requested()
+    with ActionJournal(core._browser.profile_dir / "action-progress.json", "work") as journal:
+        journal.defer_until(0)
+    core.clear_cancel()
+    assert core.unfollow_account("target") == (True, None) and len(sent) == 1

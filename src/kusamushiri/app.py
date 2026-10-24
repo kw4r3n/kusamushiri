@@ -449,7 +449,7 @@ class XDeleterWorker:
                     interval_seconds = command.request.interval_seconds
                     unfollow_results: list[UnfollowResult] = []
                     for index, target in enumerate(targets, start=1):
-                        if self._cancel_event.is_set():
+                        if self._cancel_event.is_set() or active_core.is_cancel_requested():
                             break
                         self.events.unfollow_progress.emit(target.username, index, len(targets))
                         success, error_message = active_core.unfollow_account(target.username)
