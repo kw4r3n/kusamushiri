@@ -309,6 +309,36 @@ def test_guarded_worker_real_path_preserves_controls(live_shape, tmp_path, monke
         worker.shutdown()
 
 
+@pytest.mark.parametrize("limited", [False, True])
+def test_login_recheck_after_cancel_restores_guarded_delete_unless_limited(live_shape, tmp_path, monkeypatch, qtbot, limited):
+    from kusamushiri.app import XDeleterWorker
+    from kusamushiri.models import ExecuteActionsRequest
+
+    core, manager, page = live_shape
+    manager.profile_dir = tmp_path / "chromium-profile-author"
+    manager.profile_dir.mkdir()
+    monkeypatch.setattr(core, "stop_browser", lambda: None)
+    monkeypatch.setattr(core, "clear_cancel", XDeleterCore.clear_cancel.__get__(core))
+    worker = XDeleterWorker(core=core)
+    results, errors, logins = [], [], []
+    worker.events.delete_completed.connect(results.append)
+    worker.events.error_occurred.connect(errors.append)
+    worker.events.login_checked.connect(lambda *args: logins.append(args))
+    try:
+        worker.cancel_current_operation()
+        core.rate_limit_status = 429 if limited else None
+        worker.enqueue_check_login()
+        qtbot.waitUntil(lambda: bool(logins), timeout=2000)
+        worker.enqueue_delete_posts(ExecuteActionsRequest([TARGET], 0, expected_viewer="author", current_view_only=True))
+        qtbot.waitUntil(lambda: bool(results or errors), timeout=2000)
+        if limited:
+            assert errors and page.submissions == 0 and core.rate_limit_status == 429
+        else:
+            assert not errors and results[0][0].success and page.submissions == 1
+    finally:
+        worker.shutdown()
+
+
 def test_control_stop_diagnostic_is_closed_and_retains_specific_message(live_shape, tmp_path):
     from kusamushiri.network_diagnostics import sanitize_event
 

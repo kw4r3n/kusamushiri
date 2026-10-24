@@ -1,6 +1,7 @@
 import queue
 import sys
 import threading
+import time
 from contextlib import nullcontext
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
@@ -230,7 +231,10 @@ class XDeleterWorker:
         with self._command_lock:
             if queued.generation != self._generation:
                 return False
-            if not isinstance(queued.command, CheckLoginCommand):
+            if not isinstance(queued.command, CheckLoginCommand) or (
+                core.rate_limit_status is None
+                and not (isinstance(core, XDeleterCore) and core._browser.network_resume_at > time.time())
+            ):
                 self._cancel_event.clear()
                 core.clear_cancel()
             return True
