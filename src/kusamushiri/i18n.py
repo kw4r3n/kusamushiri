@@ -11,6 +11,10 @@ DEFAULT_LANGUAGE: Final = "ja"
 LANGUAGE_NAMES: Final = {"ja": "日本語", "en": "English"}
 
 ENGLISH: Final[dict[str, str]] = {
+    '確認結果を保存しました。サーバーの待機期限は保持しています。': 'Saved the verified outcome. The server cooldown deadline is retained.',
+    'X で確認した操作結果を記録しますか？このコマンドは削除を実行しません。': 'Record the action outcome you verified on X? This command does not delete anything.',
+    '停止済みの所有者のロックを解除しました。progress で状態を確認してください。': "Removed the stopped owner's lock. Check the state with progress.",
+    '停止済みプロセスのロックを検査・復旧しますか？結果不明の操作は再送可能にしません。': 'Inspect and recover the stopped process lock? Uncertain actions will remain held.',
     '現在ログイン中のアカウントと入力された対象アカウントが一致していません。\nログイン中: @{logged_in}\n入力値: @{entered}\n\nフォロー・いいね・リポストの解除は、ログイン中のアカウントに対して実行されます。\n対象アカウントを確認してください。続行しますか？': 'The signed-in account does not match the entered target account.\nSigned in: @{logged_in}\nEntered: @{entered}\n\nUnfollowing and undoing likes or reposts affect the signed-in account.\nCheck the accounts. Continue?',
     '最終ポスト日の記録を削除できませんでした: {message}': 'Could not remove cached last-post dates: {message}',
     'フォロー解除はログイン中の @{username} に対して実行されます。': 'Unfollows will affect the signed-in account @{username}.',

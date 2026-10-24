@@ -5,6 +5,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Translate recovery confirmations and reject resolve --dry-run instead of writing a receipt.
 - Clarify the acting account, share GUI result dialogs, restrict retry offers, suppress row redraws and evict unfollowed cache entries.
 - Refuse unfollows while a saved rate-limit deadline remains active.
 - Write CLI deletion IDs once per batch and merge concurrent writers under a process-shared file lock.

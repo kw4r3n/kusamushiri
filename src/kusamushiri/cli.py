@@ -668,26 +668,26 @@ def cmd_progress(args: argparse.Namespace) -> int:
 
 
 def cmd_recover(args: argparse.Namespace) -> int:
-    _confirm("停止済みプロセスのロックを検査・復旧しますか？結果不明の操作は再送可能にしません。", args.yes)
+    _confirm(tr("停止済みプロセスのロックを検査・復旧しますか？結果不明の操作は再送可能にしません。"), args.yes)
     backup = _profile_journal(args.profile).recover_lock(legacy_owner_stopped=args.legacy_owner_stopped)
     if backup is not None:
         _info(tr("空ロックをバックアップ {path} に保存しました。実行記録・待機期限・アカウント情報は変更していません。", path=backup))
     else:
-        _info("停止済みの所有者のロックを解除しました。progress で状態を確認してください。")
+        _info(tr("停止済みの所有者のロックを解除しました。progress で状態を確認してください。"))
     return 0
 
 
 def cmd_resolve(args: argparse.Namespace) -> int:
     journal = _profile_journal(args.profile)
     key = f"{args.kind}:{args.post_id}"
-    _confirm("X で確認した操作結果を記録しますか？このコマンドは削除を実行しません。", args.yes)
+    _confirm(tr("X で確認した操作結果を記録しますか？このコマンドは削除を実行しません。"), args.yes)
     with journal:
         if journal.entries.get(key) not in {"inflight", "ambiguous", "auth", "blocked", "permanent"}:
             raise CliError("Only an existing held receipt can be resolved.", EXIT_USAGE)
         target = PostActionTarget(f"https://x.com/verified/status/{args.post_id}", args.kind)
         journal.record(target, "success" if args.verified_applied else "pending", count_completion=False)
         journal.record_stop("manually_resolved")
-    _info("確認結果を保存しました。サーバーの待機期限は保持しています。")
+    _info(tr("確認結果を保存しました。サーバーの待機期限は保持しています。"))
     return 0
 
 
@@ -1220,7 +1220,8 @@ def build_parser() -> argparse.ArgumentParser:
     recover.set_defaults(handler=cmd_recover)
     resolve = commands.add_parser("resolve", help="record a manually verified held outcome offline; never sends an action")
     _add_profile_arg(resolve)
-    _add_confirm_args(resolve)
+    # No --dry-run: resolve only writes a receipt, so a preview flag must not silently write it.
+    resolve.add_argument("-y", "--yes", action="store_true", help="skip the confirmation prompt")
     resolve.add_argument("--post-id", required=True, type=_numeric_post_id)
     resolve.add_argument("--kind", choices=("post", "repost", "like"), default="post")
     verification = resolve.add_mutually_exclusive_group(required=True)

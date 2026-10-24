@@ -155,3 +155,29 @@ def test_cli_unfollow_names_actor_and_removes_successful_cache(fake_core, tmp_pa
         assert set(store.load()) == {"carol"}
     finally:
         set_language(previous)
+
+
+def test_recovery_messages_are_translated(monkeypatch, tmp_path):
+    journal = ActionJournal(tmp_path / "progress.json", "test")
+    with journal:
+        journal.record(target(), "ambiguous")
+    monkeypatch.setattr(cli, "_profile_journal", lambda _: journal)
+    journal.recover_lock = Mock(return_value=None)
+    confirmations, messages = [], []
+    monkeypatch.setattr(cli, "_confirm", lambda message, _: confirmations.append(message))
+    monkeypatch.setattr(cli, "_info", messages.append)
+    previous = get_language()
+    try:
+        set_language("en")
+        args = Mock(profile=None, yes=False, legacy_owner_stopped=False, kind="post", post_id="1", verified_applied=True)
+        assert cli.cmd_recover(args) == cli.cmd_resolve(args) == 0
+        assert confirmations == [
+            "Inspect and recover the stopped process lock? Uncertain actions will remain held.",
+            "Record the action outcome you verified on X? This command does not delete anything.",
+        ]
+        assert messages == [
+            "Removed the stopped owner's lock. Check the state with progress.",
+            "Saved the verified outcome. The server cooldown deadline is retained.",
+        ]
+    finally:
+        set_language(previous)

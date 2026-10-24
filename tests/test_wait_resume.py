@@ -358,6 +358,11 @@ def test_progress_and_resolve_are_offline_and_keep_deadline(monkeypatch, tmp_pat
     with journal:
         journal.record(target(), "inflight")
         journal.defer_until(9999999999, "server")
+    # resolve has no preview mode: --dry-run is rejected instead of writing the receipt anyway.
+    with pytest.raises(SystemExit):
+        cli.main(["resolve", "--profile", "fixture", "--post-id", "1", "--verified-applied", "--yes", "--dry-run"])
+    journal._load()
+    assert journal.entries["post:1"] == "inflight"
     assert cli.main(["resolve", "--profile", "fixture", "--post-id", "1", "--verified-applied", "--yes"]) == 0
     journal._load()
     assert journal.entries["post:1"] == "success" and journal.cooldown_until == 9999999999
