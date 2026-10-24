@@ -251,3 +251,64 @@ def test_profile_names_differing_only_in_case_never_alias_default(qsettings, tmp
     assert manager.resolve_account_name("@Default") == "default"
     assert manager.resolve_account_name("ALICE") == "alice"
     assert manager.resolve_account_name("Bob") == "Bob"
+
+
+@pytest.mark.parametrize("prefix", ["account_alice_", ""])
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("min_likes", float("inf")),
+        ("min_likes", "1e999"),
+        ("min_likes", "broken"),
+        ("action_interval_seconds", "nan"),
+        ("action_interval_seconds", "inf"),
+        ("action_interval_seconds", "-inf"),
+        ("reply_only", "maybe"),
+        ("reply_only", 2),
+        ("reply_only", []),
+    ],
+)
+def test_corrupt_account_settings_use_defaults(qsettings, prefix, key, value) -> None:
+    qsettings.setValue(f"{prefix}{key}", value)
+
+    loaded = AccountSettingsManager(qsettings).load_account_settings("alice")
+
+    assert getattr(loaded, key) == getattr(AccountSettings(), key)
+
+
+@pytest.mark.parametrize("value", [True, False, "true", "false", "TRUE", "FALSE", "1", "0", 1, 0])
+def test_boolean_account_settings_accept_only_explicit_boolean_values(qsettings, value) -> None:
+    qsettings.setValue("account_alice_reply_only", value)
+
+    loaded = AccountSettingsManager(qsettings).load_account_settings("alice")
+
+    assert loaded.reply_only is (str(value).lower() in {"true", "1"})
+
+
+@pytest.mark.parametrize("operation", ["rename", "delete"])
+@pytest.mark.parametrize("lock_name", ["action-progress.json.lock", "SingletonLock"])
+@pytest.mark.parametrize("symlink", [False, True])
+def test_profile_management_refuses_external_locks_without_changing_data(
+    qsettings, tmp_path, monkeypatch, operation, lock_name, symlink
+) -> None:
+    monkeypatch.setattr(x_deleter_paths, "_app_data_path_override", tmp_path / "data")
+    manager = AccountSettingsManager(qsettings)
+    profile = x_deleter_paths.get_account_profile_dir("alice")
+    manager.save_account_settings("alice", AccountSettings(username="alice", min_likes=5))
+    lock = profile / lock_name
+    if symlink:
+        lock.symlink_to(profile / "missing-lock-target")
+    else:
+        lock.write_text("external owner")
+    saved_settings = {key: qsettings.value(key) for key in qsettings.allKeys()}
+
+    with pytest.raises(ValueError, match="プロファイルは使用中"):
+        if operation == "rename":
+            manager.rename_account("alice", "renamed")
+        else:
+            manager.delete_account("alice")
+
+    assert profile.is_dir()
+    assert lock.exists() or lock.is_symlink()
+    assert manager.list_accounts() == ["alice"]
+    assert {key: qsettings.value(key) for key in qsettings.allKeys()} == saved_settings

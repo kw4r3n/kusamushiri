@@ -1,7 +1,9 @@
 import contextlib
+import math
 import shutil
 from dataclasses import dataclass, fields
-from typing import TypeVar, overload
+from pathlib import Path
+from typing import TypeVar, cast, overload
 
 from PySide6.QtCore import QSettings
 
@@ -166,6 +168,7 @@ class AccountSettingsManager:
         ):
             raise ValueError(tr("同じ名前のプロファイルが既にあります。"))
         source = get_app_data_dir() / f"{ACCOUNT_PROFILE_PREFIX}{old_name}"
+        self._ensure_profile_unlocked(source)
         target = source.parent / f"{ACCOUNT_PROFILE_PREFIX}{new_name}"
         # On case-insensitive filesystems "Foo" -> "foo" resolves to the same directory.
         if target.exists() and not (source.exists() and target.samefile(source)):
@@ -190,6 +193,7 @@ class AccountSettingsManager:
         if account_name.casefold() == DEFAULT_ACCOUNT_NAME.casefold():
             raise ValueError(tr("default プロファイルは削除できません。"))
         profile_dir = get_app_data_dir() / f"{ACCOUNT_PROFILE_PREFIX}{account_name}"
+        self._ensure_profile_unlocked(profile_dir)
         # Drop settings first: a failed rmtree then leaves a still-listed profile
         # that can be deleted again, never stale settings for a half-deleted one.
         self._remove_account_settings(account_name)
@@ -198,6 +202,12 @@ class AccountSettingsManager:
         self._raise_on_settings_error()
         if profile_dir.exists():
             shutil.rmtree(profile_dir)
+
+    def _ensure_profile_unlocked(self, profile_dir: Path) -> None:
+        for name in ("action-progress.json.lock", "SingletonLock"):
+            lock = profile_dir / name
+            if lock.exists() or lock.is_symlink():
+                raise ValueError(tr("プロファイルは使用中です。ブラウザと処理を終了してからやり直してください。"))
 
     def _raise_on_settings_error(self) -> None:
         status = self._settings.status()
@@ -250,11 +260,24 @@ class AccountSettingsManager:
         value_type: type[SettingValue],
     ) -> SettingValue | None:
         account_key = f"{prefix}{key}"
-        if self._settings.contains(account_key):
+        if not self._settings.contains(account_key):
+            account_key = key
+        if not self._settings.contains(account_key):
+            return default
+        try:
+            if value_type is bool:
+                raw = self._settings.value(account_key)
+                if isinstance(raw, bool):
+                    return cast(SettingValue, raw)
+                if isinstance(raw, str) and raw.strip().lower() in {"true", "false", "1", "0"}:
+                    return cast(SettingValue, raw.strip().lower() in {"true", "1"})
+                if type(raw) is int and raw in (0, 1):
+                    return cast(SettingValue, bool(raw))
+                return default
             value = self._settings.value(account_key, default, type=value_type)
-        elif self._settings.contains(key):
-            value = self._settings.value(key, default, type=value_type)
-        else:
+        except (TypeError, ValueError, OverflowError):
+            return default
+        if isinstance(value, float) and not math.isfinite(value):
             return default
         if value is None:
             return default
