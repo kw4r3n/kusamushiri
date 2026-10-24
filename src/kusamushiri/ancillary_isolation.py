@@ -10,6 +10,7 @@ from playwright.sync_api import BrowserContext, Response, Route
 
 from kusamushiri.logger import logger
 from kusamushiri.network_diagnostics import NetworkDiagnostics
+from kusamushiri.rate_limits import ANCILLARY_OPERATIONS, API_HOSTS, WEB_HOSTS
 from kusamushiri.retry import parse_rate_limit_reset, parse_retry_after
 
 MAX_SUPPRESSED_REQUESTS = 128
@@ -25,15 +26,15 @@ def isolatable_endpoint(url: str, method: str) -> str | None:
         return None
     if parsed.scheme != "https" or method != "GET":
         return None
-    if parsed.netloc in {"api.x.com", "api.twitter.com"}:
+    if parsed.netloc in API_HOSTS:
         # Boot-time settings read; repeats on every target load.
         return "account/settings.json" if parsed.path == "/1.1/account/settings.json" else None
-    if parsed.netloc not in {"x.com", "twitter.com"}:
+    if parsed.netloc not in WEB_HOSTS:
         return None
     if parsed.path == "/i/api/fleets/v1/fleetline" and parse_qsl(parsed.query, keep_blank_values=True) == [("only_spaces", "true")]:
         return "fleetline"
-    graph = re.fullmatch(r"/i/api/graphql/[A-Za-z0-9_-]+/(ViewerBadgeCounts|CreatorStudioTabBarItemQuery)", parsed.path)
-    if graph:
+    graph = re.fullmatch(r"/i/api/graphql/[A-Za-z0-9_-]+/([A-Za-z0-9_]+)", parsed.path)
+    if graph and graph.group(1) in ANCILLARY_OPERATIONS:
         return graph.group(1)
     return None
 

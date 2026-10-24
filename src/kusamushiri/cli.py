@@ -920,7 +920,8 @@ def cmd_run(args: argparse.Namespace) -> int:
         recipe = load_recipe(args.recipe)
     except RecipeError as error:
         raise CliError(str(error), EXIT_USAGE) from error
-    has_overrides = getattr(args, "wait_limit_mode", None) is not None or getattr(args, "interval", None) is not None or any(getattr(args, name, None) is not None for name, *_rest in RETRY_ARGUMENTS)
+    override_names = ("wait_limit_mode", "ancillary_rate_limit_mode", "traffic_policy", "interval", *(name for name, *_rest in RETRY_ARGUMENTS))
+    has_overrides = any(getattr(args, name, None) is not None for name in override_names)
     if has_overrides:
         if recipe.delete is None:
             raise CliError("Retry/batch overrides require an existing [delete] table; no deletion was enabled.", EXIT_USAGE)

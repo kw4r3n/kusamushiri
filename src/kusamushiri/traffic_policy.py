@@ -15,6 +15,7 @@ from urllib.parse import urlparse
 from playwright.sync_api import BrowserContext, Request, Route
 
 from kusamushiri.logger import logger
+from kusamushiri.rate_limits import API_HOSTS, POST_MUTATIONS, TARGET_READS, WEB_HOSTS
 
 TrafficMode = Literal["off", "report", "enforce"]
 TRAFFIC_MODES = ("off", "report", "enforce")
@@ -30,13 +31,9 @@ RULE_DECISIONS: dict[str, str] = {"local": "allow", "target_document": "allow", 
                                   "target_read": "allow", "armed_mutation": "allow",
                                   "unarmed_mutation": "block", "unlisted": "block"}
 
-TARGET_READS = frozenset({"TweetDetail", "TweetResultByRestId"})
-POST_MUTATIONS = frozenset({"DeleteTweet", "DeleteRetweet", "UnfavoriteTweet"})
 STATIC_RESOURCES = frozenset({"script", "stylesheet", "font"})
 # The action code sets these phases immediately before its single confirmed click.
 ARMED_PHASES = frozenset({"mutation_submit", "mutation_wait"})
-_WEB_HOSTS = frozenset({"x.com", "www.x.com", "twitter.com", "www.twitter.com"})
-_API_HOSTS = frozenset({"api.x.com", "api.twitter.com"})
 _GRAPH_PATH = re.compile(r"/i/api/graphql/[A-Za-z0-9_-]+/([A-Za-z][A-Za-z0-9_]{0,79})")
 _TARGET_PATH = re.compile(r"/[A-Za-z0-9_]{1,50}/status/[0-9]{1,25}")
 MAX_REMEMBERED_DECISIONS = 512
@@ -44,9 +41,9 @@ MAX_REMEMBERED_DECISIONS = 512
 
 def host_class(host: str | None) -> HostClass:
     host = (host or "").lower()
-    if host in _WEB_HOSTS:
+    if host in WEB_HOSTS:
         return "x_web"
-    if host in _API_HOSTS:
+    if host in API_HOSTS:
         return "x_api"
     if host.endswith((".x.com", ".twitter.com")):
         return "x_subdomain"

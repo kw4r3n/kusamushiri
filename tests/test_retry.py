@@ -651,15 +651,15 @@ def make_quiet_core(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "endpoint, role",
+    "path, role",
     [
-        ("fleetline", "ancillary"),
-        ("ViewerBadgeCounts", "ancillary"),
-        ("TweetDetail", "target"),
-        ("future-unknown", "unknown"),
+        ("/i/api/fleets/v1/fleetline?only_spaces=true", "ancillary"),
+        ("/i/api/graphql/fixture/ViewerBadgeCounts", "ancillary"),
+        ("/i/api/graphql/fixture/TweetDetail", "target"),
+        ("/i/api/future-unknown", "unknown"),
     ],
 )
-def test_real_action_stages_defer_then_resume_only_after_quiet_wait(monkeypatch, tmp_path, endpoint, role):
+def test_real_action_stages_defer_then_resume_only_after_quiet_wait(monkeypatch, tmp_path, path, role):
     core, context, clock = make_quiet_core(monkeypatch)
     journal = ActionJournal(tmp_path / "receipts.json", "test")
     pages = []
@@ -675,7 +675,7 @@ def test_real_action_stages_defer_then_resume_only_after_quiet_wait(monkeypatch,
 
             def goto(url, *, timeout):
                 page.emit(
-                    "response", Mock(url=f"https://x.com/i/api/{endpoint}", status=429, headers={"retry-after": "180"})
+                    "response", Mock(url=f"https://x.com{path}", status=429, headers={"retry-after": "180"})
                 )
 
             page.goto = goto

@@ -338,6 +338,17 @@ def test_run_command_accepts_traffic_policy():
     assert args.traffic_policy == "report"
 
 
+def test_run_command_applies_traffic_overrides_to_recipe(tmp_path, monkeypatch):
+    recipe_path = tmp_path / "cleanup.toml"
+    recipe_path.write_text("[delete]\nconfirm = false\n")
+    received = []
+    monkeypatch.setattr(cli, "run_recipe", lambda recipe, **kwargs: received.append(recipe) or 0)
+    assert cli.main(["run", str(recipe_path), "--traffic-policy", "enforce",
+                     "--ancillary-rate-limit-mode", "isolate-known"]) == 0
+    policy = received[0].delete.retry_policy
+    assert policy.traffic_policy == "enforce" and policy.ancillary_rate_limit_mode == "isolate-known"
+
+
 def test_sanitizer_drops_contradictory_rule_and_decision():
     base = {"schema": 1, "trace": "0123456789ab", "event": "traffic_decision", "host_class": "other"}
     assert "traffic_decision" not in sanitize_event({**base, "traffic_decision": "allow", "traffic_rule": "unlisted"})

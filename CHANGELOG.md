@@ -5,6 +5,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Unify endpoint roles and host lists, and apply explicit CLI traffic overrides to recipes.
 - Save recipes atomically while preserving updater validation and backups.
 - Reject corrupt profile settings and refuse changes to externally locked profiles.
 - A held receipt (`blocked`, `ambiguous`, ...) now names the exact `resolve` command to clear it.

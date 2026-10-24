@@ -8,13 +8,14 @@ from dataclasses import dataclass
 from typing import Protocol, cast
 from urllib.parse import urlparse
 
+from kusamushiri.rate_limits import ANCILLARY_OPERATIONS, POST_MUTATIONS, TARGET_READS, WEB_HOSTS
+
 AUTH_CODES = frozenset({32, 89, 99, 135, 215, 220})
 ACCOUNT_CODES = frozenset({326})
 KNOWN_CODES = AUTH_CODES | ACCOUNT_CODES
 HTTP_CATEGORIES = frozenset({"http401", "auth_code", "account_code", "unknown403", "target403",
                              "mutation403", "ancillary403", "unreadable_envelope", "invalid_envelope", "other_error_code"})
 HTTP_PROVENANCE = frozenset({"http_status", "error_code", "unavailable"})
-HOSTS = frozenset({"x.com", "www.x.com", "twitter.com", "www.twitter.com"})
 
 
 class _BodyReader(Protocol):
@@ -48,17 +49,17 @@ def _role(response: object) -> tuple[str, str]:
         if not isinstance(url, str) or getattr(request, "url", None) != url:
             return "unknown", "unclassified"
         parsed = urlparse(url)
-        if parsed.scheme != "https" or parsed.hostname not in HOSTS or parsed.username is not None:
+        if parsed.scheme != "https" or parsed.hostname not in WEB_HOSTS or parsed.username is not None:
             return "unknown", "unclassified"
         method = getattr(request, "method", None)
         graph = re.fullmatch(r"/i/api/graphql/[A-Za-z0-9_-]+/([A-Za-z0-9_]+)", parsed.path.rstrip("/"))
         if graph:
             operation = graph.group(1)
-            if method == "POST" and operation in {"DeleteTweet", "DeleteRetweet", "UnfavoriteTweet"}:
+            if method == "POST" and operation in POST_MUTATIONS:
                 return "mutation", operation
-            if method == "GET" and operation in {"TweetDetail", "TweetResultByRestId", "TweetResultsByRestIds"}:
+            if method == "GET" and operation in TARGET_READS:
                 return "target", operation
-            if method == "GET" and operation in {"ViewerBadgeCounts", "CreatorStudioTabBarItemQuery"}:
+            if method == "GET" and operation in ANCILLARY_OPERATIONS:
                 return "ancillary", operation
         if method == "POST" and parsed.path.rstrip("/") == "/i/api/1.1/friendships/destroy.json":
             return "mutation", "destroy.json"
@@ -87,7 +88,7 @@ def http_failure(response: object) -> HttpFailure | None:
         if not isinstance(url, str):
             return failure
         parsed = urlparse(url)
-        if parsed.scheme != "https" or parsed.hostname not in HOSTS or parsed.username is not None or not parsed.path.startswith("/i/api/"):
+        if parsed.scheme != "https" or parsed.hostname not in WEB_HOSTS or parsed.username is not None or not parsed.path.startswith("/i/api/"):
             return failure
         headers = getattr(response, "headers", None)
         if not isinstance(headers, Mapping):
