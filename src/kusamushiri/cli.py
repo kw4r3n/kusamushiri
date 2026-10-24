@@ -464,12 +464,11 @@ def _execute_post_actions(
     # One receipt file per browser profile is shared by CLI files, recipes and GUI.
     journal = ActionJournal(get_account_profile_dir(profile) / "action-progress.json", normalize_account_name(profile))
 
+    deleted_ids: set[str] = set()
+
     def remember(result: PostActionResult) -> None:
         if result.success and result.target.kind == "post":
-            try:
-                DeletedPostStore.for_account(profile).record([extract_post_id(result.target.url)])
-            except OSError as error:
-                _info(tr("削除済みポスト ID を保存できませんでした: {error}", error=error))
+            deleted_ids.add(extract_post_id(result.target.url))
 
     known_successes = {f"post:{post_id}" for post_id in DeletedPostStore.for_account(profile).load()}
     try:
@@ -495,6 +494,11 @@ def _execute_post_actions(
         _info(str(error))
         return error.results
     finally:
+        if deleted_ids:
+            try:
+                DeletedPostStore.for_account(profile).record(deleted_ids)
+            except OSError as error:
+                _info(tr("削除済みポスト ID を保存できませんでした: {error}", error=error))
         _end_progress()
 
 

@@ -5,6 +5,7 @@ import json
 import os
 import tempfile
 from collections.abc import Iterable
+from contextlib import contextmanager
 from pathlib import Path
 
 from kusamushiri.logger import logger
@@ -47,6 +48,37 @@ class DeletedPostStore:
 
     def record(self, post_ids: Iterable[str]) -> set[str]:
         """Merge the IDs into the file and return every stored ID."""
+        with self._locked():
+            return self._record(post_ids)
+
+    @contextmanager
+    def _locked(self):
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        # Keep the inode: unlinking it can let concurrent writers lock different files.
+        fd = os.open(self.path.with_name(self.path.name + ".lock"), os.O_RDWR | os.O_CREAT, 0o600)
+        with os.fdopen(fd, "r+b") as lock:
+            if os.name == "nt":
+                import msvcrt
+
+                if not lock.read(1):
+                    lock.write(b"\0")
+                    lock.flush()
+                lock.seek(0)
+                msvcrt.locking(lock.fileno(), msvcrt.LK_LOCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                if os.name == "nt":
+                    lock.seek(0)
+                    msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+
+    def _record(self, post_ids: Iterable[str]) -> set[str]:
         try:
             stored = self._read()
         except ValueError as error:

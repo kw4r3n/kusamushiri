@@ -5,6 +5,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Write CLI deletion IDs once per batch and merge concurrent writers under a process-shared file lock.
 - Distinguish explicit resumes from new undo batches, clear recovered view-change stops, and compact known deletion receipts.
 - Allow a login recheck to clear cancellation without clearing active rate limits.
 - Hold deletion and undo outcomes as uncertain when X mutation requests cannot be confirmed.
