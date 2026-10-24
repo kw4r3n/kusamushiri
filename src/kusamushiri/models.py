@@ -128,8 +128,11 @@ class ExecuteActionsRequest:
     retry_policy: RetryPolicy = field(default_factory=RetryPolicy)
     expected_viewer: str | None = None
     current_view_only: bool = False
+    resume: bool = False
 
     def validate(self) -> None:
+        if type(self.resume) is not bool:
+            raise ValueError("Invalid resume flag")
         if not self.targets:
             raise ValueError(tr("実行対象が選択されていません。"))
         if type(self.current_view_only) is not bool or self.current_view_only and (

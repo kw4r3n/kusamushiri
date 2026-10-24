@@ -459,6 +459,7 @@ def _execute_post_actions(
     core: XDeleterCore, targets: Sequence[PostActionTarget], interval_seconds: float, profile: str | None,
     retry_policy: RetryPolicy | None = None,
     expected_viewer: str | None = None,
+    *, resume: bool = False,
 ) -> list[PostActionResult]:
     # One receipt file per browser profile is shared by CLI files, recipes and GUI.
     journal = ActionJournal(get_account_profile_dir(profile) / "action-progress.json", normalize_account_name(profile))
@@ -486,6 +487,7 @@ def _execute_post_actions(
                 on_progress=lambda target, index, total: _progress(
                     f"[{index}/{total}] {action_label_for(target.kind)} {target.url}"),
                 on_status=_info, on_result=remember, known_successes=known_successes,
+                resume=resume,
             )
     except TargetReadStopError:
         raise CliError("Single-post session/target/viewer verification failed; nothing was sent.") from None
@@ -754,7 +756,8 @@ def cmd_delete(args: argparse.Namespace) -> int:
     with browser_session(args.profile, headless=args.headless, **extra) as core:
         if args.command == "resume":
             core.resume_viewer = expected_viewer
-        results = _execute_post_actions(core, targets, options.interval, args.profile, options.retry_policy, expected_viewer)
+        results = _execute_post_actions(core, targets, options.interval, args.profile, options.retry_policy, expected_viewer,
+                                        resume=args.command == "resume")
         cancelled = core.is_cancel_requested()
     return _report_post_actions(results, len(targets), cancelled, rows, args.failed_output, execution_error=_execution_failed(core))
 

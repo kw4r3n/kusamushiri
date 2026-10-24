@@ -5,6 +5,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Distinguish explicit resumes from new undo batches, clear recovered view-change stops, and compact known deletion receipts.
 - Allow a login recheck to clear cancellation without clearing active rate limits.
 - Hold deletion and undo outcomes as uncertain when X mutation requests cannot be confirmed.
 - Decode archived text and display URLs; skip unreadable or collapsed text when exclusions are configured.

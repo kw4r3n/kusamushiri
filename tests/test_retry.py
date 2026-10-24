@@ -30,6 +30,15 @@ def target(number=1, kind="post"):
 
 
 class FakeCore:
+    @property
+    def rate_limit_retry_after(self):
+        return self._retry_after
+
+    @rate_limit_retry_after.setter
+    def rate_limit_retry_after(self, value):
+        self._retry_after = value
+        self.rate_limit_retry_until = self.clock + value if value else 0.0
+
     def __init__(self, monkeypatch):
         self.clock = 1000.0
         monkeypatch.setattr("kusamushiri.retry.time.time", lambda: self.clock)
@@ -1038,3 +1047,19 @@ def test_held_receipt_message_names_the_resolve_command(tmp_path):
         journal.record(target(7), "blocked")
         message = journal.previous_result(target(7)).error_message
     assert "resolve --profile 'Work Account' --kind post --post-id 7" in message
+
+
+def test_finished_batch_forgets_like_successes_but_resume_skips_them(monkeypatch, tmp_path) -> None:
+    core = FakeCore(monkeypatch)
+    journal = ActionJournal(tmp_path / "progress.json", "fixture")
+    liked, deleted = target(1, "like"), target(2)
+    with journal:
+        journal.record(liked, "success")
+    # A resume of the interrupted batch skips the recorded like without acting.
+    results = run_post_actions(core, [liked, deleted], 0, RetryPolicy(), journal=journal, resume=True)
+    assert core.calls == [deleted] and results[0].success and results[0].attempts == 0
+    # The batch finished, so the like may be liked again and a later batch must undo it.
+    assert journal.previous_result(liked) is None
+    assert journal.previous_result(deleted).success
+    run_post_actions(core, [liked], 0, RetryPolicy(), journal=journal)
+    assert core.calls == [deleted, liked]

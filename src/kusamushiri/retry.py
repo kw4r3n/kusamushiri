@@ -110,6 +110,7 @@ def _run_post_actions(
     on_result: Callable[[PostActionResult], None] = lambda _: None,
     wait_for_cancel: Callable[[float], bool] | None = None,
     known_successes: set[str] | None = None,
+    resume: bool = False,
     _state: _BatchState,
 ) -> list[PostActionResult]:
     """Quiet bounded cooldowns are distinct from actual action retries.
@@ -117,6 +118,8 @@ def _run_post_actions(
     Unisolated X 429 remains a conservative global pacing signal. An unsent action is
     pending, not failed. Browser traffic stays paused on cancellation/exhaustion.
     """
+    from kusamushiri.actions import action_label_for
+
     policy.validate()
     prepare = getattr(core, "prepare_post_action_policy", None)
     if prepare is not None:
@@ -130,8 +133,6 @@ def _run_post_actions(
     completed_since_pause = 0
     pending: PostActionResult | None = None
     pending_after_deadline = 0.0
-    header_key: tuple[float, float, float] | None = None
-    fallback_header_deadline = 0.0
     wait = wait_for_cancel or getattr(core, "wait_for_action_cancel", core.wait_for_cancel)
 
     def number(name: str) -> float:
@@ -154,12 +155,14 @@ def _run_post_actions(
         if callback is not None:
             callback(deadline)
 
-    def resume() -> None:
+    def resume_network() -> None:
         callback = getattr(core, "resume_action_network", None)
         if callback is not None:
             callback()
 
     def limit_reason() -> str:
+        if pending is not None and pending.view_reuse_invalid and core.rate_limit_status is None:
+            return tr("対象表示の変化")
         role = getattr(core, "rate_limit_scope", None) or (pending.rate_limit_scope if pending else None) or "unknown"
         endpoint = (
             getattr(core, "rate_limit_endpoint", None)
@@ -173,16 +176,8 @@ def _run_post_actions(
         return reason
 
     def preserve_limit(ordinal: int) -> tuple[float, str]:
-        nonlocal header_key, fallback_header_deadline
         now = time.time()
-        after = number("rate_limit_retry_after")
         until = number("rate_limit_retry_until")
-        if after and not until:
-            key = (number("rate_limit_generation"), number("rate_limit_seen_at"), after)
-            if key != header_key:
-                header_key = key
-                fallback_header_deadline = (key[1] or now) + after
-            until = fallback_header_deadline
         server_deadline = max(until, pending_after_deadline)
         deadline = server_deadline if policy.wait_limit_mode == "per-wait" and server_deadline > now else max(now + policy.cooldown_delay(ordinal), server_deadline)
         reason = limit_reason()
@@ -278,7 +273,7 @@ def _run_post_actions(
                     continue
                 journal.defer_until(0.0)
             if core.rate_limit_status is None:
-                resume()
+                resume_network()
                 latest = protected_until()
                 if latest > time.time() or core.rate_limit_status is not None:
                     deadline = max(deadline, latest)
@@ -289,7 +284,7 @@ def _run_post_actions(
             return True
 
     def cool_down() -> bool:
-        nonlocal cooldowns, fallback_cooldowns, pending, paced, pending_after_deadline, header_key
+        nonlocal cooldowns, fallback_cooldowns, pending, paced, pending_after_deadline
         cooldowns += 1
         server_directed = max(number("rate_limit_retry_until"), pending_after_deadline) > time.time() or number("rate_limit_retry_after") > 0
         bounded = policy.wait_limit_mode == "total" or not server_directed
@@ -325,8 +320,7 @@ def _run_post_actions(
             clear()
         pending = None
         pending_after_deadline = 0.0
-        header_key = None
-        resume()
+        resume_network()
         return not core.is_cancel_requested()
 
     @contextmanager
@@ -361,10 +355,15 @@ def _run_post_actions(
                 reason = _state.reason
                 if reason == "completed" and len(results) < len(targets):
                     reason = "cancelled"
+                if reason == "completed":
+                    journal.forget_successes(ActionJournal.key(target) for target in targets if target.kind != "post")
+                    journal.forget_successes(known_successes or ())
                 journal.record_stop(reason)
 
     with journal if journal is not None else nullcontext(), bind_journal(journal), scope(), persist_stop(), preserve_action_deadline():
         if journal is not None:
+            if not resume:
+                journal.forget_successes(key for key in journal.entries if not key.startswith("post:"))
             completed_since_pause = journal.completed_since_pause
             paced = journal.cooldown_until > 0
             if journal.cooldown_until > time.time():
@@ -385,9 +384,9 @@ def _run_post_actions(
                 break
             _state.current, _state.index, _state.current_result = target, index, None
             key = ActionJournal.key(target)
-            if journal is not None and known_successes is not None and key in known_successes:
-                journal.record(target, "success", count_completion=False)
             previous = seen.get(key)
+            if previous is None and known_successes is not None and key in known_successes:
+                previous = PostActionResult(target, action_label_for(target.kind), True, None, attempts=0)
             if previous is None and journal is not None:
                 previous = journal.previous_result(target)
             if previous is not None:
@@ -453,6 +452,8 @@ def _run_post_actions(
                             or tr("利用制限を検知したため送信せず保留しました。削除失敗には数えません。")
                         )
                         continue
+                    if result.success and _state.reason == "view_changed":
+                        _state.reason = "completed"
                     last_failure = None if result.success else result
                     if retries > 0:
                         _state.retries += 1
@@ -526,6 +527,7 @@ def run_post_actions(
     on_result: Callable[[PostActionResult], None] = lambda _: None,
     wait_for_cancel: Callable[[float], bool] | None = None,
     known_successes: set[str] | None = None,
+    resume: bool = False,
 ) -> list[PostActionResult]:
     policy.validate()
     state = _BatchState()
@@ -542,7 +544,7 @@ def run_post_actions(
     try:
         return _run_post_actions(core, targets, interval_seconds, policy, journal=journal, on_progress=on_progress,
                                  on_status=on_status, on_result=on_result, wait_for_cancel=wait_for_cancel,
-                                 known_successes=known_successes, _state=state)
+                                 known_successes=known_successes, resume=resume, _state=state)
     except Exception as error:
         # The raised error stays generic; the local log keeps the cause (stale lock, wrong account, ...).
         logger.error("Action batch stopped by %s: %s", type(error).__name__, error)

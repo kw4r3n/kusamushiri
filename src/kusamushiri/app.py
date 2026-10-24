@@ -390,6 +390,7 @@ class XDeleterWorker:
                             active_core, command.request.targets, command.request.interval_seconds, policy,
                             journal=journal, wait_for_cancel=None if isinstance(active_core, XDeleterCore) else self._cancel_event.wait,
                             known_successes=known_successes,
+                            resume=command.request.resume,
                             on_progress=lambda target, index, total: self.events.delete_progress.emit(
                                 action_label_for(target.kind),
                                 target.url, index, total),

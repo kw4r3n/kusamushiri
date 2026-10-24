@@ -11,7 +11,7 @@ import stat
 import tempfile
 import time
 from collections import Counter
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from types import TracebackType
@@ -269,6 +269,12 @@ class ActionJournal:
             self.completed_since_pause += 1
         self.entries[key] = state
         self._write()
+
+    def forget_successes(self, keys: Iterable[str]) -> None:
+        """Prune redundant receipts; the caller persists the batch state once."""
+        for key in list(keys):
+            if self.entries.get(key) == "success":
+                del self.entries[key]
 
     def reset_batch_count(self) -> None:
         self.completed_since_pause = 0
