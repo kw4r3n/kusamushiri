@@ -3,6 +3,7 @@
 GUI に依存しない純粋なモジュールで、収集結果と同じ PostRecord を返す。
 """
 
+import html
 import json
 import re
 import zipfile
@@ -275,6 +276,16 @@ def _build_record(entry: dict[str, Any], username: str, source_name: str) -> tup
 
     text = tweet.get("full_text") or tweet.get("text") or ""
     text = text if isinstance(text, str) else ""
+    entities = tweet.get("entities")
+    urls = entities.get("urls") if isinstance(entities, dict) else None
+    if isinstance(urls, list):
+        for entity in urls:
+            if not isinstance(entity, dict):
+                continue
+            short_url, display_url = entity.get("url"), entity.get("display_url")
+            if isinstance(short_url, str) and short_url and isinstance(display_url, str) and display_url:
+                text = text.replace(short_url, display_url)
+    text = html.unescape(text)
     created_at = _parse_created_at(tweet.get("created_at"))
     retweet_match = RETWEET_TEXT_PATTERN.match(text)
     return created_at, PostRecord(

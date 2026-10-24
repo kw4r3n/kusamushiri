@@ -142,6 +142,19 @@ def test_media_in_entities(tmp_path: Path) -> None:
     assert load_archive_posts(write_folder(tmp_path, files))[0].has_media is True
 
 
+@pytest.mark.parametrize("keyword", ["R&D", "youtube.com"])
+def test_archive_exclusions_match_decoded_text_and_display_urls(tmp_path: Path, keyword: str) -> None:
+    entry = make_tweet("1", "Wed Oct 10 20:19:24 +0000 2018", "R&amp;D https://t.co/abc")
+    entry["tweet"]["entities"]["urls"] = [
+        {"url": "https://t.co/abc", "display_url": "youtube.com/watch?v=1&amp;x=2"},
+        {"url": "", "display_url": "bad"},
+        None,
+    ]
+    posts = load_archive_posts(write_folder(tmp_path, {"tweets.js": ytd("tweets", 0, [entry])}))
+    assert posts[0].text == "R&D youtube.com/watch?v=1&x=2"
+    assert filter_archive_posts(posts, make_request(exclude_keywords=(keyword,))) == []
+
+
 def test_missing_account_uses_fallback_username(tmp_path: Path) -> None:
     root = write_folder(tmp_path, standard_files(with_account=False))
 

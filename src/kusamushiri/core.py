@@ -770,6 +770,11 @@ class XDeleterCore:
         logger.debug("Article %s: Found new URL: %s", article_index, post_url)
 
         text_content = self._get_article_text(article)
+        if request.exclude_keywords and (
+            not text_content.strip()
+            or article.locator(f"xpath=.//*[@data-testid='tweet-text-show-more-link'][{actions.OWNED_NODE_XPATH}]").count() > 0
+        ):
+            return None
         is_reply_post = self._article_has_any_selector(article, REPLY_CONTEXT_SELECTORS)
         has_media_post = self._article_has_any_selector(article, MEDIA_SELECTORS)
 
