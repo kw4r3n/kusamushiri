@@ -683,7 +683,7 @@ def cmd_resolve(args: argparse.Namespace) -> int:
     _confirm(tr("X で確認した操作結果を記録しますか？このコマンドは削除を実行しません。"), args.yes)
     with journal:
         if journal.entries.get(key) not in {"inflight", "ambiguous", "auth", "blocked", "permanent"}:
-            raise CliError("Only an existing held receipt can be resolved.", EXIT_USAGE)
+            raise CliError(tr("記録できるのは保留中の結果だけです。確定済みの記録は変更できません。"), EXIT_USAGE)
         target = PostActionTarget(f"https://x.com/verified/status/{args.post_id}", args.kind)
         journal.record(target, "success" if args.verified_applied else "pending", count_completion=False)
         journal.record_stop("manually_resolved")

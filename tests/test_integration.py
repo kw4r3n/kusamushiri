@@ -64,6 +64,10 @@ class FakeCore:
     def clear_cancel(self) -> None:
         self.cancel_requested = False
 
+    def prepare_post_action_policy(self, policy) -> None:
+        policy.validate()
+        self.prepared_policy = policy
+
     def start_browser(self, user_data_dir: object | None = None, account_name: str | None = None) -> None:
         del user_data_dir
         self.calls.append("start_browser")
@@ -152,7 +156,9 @@ def build_collect_request(username: str = "user") -> CollectRequest:
 
 
 def connect_window_to_worker(window: XDeleterWindow, worker: Any) -> None:
-    window.start_browser_requested.connect(worker.enqueue_start_browser)
+    window.start_browser_requested.connect(
+        lambda account: worker.enqueue_start_browser(account, window._action_retry_policy())
+    )
     window.stop_browser_requested.connect(worker.enqueue_stop_browser)
     window.check_login_requested.connect(worker.enqueue_check_login)
     window.collect_requested.connect(worker.enqueue_collect_posts)

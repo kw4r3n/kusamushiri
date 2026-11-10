@@ -64,6 +64,13 @@ class Route:
     ("https://evil.example/main.js", "GET", "script", False, ("block", "unlisted")),
     (GRAPH + "TweetDetail?variables=%7B%7D", "GET", "xhr", False, ("allow", "target_read")),
     (GRAPH + "TweetResultByRestId", "GET", "fetch", False, ("allow", "target_read")),
+    (GRAPH + "Viewer", "GET", "xhr", False, ("allow", "target_read")),
+    (GRAPH + "Viewer", "GET", "fetch", False, ("allow", "target_read")),
+    (GRAPH + "Viewer", "POST", "xhr", False, ("block", "unlisted")),
+    (GRAPH + "Viewer", "GET", "script", False, ("block", "unlisted")),
+    (GRAPH + "ViewerExtra", "GET", "xhr", False, ("block", "unlisted")),
+    (GRAPH + "UsersByRestIds", "GET", "xhr", False, ("block", "unlisted")),
+    ("https://x.com/i/api/1.1/graphql/app_context.json", "POST", "xhr", False, ("block", "unlisted")),
     (GRAPH + "TweetDetail", "POST", "xhr", False, ("block", "unlisted")),
     (GRAPH + "TweetDetail", "GET", "script", False, ("block", "unlisted")),
     (GRAPH + "DeleteTweet", "POST", "xhr", True, ("allow", "armed_mutation")),
@@ -153,6 +160,7 @@ def test_enforce_routes_first_cleans_restored_pages_and_aborts_unlisted(recorder
     context.pages[0].goto.assert_called_once_with("about:blank")
     for url, method, resource, admitted in [
         (TARGET, "GET", "document", True), (GRAPH + "TweetDetail", "GET", "xhr", True),
+        (GRAPH + "Viewer", "GET", "xhr", True),
         (GRAPH + "CreatorStudioTabBarItemQuery", "GET", "xhr", False),
         ("https://x.com/i/api/1.1/jot/client_event.json", "POST", "xhr", False),
     ]:

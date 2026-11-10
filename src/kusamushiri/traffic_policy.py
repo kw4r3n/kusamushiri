@@ -32,6 +32,8 @@ RULE_DECISIONS: dict[str, str] = {"local": "allow", "target_document": "allow", 
                                   "unarmed_mutation": "block", "unlisted": "block"}
 
 STATIC_RESOURCES = frozenset({"script", "stylesheet", "font"})
+# Post loading can require Viewer to bootstrap the signed-in identity.
+ACTION_READS = TARGET_READS | {"Viewer"}
 # The action code sets these phases immediately before its single confirmed click.
 ARMED_PHASES = frozenset({"mutation_submit", "mutation_wait"})
 _GRAPH_PATH = re.compile(r"/i/api/graphql/[A-Za-z0-9_-]+/([A-Za-z][A-Za-z0-9_]{0,79})")
@@ -73,7 +75,7 @@ def decide(url: str, method: str, resource_type: str, *, armed: bool) -> tuple[H
         return hosts, "allow", "static_asset"
     graph = _GRAPH_PATH.fullmatch(path) if hosts == "x_web" and resource_type in {"xhr", "fetch"} else None
     if graph:
-        if method == "GET" and graph.group(1) in TARGET_READS:
+        if method == "GET" and graph.group(1) in ACTION_READS:
             return hosts, "allow", "target_read"
         if method == "POST" and graph.group(1) in POST_MUTATIONS:
             return (hosts, "allow", "armed_mutation") if armed else (hosts, "block", "unarmed_mutation")

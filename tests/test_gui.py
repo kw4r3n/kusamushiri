@@ -677,17 +677,18 @@ def test_collect_handler_ignores_direct_requests_while_busy(window: XDeleterWind
 
 
 def test_selection_summary_and_empty_state_follow_model(window, qtbot) -> None:
+    window.main_tabs.setCurrentIndex(1)
     _show_and_activate(window)
     assert window.empty_state.isVisible()
     window.display_posts([_sample(), _sample(id="2", url="https://x.com/user/status/2")])
-    qtbot.waitUntil(lambda: window.selection_count.text() == "2 件 / 2 件選択")
+    qtbot.waitUntil(lambda: window.selection_count.text() == "全 2 件 / 処理対象 2 件")
     assert not window.empty_state.isVisible()
     window.select_all_button.click()
-    qtbot.waitUntil(lambda: window.selection_count.text() == "2 件 / 0 件選択")
+    qtbot.waitUntil(lambda: window.selection_count.text() == "全 2 件 / 処理対象 0 件")
     window.table.item(0, 0).setCheckState(Qt.CheckState.Checked)
-    qtbot.waitUntil(lambda: window.selection_count.text() == "2 件 / 1 件選択")
+    qtbot.waitUntil(lambda: window.selection_count.text() == "全 2 件 / 処理対象 1 件")
     window._clear_posts()
-    qtbot.waitUntil(lambda: window.selection_count.text() == "0 件 / 0 件選択")
+    qtbot.waitUntil(lambda: window.selection_count.text() == "全 0 件 / 処理対象 0 件")
     assert window.empty_state.isVisible()
 
 
@@ -707,7 +708,7 @@ def test_empty_state_explains_no_match_and_all_processed(window, qtbot, monkeypa
             error_message=None,
         )
     ])
-    qtbot.waitUntil(lambda: window.selection_count.text() == "0 件 / 0 件選択")
+    qtbot.waitUntil(lambda: window.selection_count.text() == "全 0 件 / 処理対象 0 件")
     assert window.empty_state.isVisible()
     assert window.empty_title.text() == "選択した項目をすべて処理しました"
 
@@ -810,6 +811,7 @@ def test_retry_failed_rechecks_account_match(window, monkeypatch) -> None:
 
 
 def test_log_starts_collapsed_and_can_expand(window, qtbot) -> None:
+    window.main_tabs.setCurrentIndex(1)
     _show_and_activate(window)
     assert not window.log_text.isVisible()
     group = window.log_text.parentWidget()
@@ -819,17 +821,46 @@ def test_log_starts_collapsed_and_can_expand(window, qtbot) -> None:
     assert not window.log_text.isVisible()
 
 
-def test_compact_desktop_keeps_actions_and_settings_accessible(window, qtbot) -> None:
-    window.resize(980, 640)
-    _show_and_activate(window)
-    assert window.width() == 980
-    assert window.height() == 640
-    assert window.table.height() >= 150
-    assert window.rect().contains(window.delete_button.mapTo(window, window.delete_button.rect().bottomRight()))
-    window.settings_scroll.ensureWidgetVisible(window.collect_button)
-    QApplication.processEvents()
-    viewport = window.settings_scroll.viewport()
-    assert viewport.rect().contains(window.collect_button.mapTo(viewport, window.collect_button.rect().center()))
+@pytest.mark.parametrize("language", ["ja", "en"])
+def test_settings_overview_and_posts_remain_accessible(window, qtbot, language) -> None:
+    from kusamushiri.i18n import set_language
+
+    set_language(language)
+    try:
+        view = XDeleterWindow()
+        view.resize(1440, 960)
+        _show_and_activate(view)
+        assert view.main_tabs.currentIndex() == 0
+        assert view.retry_settings_widget.isVisible()
+        assert view.settings_scroll.horizontalScrollBar().maximum() == 0
+        assert view.settings_scroll.verticalScrollBar().maximum() == 0
+        view.include_keywords_input.setText("keep this filter")
+        view.delete_interval_input.setValue(7.5)
+        view.resize(980, 640)
+        QApplication.processEvents()
+        assert view.width() == 980
+        assert view.settings_scroll.horizontalScrollBar().maximum() == 0
+        for position in (0, view.settings_scroll.verticalScrollBar().maximum()):
+            view.settings_scroll.verticalScrollBar().setValue(position)
+            QApplication.processEvents()
+            assert view.rect().contains(view.collect_button.mapTo(view, view.collect_button.rect().bottomRight()))
+        view.display_posts([_sample()])
+        QApplication.processEvents()
+        assert view.main_tabs.currentIndex() == 1
+        assert view.delete_button.isVisible()
+        assert view.table.height() >= 150
+        for button in (view.select_all_button, view.export_posts_button, view.retry_settings_button):
+            assert button.width() >= button.sizeHint().width()
+        view.retry_settings_button.click()
+        QApplication.processEvents()
+        assert view.main_tabs.currentIndex() == 0
+        assert not view.delete_button.isVisible()
+        assert view.include_keywords_input.text() == "keep this filter"
+        assert view.delete_interval_input.value() == 7.5
+        view._auto_save_timer.stop()
+        view.hide()
+    finally:
+        set_language(None)
 
 
 def test_export_following_requires_login_and_emits_request(window, qtbot, monkeypatch, tmp_path) -> None:
@@ -1512,3 +1543,191 @@ def test_remove_successful_rows_restores_updates_when_removal_fails(window, monk
             PostActionResult(PostActionTarget("https://x.com/user/status/1", "post"), "削除", True, None),
         ])
     assert window.table.updatesEnabled() is True
+
+
+def test_recipe_import_preserves_settings_and_requires_manual_execution(window, tmp_path, monkeypatch):
+    from datetime import date, timedelta
+
+    from kusamushiri.recipe import load_recipe
+
+    path = tmp_path / "kusamushiri-work.toml"
+    content = '''profile = "work"
+headless = true
+output_dir = "exports"
+[collect]
+user = "tester"
+mode = "search"
+kind = "reposts"
+media = "with_media"
+max_posts = 1500
+older_than_days = 30
+include = ["hello", "world"]
+exclude = ["keep"]
+min_likes = 2
+min_replies = 3
+replies_only = true
+[delete]
+confirm = false
+interval = 4.125
+wait_limit_mode = "total"
+ancillary_rate_limit_mode = "isolate-known"
+traffic_policy = "enforce"
+interval_jitter = 0.75
+max_retries = 2
+retry_delay = 45
+retry_max_delay = 600
+retry_max_wait = 1200
+batch_size = 10
+batch_pause = 90
+max_cooldowns = 4
+cooldown_delay = 100
+rate_limit_interval = 8
+'''
+    path.write_text(content)
+    recipe = load_recipe(path)
+    starts, collects, deletes = [], [], []
+    window.start_browser_requested.connect(starts.append)
+    window.collect_requested.connect(collects.append)
+    window.delete_requested.connect(deletes.append)
+    window.display_posts([_sample()])
+    window._apply_recipe(recipe)
+    assert starts == collects == deletes == []
+    assert window.table.rowCount() == 0
+    assert window._current_account == "work"
+    assert window._action_retry_policy() == recipe.delete.retry_policy
+    assert window.delete_interval_input.value() == 4.125
+    assert window.output_dir_input.text() == str(tmp_path / "exports")
+    assert window.until_date_input.date().toPython() == date.today() - timedelta(days=31)
+    assert window.main_tabs.currentIndex() == 0
+    window._load_account_settings("work")
+    assert window._action_retry_policy() == recipe.delete.retry_policy
+    assert window.output_dir_input.text() == str(tmp_path / "exports")
+    window.on_login_checked(True, "tester")
+    window._handle_collect()
+    assert collects == [recipe.collect.to_request("tester")]
+    window.display_posts([_sample(), _sample(id="2", url="https://x.com/tester/status/2")])
+    window.set_busy(False)
+    confirmations = []
+
+    def confirm(*args):
+        confirmations.append(args)
+        return QMessageBox.StandardButton.Yes
+
+    monkeypatch.setattr("PySide6.QtWidgets.QMessageBox.question", confirm)
+    window._handle_delete()
+    assert len(confirmations) == 1
+    assert confirmations[0][-1] == QMessageBox.StandardButton.No
+    assert len(deletes) == 1
+    assert deletes[0].retry_policy == recipe.delete.retry_policy
+    assert deletes[0].interval_seconds == 4.125
+    assert path.read_text() == content
+
+
+@pytest.mark.parametrize("data", [
+    {"collect": {"max_posts": 2_147_483_648}},
+    {"delete": {"interval": 1.0000000000001}},
+    {"collect": {"include": ["a,b"]}},
+    {"collect": {"since": "2026-02-01", "until": "2026-01-01"}},
+])
+def test_recipe_import_rejects_unrepresentable_values_without_partial_changes(window, tmp_path, data):
+    from kusamushiri.recipe import parse_recipe
+
+    window.username_input.setText("original")
+    window.display_posts([_sample()])
+    window._save_settings()
+    previous = window._settings_manager.load_account_settings(window._current_account)
+    profile = window._current_account
+    data = {"profile": "other", **data}
+    with pytest.raises(ValueError):
+        window._apply_recipe(parse_recipe(data, tmp_path / "bad.toml"))
+    assert window._current_account == profile
+    assert window.username_input.text() == "original"
+    assert window.table.rowCount() == 1
+    assert window._settings_manager.load_account_settings(profile) == previous
+
+
+@pytest.mark.parametrize("busy,running", [(True, False), (False, True)])
+def test_recipe_import_refuses_active_session(window, tmp_path, busy, running):
+    from kusamushiri.recipe import Recipe, RecipeError
+
+    window._browser_running = running
+    window.set_busy(busy)
+    assert not window.load_recipe_button.isEnabled()
+    with pytest.raises(RecipeError):
+        window._apply_recipe(Recipe(tmp_path / "recipe.toml"))
+
+
+def test_collection_only_recipe_disables_delete_and_archive_uses_resolved_path(window, tmp_path, monkeypatch):
+    from kusamushiri.recipe import parse_recipe
+
+    recipe = parse_recipe({"archive": "data/archive.zip", "collect": {"user": "tester", "order": "oldest"}}, tmp_path / "recipe.toml")
+    window._apply_recipe(recipe)
+    assert window.archive_path_input.text() == str(tmp_path / "data/archive.zip")
+    assert window.archive_oldest_first_checkbox.isChecked()
+    calls = []
+    monkeypatch.setattr(window, "_handle_import_archive", lambda **kw: calls.append(kw))
+    window._handle_collect()
+    assert calls == [{"use_saved_path": True}]
+    window.on_login_checked(True, "tester")
+    window.display_posts([_sample()])
+    deletes = []
+    window.delete_requested.connect(deletes.append)
+    window._handle_delete()
+    assert not window.delete_button.isEnabled()
+    assert deletes == []
+    window._load_account_settings(window._current_account)
+    assert not window.action_enabled_checkbox.isChecked()
+    assert window.archive_path_input.text() == str(tmp_path / "data/archive.zip")
+
+
+def test_recipe_dialog_invalid_file_and_cancel_leave_inputs_unchanged(window, tmp_path, monkeypatch):
+    path = tmp_path / "bad.toml"
+    path.write_text("[broken")
+    errors = []
+    monkeypatch.setattr("PySide6.QtWidgets.QMessageBox.warning", lambda *args: errors.append(args[2]))
+    monkeypatch.setattr("PySide6.QtWidgets.QFileDialog.getOpenFileName", lambda *args: (str(path), ""))
+    window.username_input.setText("before")
+    window._handle_load_recipe()
+    assert len(errors) == 1
+    assert window.username_input.text() == "before"
+    monkeypatch.setattr("PySide6.QtWidgets.QFileDialog.getOpenFileName", lambda *args: ("", ""))
+    window._handle_load_recipe()
+    assert len(errors) == 1
+    assert window.username_input.text() == "before"
+
+
+def test_recipe_archive_collect_passes_saved_path_and_order_without_a_picker(window, tmp_path, monkeypatch):
+    from kusamushiri.recipe import parse_recipe
+
+    recipe = parse_recipe({"archive": "archive.zip", "collect": {"user": "tester", "order": "oldest"}}, tmp_path / "recipe.toml")
+    window._apply_recipe(recipe)
+    launched = []
+
+    class ThreadCapture:
+        def __init__(self, **kwargs):
+            launched.append(kwargs)
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr("kusamushiri.gui.threading.Thread", ThreadCapture)
+    monkeypatch.setattr("PySide6.QtWidgets.QFileDialog.getOpenFileName", lambda *args: pytest.fail("unexpected picker"))
+    assert window.collect_button.isEnabled()
+    window._handle_collect()
+    assert len(launched) == 1
+    assert launched[0]["args"][0] == str(tmp_path / "archive.zip")
+    assert launched[0]["args"][1] == recipe.collect.to_request("tester")
+    assert launched[0]["args"][3] is True
+    assert window._busy
+
+
+def test_recipe_output_folder_is_used_for_manual_save(window, tmp_path, monkeypatch):
+    from kusamushiri.recipe import parse_recipe
+
+    window._apply_recipe(parse_recipe({"output_dir": "exports"}, tmp_path / "recipe.toml"))
+    window.display_posts([_sample()])
+    defaults = []
+    monkeypatch.setattr("kusamushiri.gui.save_selected_with_dialog", lambda _parent, path, _count, _write: defaults.append(path))
+    window._handle_export_posts()
+    assert defaults[0].parent == tmp_path / "exports"
+    assert not (tmp_path / "exports").exists()

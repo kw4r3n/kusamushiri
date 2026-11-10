@@ -19,7 +19,7 @@ from kusamushiri.i18n import set_language, tr
 from kusamushiri.last_posts import FetchLastPostsRequest, LastPostResult, apply_last_post_entries
 from kusamushiri.logger import logger
 from kusamushiri.menu_diagnostic import MenuDiagnosticResult
-from kusamushiri.models import CollectRequest, ExecuteActionsRequest
+from kusamushiri.models import CollectRequest, ExecuteActionsRequest, RetryPolicy
 from kusamushiri.paths import configure_frozen_browser_path, migrate_legacy_app_data
 from kusamushiri.progress import ActionJournal
 from kusamushiri.retry import ActionBatchError, run_post_actions
@@ -57,6 +57,7 @@ def apply_dark_palette(app: QApplication) -> None:
 class StartBrowserCommand:
     action: str = "start_browser"
     account_name: str | None = None
+    retry_policy: RetryPolicy | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -178,8 +179,8 @@ class XDeleterWorker:
         with self._command_lock:
             self._commands.put(_QueuedCommand(command, self._generation))
 
-    def enqueue_start_browser(self, account_name: str | None = None) -> None:
-        self._enqueue(StartBrowserCommand(account_name=account_name))
+    def enqueue_start_browser(self, account_name: str | None = None, retry_policy: RetryPolicy | None = None) -> None:
+        self._enqueue(StartBrowserCommand(account_name=account_name, retry_policy=retry_policy))
 
     def enqueue_check_login(self) -> None:
         self._enqueue(CheckLoginCommand())
@@ -303,6 +304,8 @@ class XDeleterWorker:
                     self.events.status_changed.emit(
                         tr("ブラウザを起動しています…（初回は Chromium のダウンロードに数分かかることがあります）")
                     )
+                    if command.retry_policy is not None:
+                        core.prepare_post_action_policy(command.retry_policy)
                     core.start_browser(account_name=command.account_name)
                     core.go_to_home()
                     self.events.status_changed.emit(
@@ -528,7 +531,9 @@ def main() -> int:
     worker = XDeleterWorker()
 
     window = XDeleterWindow()
-    window.start_browser_requested.connect(worker.enqueue_start_browser)
+    window.start_browser_requested.connect(
+        lambda account: worker.enqueue_start_browser(account, window._action_retry_policy())
+    )
     window.stop_browser_requested.connect(worker.enqueue_stop_browser)
     window.check_login_requested.connect(worker.enqueue_check_login)
     window.menu_diagnostic_requested.connect(worker.enqueue_menu_diagnostic)

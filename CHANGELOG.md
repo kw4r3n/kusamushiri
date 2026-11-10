@@ -9,6 +9,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the first articles now get the same loading deadline as search mode instead of exhausting
   the scroll budget in under a second. The GUI and CLI share this collection path.
 
+- Load CLI TOML recipes into the GUI for manual collection, review and deletion,
+  preserving per-profile retry/traffic settings and resolving archive/output paths.
+
+- Show settings in a full-width, three-column overview with a separate posts tab;
+  keep collection visible and open the posts tab after collection. Clarify checked
+  action targets and improve compact toolbars and in-app help.
+
+- Allow the `Viewer` identity GET under the traffic allowlist instead of blocking
+  sign-in bootstrap; authentication and rate-limit stops still apply.
 - A finished unlike/unrepost batch forgets its success receipts, so a later batch acts on posts
   you liked or reposted again. Explicit resumes skip interrupted successes; new batches clear
   old unlike/unrepost successes. Recovering from a changed view now reports completion correctly.

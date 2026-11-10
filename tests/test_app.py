@@ -638,3 +638,31 @@ def test_worker_unexpected_fault_retains_partial_results_and_invalidates_queued_
         assert "PRIVATE_WORKER_CANARY" not in errors[0]
     finally:
         worker.shutdown()
+
+
+def test_worker_prepares_recipe_policy_before_starting_browser(qtbot):
+    from kusamushiri.models import RetryPolicy
+
+    policy = RetryPolicy(traffic_policy="enforce", ancillary_rate_limit_mode="isolate-known")
+
+    class PolicyCore(FakeCore):
+        def prepare_post_action_policy(self, value):
+            value.validate()
+            assert value == policy
+            self.calls.append("prepare_policy")
+
+        def start_browser(self, account_name=None):
+            assert self.calls == ["prepare_policy"]
+            super().start_browser(account_name)
+
+    core = PolicyCore()
+    worker = XDeleterWorker(core=core)
+    ready = []
+    worker.events.browser_ready.connect(lambda: ready.append(True))
+    try:
+        worker.enqueue_start_browser("recipe-profile", policy)
+        wait_until(qtbot, lambda: bool(ready))
+        assert core.calls[:3] == ["prepare_policy", "start_browser", "go_to_home"]
+        assert core.account_name == "recipe-profile"
+    finally:
+        worker.shutdown()

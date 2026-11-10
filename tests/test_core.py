@@ -1,5 +1,6 @@
 import time
 from datetime import date
+from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse
 
 import pytest
@@ -743,3 +744,20 @@ def test_unfollow_refuses_before_saved_rate_limit_deadline(monkeypatch, tmp_path
         journal.defer_until(0)
     core.clear_cancel()
     assert core.unfollow_account("target") == (True, None) and len(sent) == 1
+
+
+def test_stale_page_identity_is_checked_after_target_load_not_before(monkeypatch) -> None:
+    """After a 429 cooldown the page shows an error view without login markers;
+    that must not record an unsent item as blocked before the target loads."""
+    page = SimpleNamespace(on=lambda *_: None, remove_listener=lambda *_: None)
+    calls = []
+
+    def fake_delete(_page, _url, _find, *, _evidence):
+        calls.append(_evidence.identity_failed)
+        return False, "stop"
+
+    monkeypatch.setattr(actions, "delete_post", fake_delete)
+    result = actions.execute_post_action(page, PostActionTarget("https://x.com/user/status/1", "post"),
+                                         identity_check=lambda: False)
+    assert calls == [False]
+    assert result.failure_kind != "blocked"

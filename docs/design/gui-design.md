@@ -78,3 +78,67 @@ DOM checks are outside this GUI assignment, not counted as passes.
 
 Final review artifacts: [desktop](gui-desktop.png), [populated](gui-populated.png),
 [compact](gui-compact.png), [concept](gui-concept.png).
+
+## Main-window workflow refinement (2026-11-05)
+
+The collection button now stays below the scrolling settings rail. Login and
+filters precede a separate following group; diagnostics, current-post actions and
+autosave timing are under a collapsed settings toggle. Existing signals, login
+checks, confirmations and initial checked targets remain unchanged.
+
+Selection/save/wait controls and interval settings occupy separate toolbar rows.
+The header is a single row so the compact layout retains a 153px table at
+980×640. Counts and action labels distinguish checked processing targets from
+row selection for text preview. Help now explains profiles, the collection flow,
+initial checked targets, stop results and keyboard shortcuts in Japanese/English.
+
+Current widgets were rendered offscreen with isolated XDG directories and synthetic
+posts at 1440×960 and 980×640 in both languages. Toolbar buttons meet their Qt
+size hints; collection remains visible at both scroll extremes. Scoped GUI and
+translation checks: 98 passed. Ruff passed for changed Python files; Pyright:
+zero errors/warnings. Real X operations, other OS rendering and screen-reader
+behavior were not checked. Older screenshots above document the prior layout.
+
+### Full-width settings overview (2026-11-05, supersedes the rail layout)
+
+Settings and posts now have separate native Qt tabs. Settings use three visible
+columns: account/following, collection filters, and action pacing/diagnostics.
+Retry settings and diagnostics are no longer collapsed. The collection button
+stays below the settings scroll area. Collected or imported results switch to
+Posts; the wait/retry button returns to Settings and focuses the interval field.
+Existing widgets are retained across tab changes, preserving settings and rows.
+The batch-delete footer button is shown on Posts only; its confirmation and
+keyboard shortcut retain the existing behavior.
+
+Offscreen native renders with isolated XDG directories verified Japanese/English
+at 1440×960 and 980×640. At 1440×960 all settings fit without scrolling. At 980×640
+settings scroll vertically, with no horizontal scrollbar and collection still
+visible. The posts table retains 162px height at the compact size. Regression
+checks cover tab navigation, automatic result switching, retained input values,
+full-size settings visibility and compact action widths. GUI/i18n: 99 passed;
+Ruff and Pyright passed. Live X, other OS rendering and screen readers remain
+outside this verification.
+
+### GUI recipe loading (2026-11-05)
+
+The header now offers Load TOML settings while the browser and jobs are stopped.
+It uses the CLI recipe parser, applies the selected profile and filters, and
+preserves all RetryPolicy fields in GUI profile settings. Collection-only recipes
+disable deletion; confirmations remain manual regardless of the recipe's confirm
+flag. Archive and output paths resolve beside the recipe; saving lists is manual.
+Relative age filters become visible absolute dates at load time. The source label
+explains these GUI semantics. Loading never changes the source TOML or starts work.
+
+Additional wait/traffic controls and file paths remain visible in the three-column
+settings overview. Traffic/isolation modes are locked while the browser is running
+because they must reach the core before browser startup. Values that cannot be
+represented by the GUI are rejected before changing profile, filters or rows.
+The GUI supports 32-bit positive collection counts and up to 12 decimal places for
+imported timing values; profile reload retains the imported decimal precision.
+
+Japanese/English offscreen renders were inspected at 1440×960 and 980×640 using
+synthetic recipes and isolated XDG directories. Both widths avoid horizontal
+settings scrolling; the loaded-recipe notice adds a small vertical scroll at the
+larger size. Collection remains fixed below the scrolling overview. The scoped
+GUI, translation, settings, recipe, worker and integration suite passed 231 tests;
+Ruff and Pyright passed. Real X execution was not performed.

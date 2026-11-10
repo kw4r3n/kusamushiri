@@ -32,6 +32,14 @@ def test_every_target_read_uses_the_same_role_and_admission(host, operation):
     assert decide(url, "GET", "xhr", armed=False) == ("x_web", "allow", "target_read")
 
 
+@pytest.mark.parametrize("host", sorted(WEB_HOSTS))
+def test_viewer_identity_read_is_admitted_but_keeps_global_failure_handling(host):
+    url = f"https://{host}/i/api/graphql/fixture/Viewer"
+    assert decide(url, "GET", "xhr", armed=False) == ("x_web", "allow", "target_read")
+    assert classify_rate_limit(url) == failure_role(url, "GET") == ("unknown", "unclassified")
+    assert isolatable_endpoint(url, "GET") is None
+
+
 @pytest.mark.parametrize("operation", sorted(POST_MUTATIONS))
 def test_every_post_mutation_uses_the_same_role_and_admission(operation):
     url = f"https://x.com/i/api/graphql/fixture/{operation}"

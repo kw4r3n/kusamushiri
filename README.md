@@ -80,6 +80,22 @@ With pip: `pip install .`, then run `kusamushiri`.
 Settings, filters, and login state are saved per profile. Profiles and logs live in your
 user data directory (e.g. `%LOCALAPPDATA%\kusamushiri` on Windows, `~/.local/share/kusamushiri` on Linux).
 
+### Use a CLI TOML recipe in the GUI
+
+Stop the browser and any running job, then use **Load TOML settings** to select a
+`kusamushiri*.toml` file. The GUI selects its profile and applies collection filters,
+action intervals, retry settings and traffic modes. Review the settings, log in,
+collect, and review the checked posts before deleting. Loading never starts a job
+or rewrites the TOML; the applied values are saved in the GUI profile settings.
+
+- The GUI shows the browser and confirms deletion even with `headless = true` or `confirm = false`.
+- Without `[delete]`, **Enable delete / undo** is off. Enable it explicitly if you want to delete.
+- `older_than_days` becomes an absolute end-date filter on the day of loading; reload the recipe on another day.
+- With `archive`, Collect reads that file. Clear **Archive path** to collect from X instead.
+- Relative `archive` / `output_dir` paths resolve beside the TOML. The output directory is the initial location for **Save checked**; lists are not saved automatically.
+- Traffic policy and ancillary rate-limit mode apply before browser startup. Stop the browser before changing them.
+- Values outside GUI ranges or precision, and keywords that cannot be represented by its separator-based fields, cause a load error instead of being silently changed (for example, integers outside the 32-bit range, precision beyond 12 decimal places, or a keyword containing a comma). Failed loads retain the current settings and list.
+
 ## Sharing sanitized diagnostics
 
 Diagnostic request/response logging is enabled automatically. It uses local trace,
@@ -413,15 +429,17 @@ The default `off` changes nothing; startup, sign-in checks, home loads and colle
   and starts no item.
 
 It admits the target post document (`GET /<user>/status/<id>`), scripts/styles/fonts from `x.com` and
-`*.twimg.com`, GraphQL `TweetDetail` / `TweetResultByRestId` GETs, and one `DeleteTweet` /
+`*.twimg.com`, GraphQL `TweetDetail` / `TweetResultByRestId` GETs, the `Viewer` GET needed
+to restore the signed-in identity, and one `DeleteTweet` /
 `DeleteRetweet` / `UnfavoriteTweet` POST at the confirmation click. Query IDs and chunk names are not
 used, so routine X builds keep working; a renamed or newly required dependency stops the batch.
 
 Under `enforce`, an item that fails before its mutation is sent is held as blocked and the batch stops,
 because a missing dependency cannot be told apart from a real failure (an already-deleted post stops it too).
 `diagnostics --summary` lists `traffic` counts by decision, rule and host class. Blocking telemetry makes
-the session's traffic unlike a normal browser; how X treats that is unknown. It is not yet validated on a
-live account: record with `report` first, then try `enforce` on a few posts.
+the session's traffic unlike a normal browser; how X treats that is unknown. A bounded live-account
+trial confirmed 88 deletes. Completing a later `Viewer` identity refresh remains unverified because
+X rate-limited that read. Record with `report` first, then try `enforce` on a few posts.
 
 In default `per-wait` mode, `max_cooldowns` counts only waits without a server deadline; successful recovery and further successes
 do not reset it. `max_retries` counts safe action retries for each item; unsent rate deferrals

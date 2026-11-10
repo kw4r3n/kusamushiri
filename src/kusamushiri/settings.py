@@ -40,6 +40,13 @@ class AccountSettings:
     action_max_cooldowns: int = RetryPolicy().max_cooldowns
     action_cooldown_delay_seconds: float = RetryPolicy().cooldown_delay_seconds
     action_rate_limit_interval_seconds: float = RetryPolicy().rate_limit_interval_seconds
+    action_wait_limit_mode: str = "per-wait"
+    action_ancillary_rate_limit_mode: str = "global"
+    action_traffic_policy: str = "off"
+    action_interval_jitter_seconds: float = 0.0
+    action_enabled: bool = True
+    archive_path: str = ""
+    output_dir: str = ""
     since_date: str | None = None
     until_date: str | None = None
     since_date_enabled: bool = False
@@ -92,6 +99,13 @@ class AccountSettingsManager:
         self._settings.setValue(f"{prefix}action_max_cooldowns", settings.action_max_cooldowns)
         self._settings.setValue(f"{prefix}action_cooldown_delay_seconds", settings.action_cooldown_delay_seconds)
         self._settings.setValue(f"{prefix}action_rate_limit_interval_seconds", settings.action_rate_limit_interval_seconds)
+        self._settings.setValue(f"{prefix}action_wait_limit_mode", settings.action_wait_limit_mode)
+        self._settings.setValue(f"{prefix}action_ancillary_rate_limit_mode", settings.action_ancillary_rate_limit_mode)
+        self._settings.setValue(f"{prefix}action_traffic_policy", settings.action_traffic_policy)
+        self._settings.setValue(f"{prefix}action_interval_jitter_seconds", settings.action_interval_jitter_seconds)
+        self._settings.setValue(f"{prefix}action_enabled", settings.action_enabled)
+        self._settings.setValue(f"{prefix}archive_path", settings.archive_path)
+        self._settings.setValue(f"{prefix}output_dir", settings.output_dir)
         self._settings.setValue(f"{prefix}since_date_enabled", settings.since_date_enabled)
         self._settings.setValue(f"{prefix}until_date_enabled", settings.until_date_enabled)
         self._settings.setValue(f"{prefix}auto_save_interval_seconds", settings.auto_save_interval_seconds)
@@ -131,6 +145,13 @@ class AccountSettingsManager:
             action_max_cooldowns=self._account_setting_value(prefix, "action_max_cooldowns", RetryPolicy().max_cooldowns, int),
             action_cooldown_delay_seconds=self._account_setting_value(prefix, "action_cooldown_delay_seconds", RetryPolicy().cooldown_delay_seconds, float),
             action_rate_limit_interval_seconds=self._account_setting_value(prefix, "action_rate_limit_interval_seconds", RetryPolicy().rate_limit_interval_seconds, float),
+            action_wait_limit_mode=self._account_setting_value(prefix, "action_wait_limit_mode", "per-wait", str),
+            action_ancillary_rate_limit_mode=self._account_setting_value(prefix, "action_ancillary_rate_limit_mode", "global", str),
+            action_traffic_policy=self._account_setting_value(prefix, "action_traffic_policy", "off", str),
+            action_interval_jitter_seconds=self._account_setting_value(prefix, "action_interval_jitter_seconds", 0.0, float),
+            action_enabled=self._account_setting_value(prefix, "action_enabled", True, bool),
+            archive_path=self._account_setting_value(prefix, "archive_path", "", str),
+            output_dir=self._account_setting_value(prefix, "output_dir", "", str),
             since_date=self._account_setting_value(prefix, "since_date", None, str),
             until_date=self._account_setting_value(prefix, "until_date", None, str),
             since_date_enabled=self._account_setting_value(prefix, "since_date_enabled", False, bool),

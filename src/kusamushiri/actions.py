@@ -270,10 +270,10 @@ class ActionEvidence:
         if self.diagnostics is not None:
             self.diagnostics.phase(phase)
 
-    def can_submit(self) -> bool:
+    def can_submit(self, *, check_identity: bool = True) -> bool:
         self.cancelled = self.should_cancel()
         self.rate_blocked = self.rate_blocked or self.rate_limit_pending()
-        if not (self.blocked or self.cancelled or self.rate_blocked):
+        if check_identity and not (self.blocked or self.cancelled or self.rate_blocked):
             try:
                 self.identity_failed = self.identity_failed or self.identity_check() is not True
             except Exception:
@@ -402,7 +402,9 @@ def execute_post_action(
     page.on("response", record_response)
     try:
         action = {"post": delete_post, "repost": undo_repost, "like": unlike_post}[target.kind]
-        if evidence.can_submit():
+        # Identity is checked after the target loads, before any click; the page shown
+        # now may be a stale error view (e.g. after a 429 cooldown) without login markers.
+        if evidence.can_submit(check_identity=False):
             success, error_message = action(page, target.url, find_locator, _evidence=evidence)
         else:
             evidence.phase("submission_blocked")
