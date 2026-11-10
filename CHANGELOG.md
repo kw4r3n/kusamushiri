@@ -5,6 +5,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Simplify the GUI into a single screen: account and filter controls live in a left rail
+  beside the post list, keyword, threshold and archive options collapse under Advanced
+  filters with a summary of what is set, and waits/retries, traffic modes, diagnostics,
+  profile management and following tools move into an Operations settings dialog.
+  No settings or workflows were removed.
+
 - Fix profile-mode collection returning zero posts when the timeline was slow to render:
   the first articles now get the same loading deadline as search mode instead of exhausting
   the scroll budget in under a second. The GUI and CLI share this collection path.
@@ -12,8 +18,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Load CLI TOML recipes into the GUI for manual collection, review and deletion,
   preserving per-profile retry/traffic settings and resolving archive/output paths.
 
-- Show settings in a full-width, three-column overview with a separate posts tab;
-  keep collection visible and open the posts tab after collection. Clarify checked
+- Show settings in a full-width overview and keep collection visible. Clarify checked
   action targets and improve compact toolbars and in-app help.
 
 - Allow the `Viewer` identity GET under the traffic allowlist instead of blocking

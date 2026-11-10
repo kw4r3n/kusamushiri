@@ -677,7 +677,6 @@ def test_collect_handler_ignores_direct_requests_while_busy(window: XDeleterWind
 
 
 def test_selection_summary_and_empty_state_follow_model(window, qtbot) -> None:
-    window.main_tabs.setCurrentIndex(1)
     _show_and_activate(window)
     assert window.empty_state.isVisible()
     window.display_posts([_sample(), _sample(id="2", url="https://x.com/user/status/2")])
@@ -811,7 +810,6 @@ def test_retry_failed_rechecks_account_match(window, monkeypatch) -> None:
 
 
 def test_log_starts_collapsed_and_can_expand(window, qtbot) -> None:
-    window.main_tabs.setCurrentIndex(1)
     _show_and_activate(window)
     assert not window.log_text.isVisible()
     group = window.log_text.parentWidget()
@@ -822,7 +820,7 @@ def test_log_starts_collapsed_and_can_expand(window, qtbot) -> None:
 
 
 @pytest.mark.parametrize("language", ["ja", "en"])
-def test_settings_overview_and_posts_remain_accessible(window, qtbot, language) -> None:
+def test_single_screen_keeps_filters_and_actions_accessible(window, qtbot, language) -> None:
     from kusamushiri.i18n import set_language
 
     set_language(language)
@@ -830,31 +828,31 @@ def test_settings_overview_and_posts_remain_accessible(window, qtbot, language) 
         view = XDeleterWindow()
         view.resize(1440, 960)
         _show_and_activate(view)
-        assert view.main_tabs.currentIndex() == 0
-        assert view.retry_settings_widget.isVisible()
-        assert view.settings_scroll.horizontalScrollBar().maximum() == 0
-        assert view.settings_scroll.verticalScrollBar().maximum() == 0
+        assert not hasattr(view, "main_tabs")
+        assert view.collect_button.isVisible()
+        assert view.delete_button.isVisible()
+        assert not view.ops_dialog.isVisible()
         view.include_keywords_input.setText("keep this filter")
+        assert view.details_summary_label.isVisible()
         view.delete_interval_input.setValue(7.5)
         view.resize(980, 640)
         QApplication.processEvents()
         assert view.width() == 980
         assert view.settings_scroll.horizontalScrollBar().maximum() == 0
-        for position in (0, view.settings_scroll.verticalScrollBar().maximum()):
-            view.settings_scroll.verticalScrollBar().setValue(position)
-            QApplication.processEvents()
-            assert view.rect().contains(view.collect_button.mapTo(view, view.collect_button.rect().bottomRight()))
+        view.settings_scroll.ensureWidgetVisible(view.collect_button)
+        QApplication.processEvents()
+        assert view.rect().contains(view.collect_button.mapTo(view, view.collect_button.rect().bottomRight()))
         view.display_posts([_sample()])
         QApplication.processEvents()
-        assert view.main_tabs.currentIndex() == 1
         assert view.delete_button.isVisible()
-        assert view.table.height() >= 150
+        assert view.table.height() >= 140
         for button in (view.select_all_button, view.export_posts_button, view.retry_settings_button):
             assert button.width() >= button.sizeHint().width()
         view.retry_settings_button.click()
         QApplication.processEvents()
-        assert view.main_tabs.currentIndex() == 0
-        assert not view.delete_button.isVisible()
+        assert view.ops_dialog.isVisible()
+        assert view.retry_settings_widget.isVisible()
+        view.ops_dialog.hide()
         assert view.include_keywords_input.text() == "keep this filter"
         assert view.delete_interval_input.value() == 7.5
         view._auto_save_timer.stop()
@@ -1598,7 +1596,6 @@ rate_limit_interval = 8
     assert window.delete_interval_input.value() == 4.125
     assert window.output_dir_input.text() == str(tmp_path / "exports")
     assert window.until_date_input.date().toPython() == date.today() - timedelta(days=31)
-    assert window.main_tabs.currentIndex() == 0
     window._load_account_settings("work")
     assert window._action_retry_policy() == recipe.delete.retry_policy
     assert window.output_dir_input.text() == str(tmp_path / "exports")

@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDateEdit,
+    QDialog,
     QDoubleSpinBox,
     QFileDialog,
     QGridLayout,
@@ -30,7 +31,6 @@ from PySide6.QtWidgets import (
     QSpinBox,
     QStackedLayout,
     QTableWidget,
-    QTabWidget,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -264,78 +264,43 @@ class XDeleterWindow(QMainWindow):
         self.load_recipe_button.setToolTip(tr("ブラウザと処理を停止してから、CLIのTOML設定を読み込みます。"))
         self.load_recipe_button.clicked.connect(self._handle_load_recipe)
         heading.addWidget(self.load_recipe_button)
+        self.ops_settings_button = QPushButton(tr("運用設定"))
+        self.ops_settings_button.setObjectName("secondaryButton")
+        self.ops_settings_button.setToolTip(tr("待機・再試行、通信方式、診断、プロファイル管理などの低頻度の設定を開きます。"))
+        self.ops_settings_button.clicked.connect(self._show_ops_dialog)
+        heading.addWidget(self.ops_settings_button)
         root_layout.addLayout(heading)
 
-        self.main_tabs = QTabWidget()
-        settings_page = QWidget()
-        settings_page_layout = QVBoxLayout(settings_page)
-        settings_page_layout.setContentsMargins(0, 0, 0, 0)
         self.recipe_source_label = QLabel()
         self.recipe_source_label.setWordWrap(True)
         self.recipe_source_label.hide()
-        settings_page_layout.addWidget(self.recipe_source_label)
+        root_layout.addWidget(self.recipe_source_label)
+
+        body_layout = QHBoxLayout()
+        body_layout.setSpacing(12)
+        root_layout.addLayout(body_layout, 1)
+
         self.settings_scroll = QScrollArea()
         self.settings_scroll.setWidgetResizable(True)
+        self.settings_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         rail = QWidget()
         rail.setObjectName("settingsRail")
-        settings_layout = QHBoxLayout(rail)
-        settings_layout.setContentsMargins(16, 8, 16, 12)
-        settings_layout.setSpacing(20)
-        account_column = QVBoxLayout()
-        filter_column = QVBoxLayout()
-        action_column = QVBoxLayout()
-        for column in (account_column, filter_column, action_column):
-            column.setSpacing(8)
-            settings_layout.addLayout(column, 1)
-        account_column.addWidget(self._build_account_group())
-        filter_column.addWidget(self._build_filter_group())
-        following = QGroupBox(tr("フォローの整理"))
-        following_layout = QVBoxLayout(following)
-        following_layout.addWidget(self.manage_following_button)
-        following_layout.addWidget(self.export_following_button)
-        account_column.addWidget(following)
-        self.archive_path_input = QLineEdit()
-        self.archive_path_input.setPlaceholderText(tr("空欄ならXから収集"))
-        self.output_dir_input = QLineEdit()
-        self.output_dir_input.setPlaceholderText(tr("空欄ならホームフォルダ"))
-        files = QGroupBox(tr("読み込み・保存先"))
-        files_layout = QVBoxLayout(files)
-        files_layout.addWidget(QLabel(tr("アーカイブのパス")))
-        files_layout.addWidget(self.archive_path_input)
-        files_layout.addWidget(QLabel(tr("一覧の保存先フォルダ")))
-        files_layout.addWidget(self.output_dir_input)
-        account_column.addWidget(files)
-        account_column.addStretch()
-        additional_policy = QGroupBox(tr("待機・通信方式"))
-        policy_layout = QGridLayout(additional_policy)
-        policy_layout.setVerticalSpacing(4)
-        self.action_wait_limit_mode_combo = QComboBox()
-        for value in ('per-wait', 'total'):
-            self.action_wait_limit_mode_combo.addItem(value, userData=value)
-        self.action_ancillary_rate_limit_mode_combo = QComboBox()
-        for value in ('global', 'isolate-known'):
-            self.action_ancillary_rate_limit_mode_combo.addItem(value, userData=value)
-        self.action_traffic_policy_combo = QComboBox()
-        for value in ('off', 'report', 'enforce'):
-            self.action_traffic_policy_combo.addItem(value, userData=value)
-        for combo in (self.action_traffic_policy_combo, self.action_ancillary_rate_limit_mode_combo):
-            combo.setToolTip(tr("ブラウザ起動前に設定します。変更するにはブラウザを停止してください。"))
-        self.action_interval_jitter_input = QDoubleSpinBox()
-        self.action_interval_jitter_input.setRange(0.0, 86400.0)
-        policy_layout.addWidget(QLabel(tr("待機上限の方式")), 0, 0)
-        policy_layout.addWidget(self.action_wait_limit_mode_combo, 0, 1)
-        policy_layout.addWidget(QLabel(tr("補助通信の制限方式")), 1, 0)
-        policy_layout.addWidget(self.action_ancillary_rate_limit_mode_combo, 1, 1)
-        policy_layout.addWidget(QLabel(tr("通信ポリシー")), 2, 0)
-        policy_layout.addWidget(self.action_traffic_policy_combo, 2, 1)
-        policy_layout.addWidget(QLabel(tr("ランダム追加待機（秒）")), 3, 0)
-        policy_layout.addWidget(self.action_interval_jitter_input, 3, 1)
-        filter_column.addWidget(additional_policy)
-        filter_column.addStretch()
+        rail_layout = QVBoxLayout(rail)
+        rail_layout.setContentsMargins(16, 12, 16, 12)
+        rail_layout.setSpacing(12)
+        rail_layout.addWidget(self._build_account_group())
+        rail_layout.addWidget(self._build_filter_group())
+        rail_layout.addWidget(self._build_details_group())
+        self.details_summary_label = QLabel()
+        self.details_summary_label.setObjectName("filterSummary")
+        self.details_summary_label.setWordWrap(True)
+        self.details_summary_label.hide()
+        rail_layout.addWidget(self.details_summary_label)
+        rail_layout.addStretch(1)
         self.settings_scroll.setWidget(rail)
-        settings_page_layout.addWidget(self.settings_scroll, 1)
-        settings_page_layout.addWidget(self.collect_button)
-        self.main_tabs.addTab(settings_page, tr("設定"))
+        self.settings_scroll.setMinimumWidth(340)
+        self.settings_scroll.setMaximumWidth(400)
+        body_layout.addWidget(self.settings_scroll)
 
         workspace = QWidget()
         workspace.setObjectName("workspace")
@@ -348,17 +313,9 @@ class XDeleterWindow(QMainWindow):
         workspace_layout.addWidget(self.filter_summary)
         workspace_layout.addWidget(self._build_preview_group(), 1)
         workspace_layout.addWidget(self._build_log_group())
-        action_column.addWidget(self.retry_settings_widget)
-        advanced = QGroupBox(tr("診断・運用設定"))
-        advanced_fields = QVBoxLayout(advanced)
-        advanced_fields.addWidget(QLabel(tr("表示中の投稿URL")))
-        advanced_fields.addWidget(self.target_read_url_input)
-        advanced_fields.addWidget(self.menu_diagnostic_button)
-        advanced_fields.addWidget(self.current_post_action_button)
-        action_column.addWidget(advanced)
-        action_column.addStretch()
-        self.main_tabs.addTab(workspace, tr("投稿一覧"))
-        root_layout.addWidget(self.main_tabs, 1)
+        body_layout.addWidget(workspace, 1)
+
+        self._build_ops_dialog()
         root_layout.addWidget(self._build_progress_bar())
 
         footer_layout = QHBoxLayout()
@@ -394,8 +351,6 @@ class XDeleterWindow(QMainWindow):
         self.delete_button.setObjectName("dangerButton")
         self.delete_button.clicked.connect(self._handle_delete)
 
-        self.delete_button.hide()
-        self.main_tabs.currentChanged.connect(lambda index: self.delete_button.setVisible(index == 1))
         self.preview_toolbar.insertWidget(0, self.select_all_button)
         footer_layout.addWidget(self.status_label, 1)
         footer_layout.addWidget(self.language_combo)
@@ -405,6 +360,9 @@ class XDeleterWindow(QMainWindow):
         root_layout.addLayout(footer_layout)
         self.archive_path_input.textChanged.connect(lambda: self.set_busy(self._busy))
         self.action_enabled_checkbox.toggled.connect(lambda: self.set_busy(self._busy))
+        # The unchecked checkable group box disables its container while the
+        # layout settles; re-enable so set_busy alone controls availability.
+        self.details_container.setEnabled(True)
         self.table_manager = PostTableManager(
             table=self.table,
             select_all_button=self.select_all_button,
@@ -412,8 +370,69 @@ class XDeleterWindow(QMainWindow):
             on_busy=self.set_busy,
         )
 
+    def _build_policy_group(self) -> QGroupBox:
+        additional_policy = QGroupBox(tr("待機・通信方式"))
+        policy_layout = QGridLayout(additional_policy)
+        policy_layout.setVerticalSpacing(4)
+        self.action_wait_limit_mode_combo = QComboBox()
+        for value in ('per-wait', 'total'):
+            self.action_wait_limit_mode_combo.addItem(value, userData=value)
+        self.action_ancillary_rate_limit_mode_combo = QComboBox()
+        for value in ('global', 'isolate-known'):
+            self.action_ancillary_rate_limit_mode_combo.addItem(value, userData=value)
+        self.action_traffic_policy_combo = QComboBox()
+        for value in ('off', 'report', 'enforce'):
+            self.action_traffic_policy_combo.addItem(value, userData=value)
+        for combo in (self.action_traffic_policy_combo, self.action_ancillary_rate_limit_mode_combo):
+            combo.setToolTip(tr("ブラウザ起動前に設定します。変更するにはブラウザを停止してください。"))
+        self.action_interval_jitter_input = QDoubleSpinBox()
+        self.action_interval_jitter_input.setRange(0.0, 86400.0)
+        policy_layout.addWidget(QLabel(tr("待機上限の方式")), 0, 0)
+        policy_layout.addWidget(self.action_wait_limit_mode_combo, 0, 1)
+        policy_layout.addWidget(QLabel(tr("補助通信の制限方式")), 1, 0)
+        policy_layout.addWidget(self.action_ancillary_rate_limit_mode_combo, 1, 1)
+        policy_layout.addWidget(QLabel(tr("通信ポリシー")), 2, 0)
+        policy_layout.addWidget(self.action_traffic_policy_combo, 2, 1)
+        policy_layout.addWidget(QLabel(tr("ランダム追加待機（秒）")), 3, 0)
+        policy_layout.addWidget(self.action_interval_jitter_input, 3, 1)
+        return additional_policy
+
+    def _build_ops_dialog(self) -> None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle(tr("運用設定"))
+        dialog.setModal(False)
+        dialog.setMinimumWidth(580)
+        layout = QVBoxLayout(dialog)
+        layout.addWidget(self.retry_settings_widget)
+        layout.addWidget(self._build_policy_group())
+        profile_group = QGroupBox(tr("プロファイル管理"))
+        profile_layout = QHBoxLayout(profile_group)
+        profile_layout.addWidget(self.add_profile_button)
+        profile_layout.addWidget(self.rename_profile_button)
+        profile_layout.addWidget(self.delete_profile_button)
+        layout.addWidget(profile_group)
+        following = QGroupBox(tr("フォローの整理"))
+        following_layout = QVBoxLayout(following)
+        following_layout.addWidget(self.manage_following_button)
+        following_layout.addWidget(self.export_following_button)
+        layout.addWidget(following)
+        advanced = QGroupBox(tr("診断・運用設定"))
+        advanced_fields = QVBoxLayout(advanced)
+        advanced_fields.addWidget(QLabel(tr("表示中の投稿URL")))
+        advanced_fields.addWidget(self.target_read_url_input)
+        advanced_fields.addWidget(self.menu_diagnostic_button)
+        advanced_fields.addWidget(self.current_post_action_button)
+        layout.addWidget(advanced)
+        layout.addStretch(1)
+        self.ops_dialog = dialog
+
+    def _show_ops_dialog(self) -> None:
+        self.ops_dialog.show()
+        self.ops_dialog.raise_()
+        self.ops_dialog.activateWindow()
+
     def _build_account_group(self) -> QGroupBox:
-        group = QGroupBox(tr("1. 基本設定"))
+        group = QGroupBox(tr("アカウント"))
         layout = QGridLayout(group)
         layout.setHorizontalSpacing(12)
         layout.setVerticalSpacing(4)
@@ -479,25 +498,16 @@ class XDeleterWindow(QMainWindow):
         self.current_post_action_button.setObjectName("dangerButton")
         self.current_post_action_button.clicked.connect(self._handle_current_post_delete)
 
-        layout.addWidget(QLabel(tr("プロファイル選択")), 0, 0, 1, 2)
-        layout.addWidget(self.account_combo, 1, 0, 1, 2)
-        profile_actions = QHBoxLayout()
-        profile_actions.setSpacing(6)
-        for button in (self.add_profile_button, self.rename_profile_button, self.delete_profile_button):
+        for button in (self.add_profile_button, self.rename_profile_button):
             button.setObjectName("secondaryButton")
             button.setStyleSheet("font-size: 11px; padding: 0 5px;")
-            profile_actions.addWidget(button)
         # Deleting a login profile is irreversible; keep it visibly apart from add/rename.
+        self.delete_profile_button.setStyleSheet("font-size: 11px; padding: 0 5px;")
         self.delete_profile_button.setObjectName("quietDangerButton")
-        layout.addLayout(profile_actions, 2, 0, 1, 2)
+        layout.addWidget(QLabel(tr("プロファイル選択")), 0, 0, 1, 2)
+        layout.addWidget(self.account_combo, 1, 0, 1, 2)
         layout.addWidget(QLabel(tr("X アカウントID")), 3, 0, 1, 2)
         layout.addWidget(self.username_input, 4, 0, 1, 2)
-        layout.addWidget(QLabel(tr("収集モード")), 5, 0, 1, 2)
-        layout.addWidget(self.mode_combo, 6, 0, 1, 2)
-        layout.addWidget(QLabel(tr("自動保存間隔(秒)")), 7, 1)
-        layout.addWidget(self.auto_save_interval_input, 8, 1)
-        layout.addWidget(QLabel(tr("取得上限件数")), 7, 0)
-        layout.addWidget(self.max_posts_input, 8, 0)
         layout.addWidget(self.login_account_label, 9, 0, 1, 2)
         layout.addWidget(self.start_button, 10, 0, 1, 2)
         layout.setContentsMargins(0, 12, 0, 0)
@@ -506,7 +516,7 @@ class XDeleterWindow(QMainWindow):
         return group
 
     def _build_filter_group(self) -> QGroupBox:
-        group = QGroupBox(tr("2. 絞り込み条件"))
+        group = QGroupBox(tr("絞り込み"))
         layout = QGridLayout(group)
         layout.setHorizontalSpacing(12)
         layout.setVerticalSpacing(4)
@@ -528,14 +538,6 @@ class XDeleterWindow(QMainWindow):
         )
         self.post_kind_combo.currentIndexChanged.connect(self._update_mode_availability)
 
-        self.reply_only_checkbox = QCheckBox(tr("リプライのみ"))
-
-        self.min_likes_input = QSpinBox()
-        self.min_likes_input.setRange(0, 2_147_483_647)
-
-        self.min_replies_input = QSpinBox()
-        self.min_replies_input.setRange(0, 2_147_483_647)
-
         self.since_date_checkbox = QCheckBox(tr("この日以降"))
         self.since_date_checkbox.toggled.connect(self._toggle_since_date)
 
@@ -554,20 +556,57 @@ class XDeleterWindow(QMainWindow):
         self.until_date_input.setEnabled(False)
         self.until_date_input.setToolTip(tr("指定した日付を含む、それ以前のポストを対象にします。"))
 
+        self.collect_button = QPushButton(tr("ポストを収集＆プレビュー"))
+        self.collect_button.clicked.connect(self._handle_collect)
+        layout.addWidget(QLabel(tr("収集モード")), 0, 0, 1, 2)
+        layout.addWidget(self.mode_combo, 1, 0, 1, 2)
+        layout.addWidget(QLabel(tr("メディア条件")), 2, 0, 1, 2)
+        layout.addWidget(self.media_filter_combo, 3, 0, 1, 2)
+        layout.addWidget(QLabel(tr("対象種別")), 4, 0, 1, 2)
+        layout.addWidget(self.post_kind_combo, 5, 0, 1, 2)
+        layout.addWidget(self.since_date_checkbox, 6, 0)
+        layout.addWidget(self.since_date_input, 6, 1)
+        layout.addWidget(self.until_date_checkbox, 7, 0)
+        layout.addWidget(self.until_date_input, 7, 1)
+        layout.addWidget(QLabel(tr("取得上限件数")), 8, 0, 1, 2)
+        layout.addWidget(self.max_posts_input, 9, 0, 1, 2)
+        layout.addWidget(self.collect_button, 10, 0, 1, 2)
+        layout.setContentsMargins(0, 12, 0, 0)
+        layout.setColumnStretch(0, 1)
+        layout.setColumnStretch(1, 1)
+        return group
+
+    def _build_details_group(self) -> QGroupBox:
+        group = QGroupBox(tr("詳細条件"))
+        group.setCheckable(True)
+        group.setChecked(False)
+        outer = QVBoxLayout(group)
+        outer.setContentsMargins(0, 0, 0, 0)
+        self.details_container = QWidget()
+        layout = QGridLayout(self.details_container)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setHorizontalSpacing(12)
+        layout.setVerticalSpacing(4)
+
+        self.reply_only_checkbox = QCheckBox(tr("リプライのみ"))
+        self.min_likes_input = QSpinBox()
+        self.min_likes_input.setRange(0, 2_147_483_647)
+        self.min_replies_input = QSpinBox()
+        self.min_replies_input.setRange(0, 2_147_483_647)
         self.include_keywords_input = QLineEdit()
         self.include_keywords_input.setPlaceholderText(tr("例: 懸賞, キャンペーン"))
         self.include_keywords_input.setToolTip(
             tr("いずれかのキーワードを本文に含むポストだけを対象にします。カンマ区切りで複数指定できます。")
         )
-
         self.exclude_keywords_input = QLineEdit()
         self.exclude_keywords_input.setPlaceholderText(tr("例: 固定, 大事"))
         self.exclude_keywords_input.setToolTip(
             tr("いずれかのキーワードを本文に含むポストを対象から外します。カンマ区切りで複数指定できます。")
         )
-
-        self.collect_button = QPushButton(tr("ポストを収集＆プレビュー"))
-        self.collect_button.clicked.connect(self._handle_collect)
+        self.archive_path_input = QLineEdit()
+        self.archive_path_input.setPlaceholderText(tr("空欄ならXから収集"))
+        self.output_dir_input = QLineEdit()
+        self.output_dir_input.setPlaceholderText(tr("空欄ならホームフォルダ"))
         self.import_archive_button = QPushButton(tr("X のアーカイブから読み込み"))
         self.import_archive_button.setObjectName("secondaryButton")
         self.import_archive_button.setToolTip(
@@ -579,32 +618,69 @@ class XDeleterWindow(QMainWindow):
             tr("アーカイブから読み込むとき、最も古いポストから取得上限件数までを古い順に並べます。")
         )
 
-        layout.addWidget(QLabel(tr("メディア条件")), 0, 0, 1, 2)
-        layout.addWidget(self.media_filter_combo, 1, 0, 1, 2)
-        layout.addWidget(QLabel(tr("対象種別")), 2, 0, 1, 2)
-        layout.addWidget(self.post_kind_combo, 3, 0, 1, 2)
-        layout.addWidget(self.reply_only_checkbox, 4, 0, 1, 2)
-        layout.addWidget(QLabel(tr("最低いいね数")), 5, 0)
-        layout.addWidget(QLabel(tr("最低返信数")), 5, 1)
-        layout.addWidget(self.min_likes_input, 6, 0)
-        layout.addWidget(self.min_replies_input, 6, 1)
-        layout.addWidget(self.since_date_checkbox, 7, 0)
-        layout.addWidget(self.since_date_input, 7, 1)
-        layout.addWidget(self.until_date_checkbox, 8, 0)
-        layout.addWidget(self.until_date_input, 8, 1)
-        layout.addWidget(QLabel(tr("含むキーワード")), 9, 0, 1, 2)
-        layout.addWidget(self.include_keywords_input, 10, 0, 1, 2)
-        layout.addWidget(QLabel(tr("除外キーワード")), 11, 0, 1, 2)
-        layout.addWidget(self.exclude_keywords_input, 12, 0, 1, 2)
-        layout.addWidget(self.import_archive_button, 14, 0, 1, 2)
-        layout.addWidget(self.archive_oldest_first_checkbox, 15, 0, 1, 2)
-        layout.setContentsMargins(0, 12, 0, 0)
+        layout.addWidget(self.reply_only_checkbox, 0, 0, 1, 2)
+        layout.addWidget(QLabel(tr("最低いいね数")), 1, 0)
+        layout.addWidget(QLabel(tr("最低返信数")), 1, 1)
+        layout.addWidget(self.min_likes_input, 2, 0)
+        layout.addWidget(self.min_replies_input, 2, 1)
+        layout.addWidget(QLabel(tr("含むキーワード")), 3, 0, 1, 2)
+        layout.addWidget(self.include_keywords_input, 4, 0, 1, 2)
+        layout.addWidget(QLabel(tr("除外キーワード")), 5, 0, 1, 2)
+        layout.addWidget(self.exclude_keywords_input, 6, 0, 1, 2)
+        layout.addWidget(QLabel(tr("アーカイブのパス")), 7, 0, 1, 2)
+        layout.addWidget(self.archive_path_input, 8, 0, 1, 2)
+        layout.addWidget(self.import_archive_button, 9, 0, 1, 2)
+        layout.addWidget(self.archive_oldest_first_checkbox, 10, 0, 1, 2)
+        layout.addWidget(QLabel(tr("一覧の保存先フォルダ")), 11, 0, 1, 2)
+        layout.addWidget(self.output_dir_input, 12, 0, 1, 2)
+        layout.addWidget(QLabel(tr("自動保存間隔(秒)")), 13, 0, 1, 2)
+
+        layout.addWidget(self.auto_save_interval_input, 14, 0, 1, 2)
         layout.setColumnStretch(0, 1)
         layout.setColumnStretch(1, 1)
+        self.details_container.hide()
+        outer.addWidget(self.details_container)
+        group.toggled.connect(self._toggle_details)
+        for signal in (
+            self.reply_only_checkbox.toggled,
+            self.archive_oldest_first_checkbox.toggled,
+        ):
+            signal.connect(self._update_details_summary)
+        self.min_likes_input.valueChanged.connect(self._update_details_summary)
+        self.min_replies_input.valueChanged.connect(self._update_details_summary)
+        self.include_keywords_input.textChanged.connect(self._update_details_summary)
+        self.exclude_keywords_input.textChanged.connect(self._update_details_summary)
+        self.archive_path_input.textChanged.connect(self._update_details_summary)
         return group
 
+    def _toggle_details(self, checked: bool) -> None:
+        self.details_container.setVisible(checked)
+        # An unchecked checkable group box disables its children; keep them
+        # enabled so set_busy stays the single source of truth for availability.
+        self.details_container.setEnabled(True)
+
+    def _update_details_summary(self) -> None:
+        count = 0
+        if self.reply_only_checkbox.isChecked():
+            count += 1
+        if self.min_likes_input.value() > 0:
+            count += 1
+        if self.min_replies_input.value() > 0:
+            count += 1
+        if self.include_keywords_input.text().strip():
+            count += 1
+        if self.exclude_keywords_input.text().strip():
+            count += 1
+        if self.archive_path_input.text().strip():
+            count += 1
+        if count:
+            self.details_summary_label.setText(tr("詳細条件が {count} 件設定されています", count=count))
+            self.details_summary_label.show()
+        else:
+            self.details_summary_label.hide()
+
     def _build_preview_group(self) -> QGroupBox:
-        group = QGroupBox(tr("3. プレビューと削除/解除実行"))
+        group = QGroupBox(tr("プレビューと削除/解除実行"))
         layout = QVBoxLayout(group)
 
         layout.setContentsMargins(0, 12, 0, 0)
@@ -615,10 +691,8 @@ class XDeleterWindow(QMainWindow):
         action_settings_layout = QVBoxLayout(self.retry_settings_widget)
         self.action_enabled_checkbox = QCheckBox(tr("削除/解除を有効にする"))
         self.action_enabled_checkbox.setChecked(True)
-        action_settings_layout.addWidget(self.action_enabled_checkbox)
         action_options_layout = QHBoxLayout()
-        self.preview_toolbar = QHBoxLayout()
-        layout.addLayout(self.preview_toolbar)
+        action_options_layout.addWidget(self.action_enabled_checkbox)
         action_options_layout.addWidget(QLabel(tr("削除/解除間隔")))
 
         self.delete_interval_input = QDoubleSpinBox()
@@ -631,13 +705,15 @@ class XDeleterWindow(QMainWindow):
         action_options_layout.addWidget(self.delete_interval_input)
 
         action_options_layout.addStretch(1)
+        self.preview_toolbar = QHBoxLayout()
+        layout.addLayout(self.preview_toolbar)
+        layout.addLayout(action_options_layout)
         self.export_posts_button = QPushButton(tr("チェック項目を保存"))
         self.export_posts_button.setObjectName("secondaryButton")
         self.export_posts_button.setToolTip(tr("チェックした項目の本文や URL を CSV（または JSON）で保存します。削除前の控えに使えます。"))
         self.export_posts_button.clicked.connect(self._handle_export_posts)
         self.preview_toolbar.addStretch(1)
         self.preview_toolbar.addWidget(self.export_posts_button)
-        action_settings_layout.insertLayout(0, action_options_layout)
         retry_grid = QGridLayout()
         self.action_max_retries_input = QSpinBox()
         self.action_max_retries_input.setRange(0, 20)
@@ -776,9 +852,7 @@ class XDeleterWindow(QMainWindow):
         return group
 
     def _show_action_settings(self) -> None:
-        self.main_tabs.setCurrentIndex(0)
-        self.settings_scroll.ensureWidgetVisible(self.delete_interval_input)
-        self.delete_interval_input.setFocus()
+        self._show_ops_dialog()
 
     def _build_log_group(self) -> QGroupBox:
         group = QGroupBox(tr("ログ"))
@@ -900,7 +974,7 @@ class XDeleterWindow(QMainWindow):
             tr(
                 "プロファイルは端末内のログイン状態と設定、X アカウントIDは整理する対象です。\n\n"
                 "1. ブラウザを起動してログインします。\n"
-                "2. 条件を指定し、設定画面の下部の収集ボタンを押します。\n"
+                "2. 条件を指定し、左側の条件欄の収集ボタンを押します。\n"
                 "3. 行を選んで本文を確認し、チェックで処理対象を決めます。初期状態では全件が対象です。\n"
                 "4. 必要ならチェック項目を保存し、削除/解除の確認へ進みます。\n\n"
                 "停止後は成功・失敗・未処理の件数を確認してください。結果不明の操作は自動再試行しません。\n\n"
@@ -1264,7 +1338,6 @@ class XDeleterWindow(QMainWindow):
         self._update_filter_summary()
         self._save_settings()
         self.set_busy(False)
-        self.main_tabs.setCurrentIndex(0)
         self.recipe_source_label.setText(tr(
             "読み込み元: {name}。GUIではブラウザを表示し、削除前に必ず確認します。一覧の保存は手動です。相対日付は読込日で確定します。",
             name=recipe.path.name,
@@ -1353,6 +1426,7 @@ class XDeleterWindow(QMainWindow):
         self.until_date_checkbox.setChecked(settings.until_date_enabled)
         self._toggle_since_date(self.since_date_checkbox.isChecked())
         self._toggle_until_date(self.until_date_checkbox.isChecked())
+        self._update_details_summary()
 
     def _save_settings(self) -> None:
         """現在のアカウント設定を保存"""
@@ -1675,7 +1749,6 @@ class XDeleterWindow(QMainWindow):
         """Display posts in the table."""
         logger.info("GUI: Received %s posts to display.", len(posts))
         self.table_manager.display_posts(posts)
-        self.main_tabs.setCurrentIndex(1)
         if not posts:
             self._set_empty_copy(
                 tr("条件に一致するポストはありませんでした"),
