@@ -5,6 +5,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Fix profile-mode collection returning zero posts when the timeline was slow to render:
+  the first articles now get the same loading deadline as search mode instead of exhausting
+  the scroll budget in under a second. The GUI and CLI share this collection path.
+
 - A finished unlike/unrepost batch forgets its success receipts, so a later batch acts on posts
   you liked or reposted again. Explicit resumes skip interrupted successes; new batches clear
   old unlike/unrepost successes. Recovering from a changed view now reports completion correctly.

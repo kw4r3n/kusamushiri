@@ -36,6 +36,92 @@ def test_explicit_empty_result_stops_immediately(monkeypatch):
     assert not core.collection_limit_reached
 
 
+def test_empty_profile_waits_until_deadline_without_scrolling(monkeypatch):
+    core = XDeleterCore()
+    clock = [100.0]
+    monkeypatch.setattr("kusamushiri.core.time.monotonic", lambda: clock[0])
+    monkeypatch.setattr(core._cancel_event, "wait", lambda timeout: None)
+    monkeypatch.setattr(core, "_wait_for_timeline_update", lambda *args: None)
+    evaluations = []
+
+    class Page:
+        def evaluate(self, script):
+            evaluations.append(script)
+            return 100
+
+    profile_request = replace(request(), search_mode="profile")
+    state = EmptySearchState(0, 100, False)
+    # More polls than MAX_SCROLL_ATTEMPTS: a still-loading timeline must not
+    # consume the scroll budget (regression: 50 attempts passed in <1s).
+    for _ in range(60):
+        core._check_empty_search_early_exit(Page(), profile_request, state)
+    assert not state.should_stop
+    assert state.scroll_attempts == 0
+    assert evaluations == []
+    clock[0] += 15
+    core._check_empty_search_early_exit(Page(), profile_request, state)
+    assert not state.should_stop
+    assert state.scroll_attempts == 1
+    assert sum("scrollBy" in script for script in evaluations) == 1
+
+
+def test_profile_collection_waits_for_late_timeline(monkeypatch):
+    post = PostRecord("1", "https://x.com/user/status/1", "user", "text", "2026-01-01", 0, 0, False, False, False)
+
+    class Page:
+        polls = 0
+
+        def locator(self, selector):
+            return self
+
+        def all(self):
+            self.polls += 1
+            return [] if self.polls <= 60 else [post]
+
+        def evaluate(self, script):
+            return 100
+
+    core = XDeleterCore()
+    core._browser.page = Page()
+    monkeypatch.setattr(core, "_navigate_to_collection_target", lambda *args: None)
+    monkeypatch.setattr(core, "_wait_for_timeline_update", lambda *args: None)
+    monkeypatch.setattr(core._cancel_event, "wait", lambda timeout: None)
+    monkeypatch.setattr(core, "_get_article_permalink", lambda article: article.url)
+    monkeypatch.setattr(core, "_get_article_date_text", lambda article: article.date)
+    monkeypatch.setattr(core, "_process_known_article_url", lambda **kwargs: kwargs["article"])
+    profile_request = replace(request(), search_mode="profile", max_posts=1)
+    assert core.search_and_collect_posts(profile_request) == [post]
+
+
+def test_empty_profile_stops_after_deadline_and_scroll_attempts(monkeypatch):
+    class Page:
+        polls = 0
+
+        def locator(self, selector):
+            return self
+
+        def all(self):
+            self.polls += 1
+            return []
+
+        def evaluate(self, script):
+            return 100
+
+    page = Page()
+    core = XDeleterCore()
+    core._browser.page = page
+    clock = [100.0]
+    monkeypatch.setattr("kusamushiri.core.time.monotonic", lambda: clock[0])
+    monkeypatch.setattr(core, "_navigate_to_collection_target", lambda *args: None)
+    monkeypatch.setattr(core, "_wait_for_timeline_update", lambda *args: None)
+    # Each loading wait advances the clock, so the deadline passes after 15 polls.
+    monkeypatch.setattr(core._cancel_event, "wait", lambda timeout: clock.__setitem__(0, clock[0] + 1))
+    profile_request = replace(request(), search_mode="profile")
+    assert core.search_and_collect_posts(profile_request) == []
+    assert not core.collection_limit_reached
+    assert page.polls < 100  # loading polls + bounded scroll attempts, no hang
+
+
 def test_transient_parse_failure_remains_retryable(monkeypatch):
     core = XDeleterCore()
     monkeypatch.setattr(core, "_get_article_permalink", lambda article: "https://x.com/user/status/1")

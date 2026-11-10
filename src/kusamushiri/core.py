@@ -659,9 +659,9 @@ class XDeleterCore:
             state.scroll_attempts,
             MAX_SCROLL_ATTEMPTS,
         )
+        if state.started_at is None:
+            state.started_at = time.monotonic()
         if request.search_mode == "search":
-            if state.started_at is None:
-                state.started_at = time.monotonic()
             if self._should_stop_empty_search_collection(
                 request, 0, self._safe_get_page_text(page),
             ):
@@ -674,9 +674,19 @@ class XDeleterCore:
                 # Do not scroll past results while the initial search is still loading.
                 self._cancel_event.wait(0.25)
             return state
+        # Profile timelines render asynchronously, just like search results.
+        # Give the first articles the same loading deadline instead of burning
+        # the scroll budget on a still-loading page: _wait_for_timeline_update
+        # returns as soon as the page grows past the height captured before the
+        # timeline rendered, so 50 attempts could pass in under a second and a
+        # collection with matching posts came back empty.
+        if time.monotonic() - state.started_at < EMPTY_SEARCH_TIMEOUT_SECONDS:
+            self._cancel_event.wait(0.25)
+            return state
         state.scroll_attempts += 1
         page.evaluate(f"window.scrollBy(0, {EMPTY_STATE_SCROLL_Y});")
         self._wait_for_timeline_update(page, state.previous_scroll_height)
+        state.previous_scroll_height = self._safe_get_scroll_height(page, state.previous_scroll_height)
         return state
 
     def _process_articles(
@@ -886,6 +896,7 @@ class XDeleterCore:
                     previous_scroll_height = empty_state.previous_scroll_height
                     page.evaluate(f"window.scrollBy(0, {EMPTY_STATE_SCROLL_Y});")
                     self._wait_for_timeline_update(page, previous_scroll_height)
+                    empty_state.previous_scroll_height = self._safe_get_scroll_height(page, previous_scroll_height)
                     continue
                 empty_state = self._check_empty_search_early_exit(page, request, empty_state)
                 if empty_state.should_stop:
