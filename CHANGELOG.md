@@ -5,6 +5,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Fix two stale test-suite failures: the unfollow DOM test now expects the
+  observed-receipt policy (DOM-only completion is uncertain), and the suite
+  trusts the developer's global mise config so the node init-script test
+  also passes under the documented XDG isolation.
+
 - Add an older-than-days period filter to the GUI, counted exactly like the CLI
   `--older-than` (the day that many days ago is excluded) and stored per profile.
   Recipes with `older_than_days` now load as that relative filter, resolved on the

@@ -94,10 +94,17 @@ def test_unfollow_clicks_profile_button_and_confirms(profile_page: Page) -> None
     assert _log(profile_page) == ["header", "confirm"]
 
 
-def test_unfollow_without_request_falls_back_to_dom_state(profile_page: Page) -> None:
+def test_unfollow_dom_completion_without_a_request_is_uncertain(profile_page: Page) -> None:
     _serve(profile_page, _profile(send_request=False))
 
-    assert unfollow_account(profile_page, "target") == (True, None)
+    success, error = unfollow_account(profile_page, "target")
+
+    # The clicks happened and the DOM flipped to Follow, but without an
+    # observed destroy receipt the outcome stays uncertain (same policy as
+    # the post actions; see test_actions_dom.py).
+    assert success is False
+    assert error is not None and "friendships/destroy.json" in error and "結果不明" in error
+    assert _log(profile_page) == ["header", "confirm"]
 
 
 @pytest.mark.parametrize(
