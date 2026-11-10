@@ -2,7 +2,7 @@ import json
 import threading
 from collections import Counter
 from dataclasses import replace
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from PySide6.QtCore import QDate, Qt, QTimer, Signal
@@ -556,6 +556,17 @@ class XDeleterWindow(QMainWindow):
         self.until_date_input.setEnabled(False)
         self.until_date_input.setToolTip(tr("指定した日付を含む、それ以前のポストを対象にします。"))
 
+        self.older_than_checkbox = QCheckBox(tr("今から"))
+        self.older_than_checkbox.setToolTip(
+            tr("指定した日数より前のポストだけを対象にします。CLIの --older-than と同じ数え方で、ちょうど指定日数前の日は含みません。")
+        )
+        self.older_than_checkbox.toggled.connect(self._toggle_older_than)
+
+        self.older_than_days_input = QSpinBox()
+        self.older_than_days_input.setRange(0, 36500)
+        self.older_than_days_input.setValue(30)
+        self.older_than_days_input.setEnabled(False)
+
         self.collect_button = QPushButton(tr("ポストを収集＆プレビュー"))
         self.collect_button.clicked.connect(self._handle_collect)
         layout.addWidget(QLabel(tr("収集モード")), 0, 0, 1, 2)
@@ -568,9 +579,15 @@ class XDeleterWindow(QMainWindow):
         layout.addWidget(self.since_date_input, 6, 1)
         layout.addWidget(self.until_date_checkbox, 7, 0)
         layout.addWidget(self.until_date_input, 7, 1)
-        layout.addWidget(QLabel(tr("取得上限件数")), 8, 0, 1, 2)
-        layout.addWidget(self.max_posts_input, 9, 0, 1, 2)
-        layout.addWidget(self.collect_button, 10, 0, 1, 2)
+        layout.addWidget(self.older_than_checkbox, 8, 0)
+        relative_layout = QHBoxLayout()
+        relative_layout.addWidget(self.older_than_days_input)
+        relative_layout.addWidget(QLabel(tr("日より前のみ")))
+        relative_layout.addStretch(1)
+        layout.addLayout(relative_layout, 8, 1)
+        layout.addWidget(QLabel(tr("取得上限件数")), 9, 0, 1, 2)
+        layout.addWidget(self.max_posts_input, 10, 0, 1, 2)
+        layout.addWidget(self.collect_button, 11, 0, 1, 2)
         layout.setContentsMargins(0, 12, 0, 0)
         layout.setColumnStretch(0, 1)
         layout.setColumnStretch(1, 1)
@@ -1277,9 +1294,11 @@ class XDeleterWindow(QMainWindow):
             min_likes=options.min_likes,
             min_replies=options.min_replies,
             since_date=request.since_date.isoformat() if request.since_date else "",
-            until_date=request.until_date.isoformat() if request.until_date else "",
+            until_date=(options.until.isoformat() if options.until else "") if options.older_than_days is not None else (request.until_date.isoformat() if request.until_date else ""),
             since_date_enabled=request.since_date is not None,
-            until_date_enabled=request.until_date is not None,
+            until_date_enabled=(options.until is not None) if options.older_than_days is not None else (request.until_date is not None),
+            older_than_enabled=options.older_than_days is not None,
+            older_than_days=options.older_than_days or 0,
             include_keywords=", ".join(options.include),
             exclude_keywords=", ".join(options.exclude),
             archive_oldest_first=options.oldest_first,
@@ -1339,7 +1358,7 @@ class XDeleterWindow(QMainWindow):
         self._save_settings()
         self.set_busy(False)
         self.recipe_source_label.setText(tr(
-            "読み込み元: {name}。GUIではブラウザを表示し、削除前に必ず確認します。一覧の保存は手動です。相対日付は読込日で確定します。",
+            "読み込み元: {name}。GUIではブラウザを表示し、削除前に必ず確認します。一覧の保存は手動です。相対日付は収集日で確定します。",
             name=recipe.path.name,
         ))
         self.recipe_source_label.setToolTip(str(recipe.path))
@@ -1424,6 +1443,9 @@ class XDeleterWindow(QMainWindow):
 
         self.since_date_checkbox.setChecked(settings.since_date_enabled)
         self.until_date_checkbox.setChecked(settings.until_date_enabled)
+        self.older_than_days_input.setValue(settings.older_than_days)
+        self.older_than_checkbox.setChecked(settings.older_than_enabled)
+        self._toggle_older_than(self.older_than_checkbox.isChecked())
         self._toggle_since_date(self.since_date_checkbox.isChecked())
         self._toggle_until_date(self.until_date_checkbox.isChecked())
         self._update_details_summary()
@@ -1466,6 +1488,8 @@ class XDeleterWindow(QMainWindow):
                 until_date=self.until_date_input.date().toString(Qt.DateFormat.ISODate),
                 since_date_enabled=self.since_date_checkbox.isChecked(),
                 until_date_enabled=self.until_date_checkbox.isChecked(),
+                older_than_days=self.older_than_days_input.value(),
+                older_than_enabled=self.older_than_checkbox.isChecked(),
                 include_keywords=self.include_keywords_input.text().strip(),
                 exclude_keywords=self.exclude_keywords_input.text().strip(),
                 archive_oldest_first=self.archive_oldest_first_checkbox.isChecked(),
@@ -1579,6 +1603,9 @@ class XDeleterWindow(QMainWindow):
             tr("いいねはプロフィールのいいね欄から収集するため、収集モードは使いません。") if likes_selected else ""
         )
 
+    def _toggle_older_than(self, checked: bool) -> None:
+        self.older_than_days_input.setEnabled(checked)
+
     def _toggle_since_date(self, checked: bool) -> None:
         self.since_date_input.setEnabled(checked)
 
@@ -1613,19 +1640,6 @@ class XDeleterWindow(QMainWindow):
 
     def _build_collect_request(self) -> CollectRequest | None:
         """Read the filter inputs; show a warning and return None when they are invalid."""
-        if self.since_date_checkbox.isChecked() and self.until_date_checkbox.isChecked():
-            since_qdate = self.since_date_input.date()
-            until_qdate = self.until_date_input.date()
-            since = date(since_qdate.year(), since_qdate.month(), since_qdate.day())
-            until = date(until_qdate.year(), until_qdate.month(), until_qdate.day())
-            if since > until:
-                QMessageBox.warning(
-                    self,
-                    tr("日付範囲エラー"),
-                    tr("開始日が終了日より後の日付になっています。\n正しい範囲を指定してください。"),
-                )
-                return None
-
         since_date: date | None = None
         if self.since_date_checkbox.isChecked():
             selected_date = self.since_date_input.date()
@@ -1635,6 +1649,21 @@ class XDeleterWindow(QMainWindow):
         if self.until_date_checkbox.isChecked():
             selected_date = self.until_date_input.date()
             until_date = date(selected_date.year(), selected_date.month(), selected_date.day())
+
+        if self.older_than_checkbox.isChecked():
+            # Same counting as the CLI --older-than and recipe older_than_days:
+            # the day exactly N days ago is excluded, so the inclusive until
+            # bound is today - (N + 1); an explicit until wins when earlier.
+            cutoff = date.today() - timedelta(days=self.older_than_days_input.value() + 1)
+            until_date = cutoff if until_date is None else min(until_date, cutoff)
+
+        if since_date is not None and until_date is not None and since_date > until_date:
+            QMessageBox.warning(
+                self,
+                tr("日付範囲エラー"),
+                tr("開始日が終了日より後の日付になっています。\n正しい範囲を指定してください。"),
+            )
+            return None
 
         request = CollectRequest(
             username=self.username_input.text().strip(),

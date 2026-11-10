@@ -5,6 +5,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Add an older-than-days period filter to the GUI, counted exactly like the CLI
+  `--older-than` (the day that many days ago is excluded) and stored per profile.
+  Recipes with `older_than_days` now load as that relative filter, resolved on the
+  day of collection, instead of a date baked in at load time.
+
 - Simplify the GUI into a single screen: account and filter controls live in a left rail
   beside the post list, keyword, threshold and archive options collapse under Advanced
   filters with a summary of what is set, and waits/retries, traffic modes, diagnostics,

@@ -1543,9 +1543,52 @@ def test_remove_successful_rows_restores_updates_when_removal_fails(window, monk
     assert window.table.updatesEnabled() is True
 
 
-def test_recipe_import_preserves_settings_and_requires_manual_execution(window, tmp_path, monkeypatch):
+def test_gui_older_than_days_uses_the_cli_cutoff(window) -> None:
     from datetime import date, timedelta
 
+    window.username_input.setText("alice")
+    window.older_than_checkbox.setChecked(True)
+    window.older_than_days_input.setValue(30)
+    request = window._build_collect_request()
+    assert request is not None
+    # CLI --older-than 30 excludes the day exactly 30 days ago.
+    assert request.until_date == date.today() - timedelta(days=31)
+
+
+def test_gui_older_than_combines_with_absolute_until_as_the_earlier_bound(window) -> None:
+    from datetime import date, timedelta
+
+    window.username_input.setText("alice")
+    window.older_than_checkbox.setChecked(True)
+    window.older_than_days_input.setValue(30)
+    window.until_date_checkbox.setChecked(True)
+    from PySide6.QtCore import QDate
+
+    recent = date.today() - timedelta(days=10)
+    window.until_date_input.setDate(QDate(recent.year, recent.month, recent.day))
+    request = window._build_collect_request()
+    assert request is not None
+    # The relative cutoff (today - 31) is earlier here, so it wins.
+    assert request.until_date == date.today() - timedelta(days=31)
+    older = date.today() - timedelta(days=60)
+    window.until_date_input.setDate(QDate(older.year, older.month, older.day))
+    request = window._build_collect_request()
+    assert request is not None
+    assert request.until_date == older
+
+
+def test_gui_older_than_survives_a_settings_round_trip(window) -> None:
+    window.older_than_checkbox.setChecked(True)
+    window.older_than_days_input.setValue(45)
+    window._save_settings()
+    window.older_than_checkbox.setChecked(False)
+    window.older_than_days_input.setValue(7)
+    window._load_account_settings(window._current_account)
+    assert window.older_than_checkbox.isChecked()
+    assert window.older_than_days_input.value() == 45
+
+
+def test_recipe_import_preserves_settings_and_requires_manual_execution(window, tmp_path, monkeypatch):
     from kusamushiri.recipe import load_recipe
 
     path = tmp_path / "kusamushiri-work.toml"
@@ -1595,7 +1638,9 @@ rate_limit_interval = 8
     assert window._action_retry_policy() == recipe.delete.retry_policy
     assert window.delete_interval_input.value() == 4.125
     assert window.output_dir_input.text() == str(tmp_path / "exports")
-    assert window.until_date_input.date().toPython() == date.today() - timedelta(days=31)
+    assert window.older_than_checkbox.isChecked()
+    assert window.older_than_days_input.value() == 30
+    assert not window.until_date_checkbox.isChecked()
     window._load_account_settings("work")
     assert window._action_retry_policy() == recipe.delete.retry_policy
     assert window.output_dir_input.text() == str(tmp_path / "exports")

@@ -51,6 +51,8 @@ class AccountSettings:
     until_date: str | None = None
     since_date_enabled: bool = False
     until_date_enabled: bool = False
+    older_than_days: int = 0
+    older_than_enabled: bool = False
     auto_save_interval_seconds: int = 60
     include_keywords: str = ""
     exclude_keywords: str = ""
@@ -108,6 +110,8 @@ class AccountSettingsManager:
         self._settings.setValue(f"{prefix}output_dir", settings.output_dir)
         self._settings.setValue(f"{prefix}since_date_enabled", settings.since_date_enabled)
         self._settings.setValue(f"{prefix}until_date_enabled", settings.until_date_enabled)
+        self._settings.setValue(f"{prefix}older_than_days", settings.older_than_days)
+        self._settings.setValue(f"{prefix}older_than_enabled", settings.older_than_enabled)
         self._settings.setValue(f"{prefix}auto_save_interval_seconds", settings.auto_save_interval_seconds)
         self._settings.setValue(f"{prefix}include_keywords", settings.include_keywords)
         self._settings.setValue(f"{prefix}exclude_keywords", settings.exclude_keywords)
@@ -156,6 +160,8 @@ class AccountSettingsManager:
             until_date=self._account_setting_value(prefix, "until_date", None, str),
             since_date_enabled=self._account_setting_value(prefix, "since_date_enabled", False, bool),
             until_date_enabled=self._account_setting_value(prefix, "until_date_enabled", False, bool),
+            older_than_days=self._account_setting_value(prefix, "older_than_days", 0, int),
+            older_than_enabled=self._account_setting_value(prefix, "older_than_enabled", False, bool),
             auto_save_interval_seconds=self._account_setting_value(prefix, "auto_save_interval_seconds", 60, int),
             include_keywords=self._account_setting_value(prefix, "include_keywords", "", str),
             exclude_keywords=self._account_setting_value(prefix, "exclude_keywords", "", str),
