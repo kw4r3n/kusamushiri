@@ -199,8 +199,9 @@ def _wait_for_mutation_result(
     if page is not None:
         # A DOM update can precede Playwright's requestfinished dispatch. Drain it
         # within the same completion budget, never wait indefinitely in response().
+        # X can also remove the article before it dispatches the mutation itself.
         page.wait_for_timeout(0)
-        while any(isinstance(request, Request) and request.timing.get("responseEnd", -1) < 0 for request in requests):
+        while not requests or any(isinstance(request, Request) and request.timing.get("responseEnd", -1) < 0 for request in requests):
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 break

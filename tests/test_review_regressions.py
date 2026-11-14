@@ -85,9 +85,38 @@ def test_exclusions_require_readable_complete_text(monkeypatch, text, collapsed,
 
 
 @pytest.mark.parametrize("mutation", ["DeleteTweet", "DeleteRetweet", "UnfavoriteTweet"])
-def test_production_dom_completion_requires_an_observed_mutation(mutation):
+def test_production_dom_completion_requires_an_observed_mutation(mutation, monkeypatch):
+    clock = [0.0]
+    monkeypatch.setattr(actions.time, "monotonic", lambda: clock[0])
     page = Mock(url="https://www.x.com/user/status/1")
+    page.wait_for_timeout.side_effect = lambda ms: clock.__setitem__(0, clock[0] + ms / 1000)
     assert actions._wait_for_mutation_result([], mutation, lambda: None, page=page) is not None
+    assert clock[0] == pytest.approx(10)
+
+
+def test_dom_completion_waits_for_a_mutation_dispatched_after_it(monkeypatch):
+    clock = [0.0]
+    monkeypatch.setattr(actions.time, "monotonic", lambda: clock[0])
+    request = Mock(spec=actions.Request)
+    request.url = "https://x.com/i/api/graphql/fixture/DeleteTweet"
+    request.method = "POST"
+    request.timing = {"responseEnd": 1}
+    response = Mock(status=200)
+    response.request = request
+    response.json.return_value = {}
+    request.response.return_value = response
+    request.failure = None
+    requests = []
+
+    def dispatch(milliseconds):
+        clock[0] += milliseconds / 1000
+        if clock[0] >= 0.3 and not requests:
+            requests.append(request)
+
+    page = Mock(url="https://x.com/tester/status/1")
+    page.wait_for_timeout.side_effect = dispatch
+    assert actions._wait_for_mutation_result(requests, actions.DELETE_POST_MUTATION, lambda: None, page=page) is None
+    assert clock[0] < 1
 
 
 def test_cli_batches_deleted_store_writes_even_when_stopped(fake_core, tmp_path, monkeypatch):  # noqa: F811
