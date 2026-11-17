@@ -1,3 +1,5 @@
+import os
+import shutil
 import subprocess
 import sys
 import time
@@ -86,6 +88,7 @@ def _headed_user_agent(playwright: Playwright) -> str:
 class BrowserManager:
     def __init__(self, *, headless: bool = False) -> None:
         self.headless = headless
+        self._xvfb: subprocess.Popen[bytes] | None = None
         self.playwright: Playwright | None = None
         self.browser: Browser | None = None
         self.context: BrowserContext | None = None
@@ -257,13 +260,58 @@ class BrowserManager:
             raise
 
     def _launch_action_context(self, playwright: Playwright, profile_dir: Path) -> BrowserContext:
-        if self.block_service_workers:
-            return self._launch_context(playwright, profile_dir, headless=self.headless, service_workers="block")
+        workers: Literal["allow", "block"] | None = "block" if self.block_service_workers else None
+        if self.headless and (display := self._start_virtual_display()) is not None:
+            # A headed browser on an invisible X display avoids the headless fingerprint.
+            env: dict[str, str | float | bool] = {k: v for k, v in os.environ.items() if k != "WAYLAND_DISPLAY"}
+            env["DISPLAY"] = display
+            return self._launch_context(playwright, profile_dir, headless=False, service_workers=workers, env=env)
+        if workers:
+            return self._launch_context(playwright, profile_dir, headless=self.headless, service_workers=workers)
         return self._launch_context(playwright, profile_dir, headless=self.headless)
+
+    def _start_virtual_display(self) -> str | None:
+        if self._xvfb is not None and self._xvfb.poll() is None:
+            return self._xvfb_display
+        if not sys.platform.startswith("linux") or shutil.which("Xvfb") is None:
+            logger.info("Xvfb not found; using headless Chromium.")
+            return None
+        read_fd, write_fd = os.pipe()
+        try:
+            self._xvfb = subprocess.Popen(
+                ["Xvfb", "-displayfd", str(write_fd), "-screen", "0", f"{VIEWPORT_WIDTH}x{VIEWPORT_HEIGHT + 200}x24",
+                 "-nolisten", "tcp"],
+                pass_fds=(write_fd,), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+            os.close(write_fd)
+            write_fd = -1
+            with os.fdopen(read_fd, "rb") as pipe:
+                read_fd = -1
+                number = pipe.readline().strip().decode()
+        finally:
+            for fd in (read_fd, write_fd):
+                if fd >= 0:
+                    os.close(fd)
+        if not number.isdigit():
+            self._stop_virtual_display()
+            raise RuntimeError("Xvfb failed to start.")
+        self._xvfb_display = f":{number}"
+        logger.info("Started virtual display %s.", self._xvfb_display)
+        return self._xvfb_display
+
+    def _stop_virtual_display(self) -> None:
+        if self._xvfb is not None:
+            self._xvfb.terminate()
+            try:
+                self._xvfb.wait(5)
+            except subprocess.TimeoutExpired:
+                self._xvfb.kill()
+            self._xvfb = None
 
     @staticmethod
     def _launch_context(playwright: Playwright, profile_dir: Path, *, headless: bool = False,
-                        service_workers: Literal["allow", "block"] | None = None) -> BrowserContext:
+                        service_workers: Literal["allow", "block"] | None = None,
+                        env: dict[str, str | float | bool] | None = None) -> BrowserContext:
         # The default headless shell names HeadlessChrome in its UA and client hints, and X
         # refuses some of its own page requests with HTTP403. New headless keeps the headed
         # client hints, so only its UA token needs the headed spelling.
@@ -275,6 +323,7 @@ class BrowserManager:
             viewport={"width": VIEWPORT_WIDTH, "height": VIEWPORT_HEIGHT},
             args=["--disable-blink-features=AutomationControlled"],
             service_workers=service_workers,
+            env=env,
         )
 
     def stop(self) -> None:
@@ -287,6 +336,7 @@ class BrowserManager:
             finally:
                 if self.playwright:
                     self.playwright.stop()
+                self._stop_virtual_display()
         except Exception:
             logger.exception("Error while stopping browser.")
         finally:

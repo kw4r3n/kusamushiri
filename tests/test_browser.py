@@ -170,3 +170,18 @@ def test_headless_context_does_not_name_headless_chrome(tmp_path):
             context.close()
     assert "Headless" not in seen["ua"] and "Headless" not in seen["header"]
     assert not any("Headless" in brand for brand in seen["brands"])
+
+
+@pytest.mark.parametrize("display", [":99", None])
+def test_headless_launch_prefers_a_virtual_display(monkeypatch, display):
+    monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-1")
+    manager = BrowserManager(headless=True)
+    manager._start_virtual_display = Mock(return_value=display)
+    manager._launch_context = Mock(return_value=object())
+    manager._launch_action_context(Mock(), Mock())
+    kwargs = manager._launch_context.call_args.kwargs
+    if display is None:
+        assert kwargs["headless"] is True and "env" not in kwargs
+    else:
+        assert kwargs["headless"] is False and kwargs["env"]["DISPLAY"] == ":99"
+        assert "WAYLAND_DISPLAY" not in kwargs["env"]
