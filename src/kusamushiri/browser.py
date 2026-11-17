@@ -111,6 +111,7 @@ class BrowserManager:
     def _watch_response(self, response: Response) -> None:
         if (self.post_actions_active and response.status in {401, 403}
                 and is_rate_limit_response(response.url, 429) and self.on_action_auth_failed is not None):
+            logger.warning("X denied a request with HTTP %s during post actions; stopping the batch.", response.status)
             self.on_action_auth_failed()
         # Install the stop flag before any optional bounded diagnostic body read.
         self.diagnostics.response(response)
