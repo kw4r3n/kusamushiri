@@ -26,3 +26,11 @@ def restore_playwright_browsers_path() -> Iterator[None]:
         os.environ.pop("PLAYWRIGHT_BROWSERS_PATH", None)
     else:
         os.environ["PLAYWRIGHT_BROWSERS_PATH"] = saved
+
+
+@pytest.fixture(autouse=True)
+def no_virtual_display(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Keep the suite independent of whether Xvfb is installed and never leak one.
+    from kusamushiri.browser import BrowserManager
+
+    monkeypatch.setattr(BrowserManager, "_start_virtual_display", lambda self: None)
