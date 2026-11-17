@@ -184,4 +184,4 @@ def test_headless_launch_prefers_a_virtual_display(monkeypatch, display):
         assert kwargs["headless"] is True and "env" not in kwargs
     else:
         assert kwargs["headless"] is False and kwargs["env"]["DISPLAY"] == ":99"
-        assert "WAYLAND_DISPLAY" not in kwargs["env"]
+        assert "WAYLAND_DISPLAY" not in kwargs["env"] and "--ozone-platform=x11" in kwargs["extra_args"]

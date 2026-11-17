@@ -265,7 +265,8 @@ class BrowserManager:
             # A headed browser on an invisible X display avoids the headless fingerprint.
             env: dict[str, str | float | bool] = {k: v for k, v in os.environ.items() if k != "WAYLAND_DISPLAY"}
             env["DISPLAY"] = display
-            return self._launch_context(playwright, profile_dir, headless=False, service_workers=workers, env=env)
+            return self._launch_context(playwright, profile_dir, headless=False, service_workers=workers, env=env,
+                                       extra_args=("--ozone-platform=x11",))
         if workers:
             return self._launch_context(playwright, profile_dir, headless=self.headless, service_workers=workers)
         return self._launch_context(playwright, profile_dir, headless=self.headless)
@@ -311,7 +312,8 @@ class BrowserManager:
     @staticmethod
     def _launch_context(playwright: Playwright, profile_dir: Path, *, headless: bool = False,
                         service_workers: Literal["allow", "block"] | None = None,
-                        env: dict[str, str | float | bool] | None = None) -> BrowserContext:
+                        env: dict[str, str | float | bool] | None = None,
+                        extra_args: tuple[str, ...] = ()) -> BrowserContext:
         # The default headless shell names HeadlessChrome in its UA and client hints, and X
         # refuses some of its own page requests with HTTP403. New headless keeps the headed
         # client hints, so only its UA token needs the headed spelling.
@@ -321,7 +323,7 @@ class BrowserManager:
             headless=headless,
             user_agent=_headed_user_agent(playwright) if headless else None,
             viewport={"width": VIEWPORT_WIDTH, "height": VIEWPORT_HEIGHT},
-            args=["--disable-blink-features=AutomationControlled"],
+            args=["--disable-blink-features=AutomationControlled", *extra_args],
             service_workers=service_workers,
             env=env,
         )
